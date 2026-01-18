@@ -14,6 +14,7 @@ source "$WIGGUM_HOME/lib/logger.sh"
 source "$WIGGUM_HOME/lib/file-lock.sh"
 source "$WIGGUM_HOME/lib/calculate-cost.sh"
 source "$WIGGUM_HOME/lib/audit-logger.sh"
+source "$WIGGUM_HOME/lib/resource-tracker.sh"
 
 main() {
     log "Worker starting: $WORKER_ID for task $TASK_ID"
@@ -41,6 +42,18 @@ main() {
 }
 
 setup_worker() {
+    # Check disk space before setting up worker
+    log_debug "Checking available disk space"
+    if ! check_disk_space_preflight 1073741824 "$PROJECT_DIR"; then
+        local preflight_exit=$?
+        if [ $preflight_exit -eq 1 ]; then
+            log_error "Unable to determine disk space - aborting worker setup"
+            return 1
+        fi
+        # Continue with warning (return code 2)
+        log "WARNING: Low disk space detected, but continuing with worker setup"
+    fi
+
     # Create git worktree for isolation
     cd "$PROJECT_DIR" || exit 1
 
@@ -211,6 +224,9 @@ Co-Authored-By: Chief Wiggum Worker <noreply@chief-wiggum.local>"
                             # Calculate cost and export metrics to environment
                             calculate_worker_cost "$WORKER_DIR/worker.log" > "$WORKER_DIR/metrics.txt" 2>&1
 
+                            # Track resource usage (disk space, worktree size)
+                            track_worker_disk_usage "$WORKER_DIR" "$WORKER_ID" > "$WORKER_DIR/resource-usage.txt" 2>&1
+
                             # Build metrics section for PR
                             if [ -n "$WORKER_TIME_SPENT" ] && [ -n "$WORKER_TOTAL_COST" ]; then
                                 metrics_section="
@@ -224,6 +240,11 @@ Co-Authored-By: Chief Wiggum Worker <noreply@chief-wiggum.local>"
 - Output: $(printf "%'d" $WORKER_OUTPUT_TOKENS) tokens
 - Cache creation: $(printf "%'d" $WORKER_CACHE_CREATION_TOKENS) tokens
 - Cache read: $(printf "%'d" $WORKER_CACHE_READ_TOKENS) tokens
+
+**Resource Usage:**
+- Workspace size: $WORKER_WORKSPACE_SIZE
+- Total worker size: $WORKER_TOTAL_SIZE
+- Available disk space: $WORKER_AVAILABLE_DISK
 "
                             fi
                         fi

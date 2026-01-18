@@ -1,6 +1,26 @@
 #!/usr/bin/env bash
 # File locking utilities for concurrent worker access
 
+# Log lock contention to metrics
+log_lock_wait() {
+    local file="$1"
+    local wait_time="$2"
+    local log_file="${RALPH_DIR:-.ralph}/logs/lock-contention.log"
+
+    # Create log directory if needed
+    mkdir -p "$(dirname "$log_file")"
+
+    # Create header if file doesn't exist
+    if [ ! -f "$log_file" ]; then
+        echo "# File Lock Contention Log" > "$log_file"
+        echo "# Format: [timestamp] lock_file | task_id | worker_id | wait_time_seconds" >> "$log_file"
+        echo "" >> "$log_file"
+    fi
+
+    local timestamp=$(date -Iseconds)
+    echo "[$timestamp] $file | task_id=${TASK_ID:-unknown} | worker_id=${WORKER_ID:-unknown} | wait_time=${wait_time}s" >> "$log_file"
+}
+
 # Retry a command with file locking
 # Usage: with_file_lock <file> <max_retries> <command>
 with_file_lock() {
@@ -9,6 +29,7 @@ with_file_lock() {
     shift 2
     local lock_file="${file}.lock"
     local retry=0
+    local start_time=$(date +%s)
 
     while [ $retry -lt $max_retries ]; do
         # Try to acquire lock with flock
@@ -23,7 +44,13 @@ with_file_lock() {
         local result=$?
 
         if [ $result -eq 0 ]; then
-            # Success - clean up lock file
+            # Success - log wait time if we had to wait
+            local wait_time=$(($(date +%s) - start_time))
+            if [ $wait_time -gt 0 ]; then
+                log_lock_wait "$file" "$wait_time"
+            fi
+
+            # Clean up lock file
             rm -f "$lock_file"
             return 0
         fi
@@ -35,7 +62,10 @@ with_file_lock() {
         fi
     done
 
-    # All retries failed
+    # All retries failed - log total wait time
+    local total_wait=$(($(date +%s) - start_time))
+    log_lock_wait "$file" "$total_wait"
+
     rm -f "$lock_file"
     return 1
 }
