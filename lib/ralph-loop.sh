@@ -9,8 +9,8 @@ ralph_loop() {
     local prd_file="$1"                    # Worker's PRD file (absolute path)
     local agent_file="$2"                  # Agent definition
     local workspace="$3"                   # Worker's git worktree
-    local max_iterations="${4:-50}"
-    local max_turns_per_session="${5:-20}" # Limit turns to control context window
+    local max_iterations="${4:-20}"
+    local max_turns_per_session="${5:-50}" # Limit turns to control context window
     local iteration=0
 
     log "Ralph loop starting for $prd_file (max $max_turns_per_session turns per session)"
@@ -21,6 +21,9 @@ ralph_loop() {
     # Convert PRD file to relative path from workspace
     local prd_relative="../prd.md"
 
+    # Track the last session ID for final summary
+    local last_session_id=""
+
     while [ $iteration -lt $max_iterations ]; do
         # Exit if all tasks complete
         if ! has_incomplete_tasks "$prd_file"; then
@@ -30,6 +33,7 @@ ralph_loop() {
 
         # Generate unique session ID for this iteration
         local session_id=$(uuidgen)
+        last_session_id="$session_id"
 
         local sys_prompt="Your working directory is $workspace. Do NOT directly or indirectly cd into, read, or modify files outside this directory."
         local user_prompt="Read @$prd_relative, find the next incomplete task (- [ ]), execute it completely within your working directory, then mark it as complete (- [x]) by editing the PRD file. If you are unable to complete the task, mark it as failed (- [*]) by editing the PRD file."
@@ -90,6 +94,33 @@ ralph_loop() {
     if [ $iteration -ge $max_iterations ]; then
         log_error "Worker reached max iterations ($max_iterations) without completing all tasks"
         return 1
+    fi
+
+    # PHASE 3: Generate final comprehensive summary for changelog
+    if [ -n "$last_session_id" ]; then
+        log "Generating final summary for changelog"
+
+        {
+            echo ""
+            echo "=== FINAL SUMMARY PHASE ==="
+        } >> "../worker.log"
+
+        local summary_prompt="All tasks have been completed successfully. Please provide a comprehensive summary of everything you accomplished in this work session for the changelog. Include:
+
+1. **What was implemented**: Detailed description of changes, new features, or fixes
+2. **Files modified**: List key files that were created or modified
+3. **Technical details**: Important implementation decisions, patterns used, or configurations added
+4. **Testing/Verification**: How you verified the work was correct
+
+Format the response as a detailed markdown summary suitable for a project changelog. Be specific and technical."
+
+        # Resume the last session to generate comprehensive summary
+        local final_summary=$(claude --resume "$last_session_id" --max-turns 3 --dangerously-skip-permissions -p "$summary_prompt" 2>&1 | tee -a "../worker.log")
+
+        # Save summary to file for worker.sh to use in changelog
+        echo "$final_summary" > "../summary.txt"
+
+        log "Final summary saved to summary.txt"
     fi
 
     log "Worker finished after $iteration iterations"

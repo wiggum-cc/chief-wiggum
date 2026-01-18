@@ -66,13 +66,14 @@ update_kanban_failed() {
 }
 
 # Append to changelog.md with locking
-# Usage: append_changelog <changelog_file> <task_id> <worker_id> <description> <pr_url>
+# Usage: append_changelog <changelog_file> <task_id> <worker_id> <description> <pr_url> [summary]
 append_changelog() {
     local changelog_file="$1"
     local task_id="$2"
     local worker_id="$3"
     local description="$4"
     local pr_url="${5:-N/A}"
+    local summary="${6:-}"
     local timestamp=$(date -Iseconds)
 
     local entry="
@@ -84,6 +85,21 @@ append_changelog() {
 - **Status**: Completed
 "
 
+    # Add detailed summary if provided
+    if [ -n "$summary" ]; then
+        entry="${entry}
+### Summary
+
+${summary}
+"
+    fi
+
+    # Use a temporary file to handle multi-line content safely
+    local temp_file=$(mktemp)
+    echo "$entry" > "$temp_file"
+
     with_file_lock "$changelog_file" 5 \
-        "echo '$entry' >> '$changelog_file'"
+        "cat '$temp_file' >> '$changelog_file'"
+
+    rm -f "$temp_file"
 }
