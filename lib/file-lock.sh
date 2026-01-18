@@ -31,7 +31,7 @@ with_file_lock() {
         # Failed - retry after delay
         ((retry++))
         if [ $retry -lt $max_retries ]; then
-            sleep $((retry * 2))  # Exponential backoff
+            sleep 3  # Fixed 3-second delay between retries
         fi
     done
 
