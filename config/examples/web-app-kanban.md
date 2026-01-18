@@ -6,28 +6,113 @@
   - Description: Create FastAPI app with basic structure, CORS middleware, and health endpoint
   - Priority: HIGH
   - Dependencies: none
+  - Scope:
+    - Initialize FastAPI application
+    - Configure CORS middleware for frontend integration
+    - Create health check endpoint at /health
+    - Setup basic error handling
+    - Add requirements.txt with dependencies
+  - Out of Scope:
+    - Authentication (handled in TASK-003)
+    - Database integration (handled in TASK-002)
+  - Acceptance Criteria:
+    - Server starts without errors
+    - Health endpoint returns 200 OK
+    - CORS allows requests from localhost:3000
 
 - [ ] **[TASK-002]** Setup database with SQLAlchemy
   - Description: Configure SQLAlchemy, create database models for users and posts
   - Priority: HIGH
   - Dependencies: none
+  - Scope:
+    - Install and configure SQLAlchemy
+    - Create database connection and session management
+    - Define User model with fields (id, username, email, password_hash)
+    - Define Post model with fields (id, title, content, author_id, created_at)
+    - Setup database migrations with Alembic
+  - Out of Scope:
+    - Seeding test data
+    - Database backup strategy
+  - Acceptance Criteria:
+    - Models follow SQLAlchemy best practices
+    - Relationships between User and Post are correctly defined
+    - Migrations can be applied and rolled back successfully
 
 - [ ] **[TASK-003]** Implement user authentication
   - Description: Add JWT-based authentication endpoints (register, login, logout)
   - Priority: HIGH
   - Dependencies: TASK-001, TASK-002
+  - Scope:
+    - Create /auth/register endpoint with input validation
+    - Create /auth/login endpoint with JWT token generation
+    - Create /auth/logout endpoint with token invalidation
+    - Implement password hashing with bcrypt
+    - Add authentication middleware for protected routes
+  - Out of Scope:
+    - Password reset functionality
+    - Email verification
+    - OAuth/social login
+  - Acceptance Criteria:
+    - Passwords are hashed before storage
+    - JWT tokens expire after 24 hours
+    - Invalid credentials return 401 Unauthorized
+    - Protected routes require valid JWT token
 
 - [ ] **[TASK-004]** Create React frontend
   - Description: Setup React app with Vite, basic routing, and component structure
   - Priority: MEDIUM
   - Dependencies: none
+  - Scope:
+    - Initialize React app with Vite
+    - Setup React Router for navigation
+    - Create basic layout component
+    - Add navigation menu component
+    - Configure API client for backend communication
+  - Out of Scope:
+    - Authentication UI (separate task)
+    - Post management UI (separate task)
+  - Acceptance Criteria:
+    - App runs in development mode without errors
+    - Routing works between pages
+    - API client can make requests to backend
 
 - [ ] **[TASK-005]** Implement CRUD API for posts
   - Description: Create, read, update, delete endpoints for blog posts
   - Priority: MEDIUM
   - Dependencies: TASK-001, TASK-002, TASK-003
+  - Scope:
+    - Create POST /posts endpoint (requires auth)
+    - Create GET /posts endpoint (public)
+    - Create GET /posts/:id endpoint (public)
+    - Create PUT /posts/:id endpoint (requires auth, owner only)
+    - Create DELETE /posts/:id endpoint (requires auth, owner only)
+    - Add input validation for all endpoints
+  - Out of Scope:
+    - Comments on posts
+    - Post categories or tags
+    - Rich text editing
+  - Acceptance Criteria:
+    - Users can only modify their own posts
+    - All inputs are validated
+    - Endpoints return appropriate HTTP status codes
+    - Pagination is implemented for GET /posts
 
 - [ ] **[TASK-006]** Add Docker configuration
   - Description: Create Dockerfile and docker-compose.yml for backend, frontend, and PostgreSQL
   - Priority: LOW
   - Dependencies: TASK-001, TASK-002, TASK-004
+  - Scope:
+    - Create Dockerfile for FastAPI backend
+    - Create Dockerfile for React frontend
+    - Create docker-compose.yml with all services
+    - Add PostgreSQL service configuration
+    - Setup environment variables for configuration
+  - Out of Scope:
+    - Production deployment configuration
+    - CI/CD integration
+    - Kubernetes manifests
+  - Acceptance Criteria:
+    - All services start with docker-compose up
+    - Backend can connect to PostgreSQL
+    - Frontend can reach backend API
+    - Hot reload works in development mode
