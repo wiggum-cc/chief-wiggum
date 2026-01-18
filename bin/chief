@@ -8,7 +8,70 @@ RALPH_DIR="$PROJECT_DIR/.ralph"
 source "$CHIEF_HOME/lib/task-parser.sh"
 source "$CHIEF_HOME/lib/logger.sh"
 
+show_help() {
+    cat << EOF
+Chief Wiggum - Autonomous Worker Orchestration
+
+Usage: chief [command]
+
+Commands:
+  (none)        Spawn workers for all TODO tasks in kanban
+  stop          Stop all running workers
+  cleanup       Clean up worktrees and worker directories
+  status        Show status of workers and tasks
+  monitor       Monitor worker logs in real-time
+  integrate     Manage worker Pull Requests
+
+Examples:
+  chief              # Spawn workers for TODO tasks
+  chief stop         # Stop all workers
+  chief cleanup      # Clean up worktrees
+  chief status       # Show worker status
+  chief monitor      # Monitor worker output
+  chief integrate    # Manage PRs
+
+For more help on specific commands:
+  chief-integrate --help
+  chief-monitor --help
+
+EOF
+}
+
 main() {
+    # Handle subcommands
+    case "${1:-}" in
+        stop)
+            exec "$CHIEF_HOME/bin/chief-stop"
+            ;;
+        cleanup)
+            exec "$CHIEF_HOME/bin/chief-cleanup"
+            ;;
+        status)
+            exec "$CHIEF_HOME/bin/chief-status"
+            ;;
+        monitor)
+            shift
+            exec "$CHIEF_HOME/bin/chief-monitor" "$@"
+            ;;
+        integrate)
+            shift
+            exec "$CHIEF_HOME/bin/chief-integrate" "$@"
+            ;;
+        -h|--help|help)
+            show_help
+            exit 0
+            ;;
+        "")
+            # Default: spawn workers
+            ;;
+        *)
+            echo "Unknown command: $1"
+            echo ""
+            show_help
+            exit 1
+            ;;
+    esac
+
     # Initialize project if needed
     if [ ! -d "$RALPH_DIR" ]; then
         log_error ".ralph/ directory not found. Run 'chief-init' first."
@@ -44,8 +107,8 @@ main() {
     printf '%s\n' "${worker_pids[@]}" > "$RALPH_DIR/.chief.pid"
 
     log "Spawned $worker_count workers"
-    log "Monitor: chief-status"
-    log "Stop: chief-stop"
+    log "Monitor: chief monitor"
+    log "Stop: chief stop"
 
     # Optionally wait for all workers (commented out by default)
     # wait
