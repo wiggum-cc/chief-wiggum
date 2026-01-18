@@ -8,11 +8,11 @@ has_incomplete_tasks() {
 
 get_todo_tasks() {
     local kanban="$1"
-    # Extract task IDs from TODO section (matches 2-8 letters followed by dash and numbers)
+    # Extract task IDs from TODO section - ONLY incomplete tasks (- [ ])
     awk 'BEGIN{in_todo=0}
         /^## TODO$/{in_todo=1; next}
         /^## / && in_todo{in_todo=0}
-        in_todo && /\*\*\[[A-Za-z]{2,8}-[0-9]+\]\*\*/{
+        in_todo && /^- \[ \] \*\*\[[A-Za-z]{2,8}-[0-9]+\]\*\*/{
             match($0, /\[[A-Za-z]{2,8}-[0-9]+\]/)
             print substr($0, RSTART+1, RLENGTH-2)
         }' "$kanban"

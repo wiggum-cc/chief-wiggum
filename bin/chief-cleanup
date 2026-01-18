@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Clean up Chief Wiggum worktrees and worker directories
+
+PROJECT_DIR="$(pwd)"
+RALPH_DIR="$PROJECT_DIR/.ralph"
+
+log() {
+    echo "[$(date -Iseconds)] $*"
+}
+
+if [ ! -d "$RALPH_DIR" ]; then
+    echo "ERROR: .ralph/ directory not found"
+    exit 1
+fi
+
+log "Cleaning up Chief Wiggum worktrees and workers..."
+
+# Remove all worktrees
+worktree_count=0
+for worktree in "$RALPH_DIR/workers"/worker-*/workspace; do
+    if [ -d "$worktree" ]; then
+        log "Removing worktree: $worktree"
+        git worktree remove "$worktree" --force 2>/dev/null || true
+        ((worktree_count++))
+    fi
+done
+
+# Prune stale worktree references
+git worktree prune
+
+# Clean up worker directories
+if [ -d "$RALPH_DIR/workers" ]; then
+    worker_count=$(find "$RALPH_DIR/workers" -mindepth 1 -maxdepth 1 -type d | wc -l)
+    if [ "$worker_count" -gt 0 ]; then
+        log "Removing $worker_count worker director(y|ies)..."
+        rm -rf "$RALPH_DIR/workers"/*
+    fi
+fi
+
+log "✓ Cleanup complete"
+log "  Removed $worktree_count worktree(s)"
+
+# Show current status
+echo ""
+log "Current status:"
+git worktree list

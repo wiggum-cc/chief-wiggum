@@ -1,0 +1,279 @@
+#!/usr/bin/env bash
+# Integrate worker PRs into main repository using gh CLI
+
+PROJECT_DIR="$(pwd)"
+RALPH_DIR="$PROJECT_DIR/.ralph"
+
+show_help() {
+    cat << EOF
+chief-integrate - Manage and merge worker Pull Requests
+
+Usage: chief-integrate [command] [options]
+
+Commands:
+  list              List all open worker PRs
+  review [PR#]      Review a specific PR (shows diff)
+  merge [PR#]       Merge a specific PR
+  merge-all         Merge all worker PRs (with confirmation)
+  cleanup           Delete merged branches
+  status            Show integration status
+
+Options:
+  -h, --help        Show this help message
+  --auto-merge      Auto-merge without confirmation (use with caution)
+  --squash          Squash commits when merging
+  --rebase          Rebase instead of merge
+
+Examples:
+  chief-integrate list                    # List all worker PRs
+  chief-integrate review 42               # Review PR #42
+  chief-integrate merge 42                # Merge PR #42
+  chief-integrate merge 42 --squash       # Squash-merge PR #42
+  chief-integrate merge-all               # Merge all worker PRs (with confirmation)
+  chief-integrate merge-all --auto-merge  # Auto-merge all without asking
+  chief-integrate cleanup                 # Delete merged branches
+
+EOF
+}
+
+log() {
+    echo "[$(date -Iseconds)] $*"
+}
+
+error() {
+    echo "[$(date -Iseconds)] ERROR: $*" >&2
+}
+
+# Check if gh CLI is installed
+if ! command -v gh &> /dev/null; then
+    error "gh CLI is not installed. Install it from: https://cli.github.com/"
+    exit 1
+fi
+
+# Check if we're in a git repository
+if ! git rev-parse --git-dir > /dev/null 2>&1; then
+    error "Not in a git repository"
+    exit 1
+fi
+
+list_worker_prs() {
+    log "Listing worker Pull Requests..."
+    gh pr list --label "chief-wiggum" --state open 2>/dev/null || \
+    gh pr list --search "Chief Wiggum in:title" --state open 2>/dev/null || \
+    gh pr list --search "task/ in:head" --state open
+}
+
+review_pr() {
+    local pr_number="$1"
+
+    if [ -z "$pr_number" ]; then
+        error "PR number required"
+        return 1
+    fi
+
+    log "Reviewing PR #$pr_number..."
+    echo ""
+    gh pr view "$pr_number"
+    echo ""
+    echo "=== DIFF ==="
+    gh pr diff "$pr_number"
+}
+
+merge_pr() {
+    local pr_number="$1"
+    local merge_method="${2:-merge}"  # merge, squash, or rebase
+
+    if [ -z "$pr_number" ]; then
+        error "PR number required"
+        return 1
+    fi
+
+    log "Merging PR #$pr_number using $merge_method..."
+
+    local merge_flag=""
+    case "$merge_method" in
+        squash)
+            merge_flag="--squash"
+            ;;
+        rebase)
+            merge_flag="--rebase"
+            ;;
+        merge)
+            merge_flag="--merge"
+            ;;
+    esac
+
+    if gh pr merge "$pr_number" $merge_flag --delete-branch; then
+        log "✓ Merged PR #$pr_number"
+        return 0
+    else
+        error "Failed to merge PR #$pr_number"
+        return 1
+    fi
+}
+
+merge_all_prs() {
+    local auto_merge="$1"
+    local merge_method="$2"
+
+    log "Finding all worker PRs..."
+
+    # Get list of PR numbers
+    local pr_numbers=$(gh pr list --search "task/ in:head" --state open --json number -q '.[].number')
+
+    if [ -z "$pr_numbers" ]; then
+        log "No worker PRs found to merge"
+        return 0
+    fi
+
+    local pr_count=$(echo "$pr_numbers" | wc -l)
+    log "Found $pr_count worker PR(s) to merge"
+
+    echo ""
+    gh pr list --search "task/ in:head" --state open
+    echo ""
+
+    if [ "$auto_merge" != "true" ]; then
+        read -p "Merge all $pr_count PR(s)? [y/N] " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            log "Cancelled"
+            return 0
+        fi
+    fi
+
+    local merged=0
+    local failed=0
+
+    for pr in $pr_numbers; do
+        if merge_pr "$pr" "$merge_method"; then
+            ((merged++))
+        else
+            ((failed++))
+        fi
+    done
+
+    log "Merge complete: $merged successful, $failed failed"
+
+    if [ $merged -gt 0 ]; then
+        log "Pulling changes to local main branch..."
+        git checkout main
+        git pull
+    fi
+}
+
+cleanup_branches() {
+    log "Cleaning up merged branches..."
+
+    # Find branches that match task/* pattern and are merged
+    local merged_branches=$(git branch -r --merged main | grep 'origin/task/' | sed 's/origin\///')
+
+    if [ -z "$merged_branches" ]; then
+        log "No merged task branches to clean up"
+        return 0
+    fi
+
+    log "Found merged branches:"
+    echo "$merged_branches"
+    echo ""
+
+    read -p "Delete these branches from remote? [y/N] " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        log "Cancelled"
+        return 0
+    fi
+
+    for branch in $merged_branches; do
+        log "Deleting remote branch: $branch"
+        git push origin --delete "$branch" || true
+    done
+
+    log "✓ Cleanup complete"
+}
+
+show_status() {
+    log "Chief Wiggum Integration Status"
+    echo ""
+
+    echo "=== Open Worker PRs ==="
+    gh pr list --search "task/ in:head" --state open || echo "No open PRs"
+    echo ""
+
+    echo "=== Recently Merged Worker PRs ==="
+    gh pr list --search "task/ in:head" --state merged --limit 5 || echo "No merged PRs"
+    echo ""
+
+    echo "=== Local Branch Status ==="
+    local current_branch=$(git rev-parse --abbrev-ref HEAD)
+    echo "Current branch: $current_branch"
+
+    if [ "$current_branch" = "main" ]; then
+        git status -sb
+    else
+        echo "Not on main branch. Switch to main and pull to integrate changes."
+    fi
+}
+
+# Parse arguments
+AUTO_MERGE=false
+MERGE_METHOD="merge"
+COMMAND="${1:-list}"
+
+shift 2>/dev/null || true
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -h|--help)
+            show_help
+            exit 0
+            ;;
+        --auto-merge)
+            AUTO_MERGE=true
+            shift
+            ;;
+        --squash)
+            MERGE_METHOD="squash"
+            shift
+            ;;
+        --rebase)
+            MERGE_METHOD="rebase"
+            shift
+            ;;
+        *)
+            ARGS+=("$1")
+            shift
+            ;;
+    esac
+done
+
+# Execute command
+case "$COMMAND" in
+    list)
+        list_worker_prs
+        ;;
+    review)
+        review_pr "${ARGS[0]}"
+        ;;
+    merge)
+        merge_pr "${ARGS[0]}" "$MERGE_METHOD"
+        ;;
+    merge-all)
+        merge_all_prs "$AUTO_MERGE" "$MERGE_METHOD"
+        ;;
+    cleanup)
+        cleanup_branches
+        ;;
+    status)
+        show_status
+        ;;
+    -h|--help)
+        show_help
+        ;;
+    *)
+        error "Unknown command: $COMMAND"
+        echo ""
+        show_help
+        exit 1
+        ;;
+esac
