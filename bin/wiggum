@@ -13,7 +13,7 @@ Commands:
   init             Initialize .ralph/ directory in current project
   run              Orchestrate workers for incomplete tasks
   stop             Stop all running workers
-  cleanup          Clean up worktrees and worker directories
+  clean            Clean up worktrees and worker directories
   status           Show status of workers and tasks
   monitor          Monitor worker logs in real-time
   review           Review and manage worker Pull Requests
@@ -26,7 +26,7 @@ Examples:
   wiggum run                    # Start orchestration (max 4 workers)
   wiggum run --max-workers 8    # Start with max 8 workers
   wiggum stop                   # Stop all workers
-  wiggum cleanup                # Clean up worktrees
+  wiggum clean                  # Clean up worktrees
   wiggum status                 # Show worker status
   wiggum monitor                # Monitor worker output
   wiggum review                 # Review and manage PRs
@@ -68,8 +68,8 @@ main() {
         stop)
             exec "$WIGGUM_HOME/bin/wiggum-stop"
             ;;
-        cleanup)
-            exec "$WIGGUM_HOME/bin/wiggum-cleanup"
+        clean)
+            exec "$WIGGUM_HOME/bin/wiggum-clean"
             ;;
         status)
             exec "$WIGGUM_HOME/bin/wiggum-status"

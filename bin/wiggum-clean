@@ -6,9 +6,9 @@ RALPH_DIR="$PROJECT_DIR/.ralph"
 
 show_help() {
     cat << EOF
-wiggum cleanup - Clean up worktrees and worker directories
+wiggum clean - Clean up worktrees and worker directories
 
-Usage: wiggum cleanup [options]
+Usage: wiggum clean [options]
 
 Options:
   -h, --help          Show this help message
@@ -18,7 +18,7 @@ Description:
   .ralph/workers/ directory. This does not affect the main repository.
 
 Examples:
-  wiggum cleanup       # Clean up all worktrees and worker directories
+  wiggum clean         # Clean up all worktrees and worker directories
 
 EOF
 }

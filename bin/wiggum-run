@@ -197,7 +197,7 @@ main() {
     echo "Next steps:"
     echo "  - Review completed work: wiggum review list"
     echo "  - Merge PRs: wiggum review merge-all"
-    echo "  - Clean up: wiggum cleanup"
+    echo "  - Clean up: wiggum clean"
     echo ""
 }
 
