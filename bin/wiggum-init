@@ -1,9 +1,50 @@
 #!/usr/bin/env bash
 # Initialize .ralph/ directory in a project
 
-CHIEF_HOME="${CHIEF_HOME:-$HOME/.claude/chief-wiggum}"
+WIGGUM_HOME="${WIGGUM_HOME:-$HOME/.claude/chief-wiggum}"
 PROJECT_DIR="$(pwd)"
 RALPH_DIR="$PROJECT_DIR/.ralph"
+
+show_help() {
+    cat << EOF
+wiggum init - Initialize Chief Wiggum in current project
+
+Usage: wiggum init [options]
+
+Options:
+  -h, --help          Show this help message
+
+Description:
+  Creates the .ralph/ directory structure in the current project:
+    - .ralph/kanban.md    Task board
+    - .ralph/changelog.md Completion log
+    - .ralph/workers/     Worker directories
+    - .ralph/results/     Task results
+    - .ralph/logs/        Worker logs
+
+  Requires a git repository to function properly.
+
+Examples:
+  wiggum init          # Initialize Chief Wiggum in current project
+
+EOF
+}
+
+# Parse options
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help)
+            show_help
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1"
+            echo ""
+            show_help
+            exit 1
+            ;;
+    esac
+done
 
 echo "Initializing Chief Wiggum in $PROJECT_DIR"
 
@@ -57,6 +98,6 @@ echo "✓ Initialized .ralph/ directory"
 echo ""
 echo "Next steps:"
 echo "  1. Edit .ralph/kanban.md to add your tasks"
-echo "  2. Run 'chief run' to start workers"
-echo "  3. Monitor progress with 'chief status' or 'chief monitor'"
+echo "  2. Run 'wiggum run' to start workers"
+echo "  3. Monitor progress with 'wiggum status' or 'wiggum monitor'"
 echo ""

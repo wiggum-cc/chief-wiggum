@@ -4,8 +4,45 @@
 PROJECT_DIR="$(pwd)"
 RALPH_DIR="$PROJECT_DIR/.ralph"
 
+show_help() {
+    cat << EOF
+wiggum status - Show status of workers
+
+Usage: wiggum status [options]
+
+Options:
+  -h, --help          Show this help message
+
+Description:
+  Displays the current status of all workers including:
+  - Which workers are running
+  - Worker PIDs
+  - Recent activity from logs
+
+Examples:
+  wiggum status        # Show current worker status
+
+EOF
+}
+
+# Parse options
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help)
+            show_help
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1"
+            echo ""
+            show_help
+            exit 1
+            ;;
+    esac
+done
+
 if [ ! -f "$RALPH_DIR/.chief.pid" ]; then
-    echo "No chief process running in this project"
+    echo "No wiggum process running in this project"
     exit 0
 fi
 

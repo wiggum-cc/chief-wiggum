@@ -41,11 +41,11 @@ export PATH="$HOME/.claude/chief-wiggum/bin:$PATH"
 
 ### Option 2: Run from Source
 
-You can run Chief Wiggum directly from this repository by setting `CHIEF_HOME` to the current directory:
+You can run Chief Wiggum directly from this repository by setting `WIGGUM_HOME` to the current directory:
 
 ```bash
-export CHIEF_HOME=$(pwd)
-export PATH="$CHIEF_HOME/bin:$PATH"
+export WIGGUM_HOME=$(pwd)
+export PATH="$WIGGUM_HOME/bin:$PATH"
 ```
 
 ## Quick Start
@@ -56,7 +56,7 @@ Navigate to any git repository where you want to use Chief Wiggum and initialize
 
 ```bash
 cd /path/to/your/project
-chief init
+wiggum init
 ```
 
 This creates a `.ralph/` directory containing a `kanban.md` file.
@@ -80,10 +80,10 @@ Task statuses:
 
 ### 3. Start Workers
 
-Run `chief run` to spawn workers for incomplete tasks:
+Run `wiggum run` to spawn workers for incomplete tasks:
 
 ```bash
-chief run
+wiggum run
 ```
 
 Chief will:
@@ -96,7 +96,7 @@ Chief will:
 To change the maximum concurrent workers:
 
 ```bash
-chief run --max-workers 8
+wiggum run --max-workers 8
 ```
 
 ### 4. Monitor & Manage
@@ -104,18 +104,18 @@ chief run --max-workers 8
 Check the status of active workers:
 
 ```bash
-chief-status
+wiggum-status
 ```
 
 Stop all workers:
 
 ```bash
-chief-stop
+wiggum-stop
 ```
 
 ## Architecture
 
-- **`chief`**: Main process that parses the Kanban board and orchestrates workers.
+- **`wiggum`**: Main process that parses the Kanban board and orchestrates workers.
 - **Workers**: Isolated processes running in temporary git worktrees (`.ralph/workers/`).
 - **Ralph Loop**: The core execution loop (`lib/ralph-loop.sh`) that prompts Claude Code to read the PRD, execute work, and verify results.
 - **Skills**: Custom skills provided to the agent to help it report progress and complete tasks.

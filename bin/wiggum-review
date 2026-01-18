@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-# Integrate worker PRs into main repository using gh CLI
+# Review and manage worker PRs using gh CLI
 
 PROJECT_DIR="$(pwd)"
 RALPH_DIR="$PROJECT_DIR/.ralph"
 
 show_help() {
     cat << EOF
-chief-integrate - Manage and merge worker Pull Requests
+wiggum review - Review and manage worker Pull Requests
 
-Usage: chief-integrate [command] [options]
+Usage: wiggum review [command] [options]
 
 Commands:
   list              List all open worker PRs
-  review [PR#]      Review a specific PR (shows diff)
+  view [PR#]        View a specific PR with diff
   merge [PR#]       Merge a specific PR
   merge-all         Merge all worker PRs (with confirmation)
   cleanup           Delete merged branches
@@ -25,13 +25,13 @@ Options:
   --rebase          Rebase instead of merge
 
 Examples:
-  chief-integrate list                    # List all worker PRs
-  chief-integrate review 42               # Review PR #42
-  chief-integrate merge 42                # Merge PR #42
-  chief-integrate merge 42 --squash       # Squash-merge PR #42
-  chief-integrate merge-all               # Merge all worker PRs (with confirmation)
-  chief-integrate merge-all --auto-merge  # Auto-merge all without asking
-  chief-integrate cleanup                 # Delete merged branches
+  wiggum review list                    # List all worker PRs
+  wiggum review view 42                 # Review PR #42
+  wiggum review merge 42                # Merge PR #42
+  wiggum review merge 42 --squash       # Squash-merge PR #42
+  wiggum review merge-all               # Merge all worker PRs (with confirmation)
+  wiggum review merge-all --auto-merge  # Auto-merge all without asking
+  wiggum review cleanup                 # Delete merged branches
 
 EOF
 }
@@ -193,7 +193,7 @@ cleanup_branches() {
 }
 
 show_status() {
-    log "Chief Wiggum Integration Status"
+    log "Chief Wiggum Review Status"
     echo ""
 
     echo "=== Open Worker PRs ==="
@@ -252,7 +252,7 @@ case "$COMMAND" in
     list)
         list_worker_prs
         ;;
-    review)
+    view)
         review_pr "${ARGS[0]}"
         ;;
     merge)

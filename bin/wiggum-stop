@@ -1,0 +1,147 @@
+#!/usr/bin/env bash
+# Stop all workers
+
+PROJECT_DIR="$(pwd)"
+RALPH_DIR="$PROJECT_DIR/.ralph"
+
+show_help() {
+    cat << EOF
+wiggum stop - Stop running workers
+
+Usage: wiggum stop [options]
+
+Options:
+  --workers PIDS      Comma-separated list of worker PIDs to stop
+  -h, --help          Show this help message
+
+Description:
+  Gracefully stops workers by sending TERM signal to worker processes.
+
+  Without --workers: Stops all workers and terminates the wiggum process
+  With --workers: Stops only specified workers, wiggum continues running
+
+Examples:
+  wiggum stop                    # Stop all workers and chief
+  wiggum stop --workers 12345    # Stop only worker PID 12345
+  wiggum stop --workers 12345,67890  # Stop workers 12345 and 67890
+
+EOF
+}
+
+# Parse options
+SPECIFIC_WORKERS=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --workers)
+            if [[ -z "$2" ]] || [[ "$2" =~ ^- ]]; then
+                echo "Error: --workers requires a comma-separated list of PIDs"
+                exit 1
+            fi
+            SPECIFIC_WORKERS="$2"
+            shift 2
+            ;;
+        -h|--help)
+            show_help
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1"
+            echo ""
+            show_help
+            exit 1
+            ;;
+    esac
+done
+
+if [ ! -f "$RALPH_DIR/.chief.pid" ]; then
+    echo "No wiggum process running"
+    exit 0
+fi
+
+if [ -n "$SPECIFIC_WORKERS" ]; then
+    # Stop specific workers only
+    echo "Stopping specific workers..."
+
+    # Convert comma-separated list to array
+    IFS=',' read -ra PIDS_TO_STOP <<< "$SPECIFIC_WORKERS"
+
+    # Read all managed worker PIDs into an array
+    declare -A managed_pids
+    while read -r pid; do
+        managed_pids[$pid]=1
+    done < "$RALPH_DIR/.chief.pid"
+
+    stopped_count=0
+    invalid_count=0
+    for pid in "${PIDS_TO_STOP[@]}"; do
+        # Trim whitespace
+        pid=$(echo "$pid" | xargs)
+
+        # Check if this PID is actually a managed worker
+        if [ -z "${managed_pids[$pid]}" ]; then
+            echo "Error: PID $pid is not a managed worker"
+            ((invalid_count++))
+            continue
+        fi
+
+        if kill -0 "$pid" 2>/dev/null; then
+            echo "Stopping worker PID $pid"
+            kill -TERM "$pid"
+            ((stopped_count++))
+        else
+            echo "Worker PID $pid already stopped"
+        fi
+    done
+
+    if [ $invalid_count -gt 0 ]; then
+        echo ""
+        echo "Warning: $invalid_count invalid PID(s) were skipped"
+        echo "Use 'wiggum status' to see valid worker PIDs"
+    fi
+
+    # Update .chief.pid file to remove stopped workers
+    if [ -f "$RALPH_DIR/.chief.pid" ]; then
+        temp_file=$(mktemp)
+        while read -r pid; do
+            # Keep PID if it's not in the list to stop
+            should_keep=true
+            for stop_pid in "${PIDS_TO_STOP[@]}"; do
+                stop_pid=$(echo "$stop_pid" | xargs)
+                if [ "$pid" = "$stop_pid" ]; then
+                    should_keep=false
+                    break
+                fi
+            done
+
+            if [ "$should_keep" = true ]; then
+                echo "$pid" >> "$temp_file"
+            fi
+        done < "$RALPH_DIR/.chief.pid"
+
+        # Replace with updated list
+        mv "$temp_file" "$RALPH_DIR/.chief.pid"
+
+        # If no workers left, remove the file
+        if [ ! -s "$RALPH_DIR/.chief.pid" ]; then
+            rm "$RALPH_DIR/.chief.pid"
+            echo "Stopped $stopped_count workers (no workers remaining)"
+        else
+            echo "Stopped $stopped_count workers (wiggum continues running)"
+        fi
+    fi
+else
+    # Stop all workers
+    echo "Stopping all workers..."
+
+    stopped_count=0
+    while read -r pid; do
+        if kill -0 "$pid" 2>/dev/null; then
+            echo "Stopping PID $pid"
+            kill -TERM "$pid"
+            ((stopped_count++))
+        fi
+    done < "$RALPH_DIR/.chief.pid"
+
+    rm "$RALPH_DIR/.chief.pid"
+    echo "Stopped $stopped_count workers"
+fi

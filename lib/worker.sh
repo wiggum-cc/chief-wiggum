@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Worker script - spawned by chief for each task
+# Worker script - spawned by wiggum for each task
 
 WORKER_DIR="$1"         # e.g., .ralph/workers/worker-TASK-001-12345
 PROJECT_DIR="$2"        # Project root directory
-CHIEF_HOME="${CHIEF_HOME:-$HOME/.claude/chief-wiggum}"
+WIGGUM_HOME="${WIGGUM_HOME:-$HOME/.claude/chief-wiggum}"
 
-source "$CHIEF_HOME/lib/ralph-loop.sh"
-source "$CHIEF_HOME/lib/logger.sh"
-source "$CHIEF_HOME/lib/file-lock.sh"
+source "$WIGGUM_HOME/lib/ralph-loop.sh"
+source "$WIGGUM_HOME/lib/logger.sh"
+source "$WIGGUM_HOME/lib/file-lock.sh"
 
 main() {
     log "Worker starting: $WORKER_ID for task $TASK_ID"
@@ -17,7 +17,7 @@ main() {
     # Start Ralph loop for this worker's task
     if ralph_loop \
         "$WORKER_DIR/prd.md" \
-        "$CHIEF_HOME/config/worker-agent.md" \
+        "$WIGGUM_HOME/config/worker-agent.md" \
         "$WORKER_DIR/workspace" \
         50; then
         log "Worker $WORKER_ID completed successfully"
@@ -37,7 +37,7 @@ setup_worker() {
     git worktree add "$WORKER_DIR/workspace" HEAD 2>&1 | tee -a "$WORKER_DIR/worker.log"
 
     # Setup hooks
-    export CLAUDE_HOOKS_CONFIG="$CHIEF_HOME/hooks/worker-hooks.json"
+    export CLAUDE_HOOKS_CONFIG="$WIGGUM_HOME/hooks/worker-hooks.json"
     export WORKER_ID
     export TASK_ID
 }

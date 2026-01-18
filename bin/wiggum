@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+# Chief Wiggum - Worker launcher and manager
+
+WIGGUM_HOME="${WIGGUM_HOME:-$HOME/.claude/chief-wiggum}"
+
+show_help() {
+    cat << EOF
+Chief Wiggum - Autonomous Worker Orchestration
+
+Usage: wiggum <command> [options]
+
+Commands:
+  init             Initialize .ralph/ directory in current project
+  run              Orchestrate workers for incomplete tasks
+  stop             Stop all running workers
+  cleanup          Clean up worktrees and worker directories
+  status           Show status of workers and tasks
+  monitor          Monitor worker logs in real-time
+  review           Review and manage worker Pull Requests
+
+Run Options:
+  --max-workers N      Maximum concurrent workers (default: 4)
+
+Examples:
+  wiggum init                   # Initialize project
+  wiggum run                    # Start orchestration (max 4 workers)
+  wiggum run --max-workers 8    # Start with max 8 workers
+  wiggum stop                   # Stop all workers
+  wiggum cleanup                # Clean up worktrees
+  wiggum status                 # Show worker status
+  wiggum monitor                # Monitor worker output
+  wiggum review                 # Review and manage PRs
+
+Behavior:
+  - Wiggum assigns pending tasks [ ] to workers
+  - Tasks are marked in-progress [=] when assigned
+  - Workers mark tasks complete [x] when done
+  - Wiggum waits until all tasks are complete
+  - New workers spawn as old ones finish (up to max)
+
+For more help on specific commands:
+  wiggum review --help
+  wiggum monitor --help
+
+EOF
+}
+
+main() {
+    # Require a command
+    if [ $# -eq 0 ]; then
+        echo "Error: No command specified"
+        echo ""
+        show_help
+        exit 1
+    fi
+
+    # Parse command
+    local command="$1"
+    shift
+
+    case "$command" in
+        init)
+            exec "$WIGGUM_HOME/bin/wiggum-init"
+            ;;
+        run)
+            exec "$WIGGUM_HOME/bin/wiggum-run" "$@"
+            ;;
+        stop)
+            exec "$WIGGUM_HOME/bin/wiggum-stop"
+            ;;
+        cleanup)
+            exec "$WIGGUM_HOME/bin/wiggum-cleanup"
+            ;;
+        status)
+            exec "$WIGGUM_HOME/bin/wiggum-status"
+            ;;
+        monitor)
+            exec "$WIGGUM_HOME/bin/wiggum-monitor" "$@"
+            ;;
+        review)
+            exec "$WIGGUM_HOME/bin/wiggum-review" "$@"
+            ;;
+        -h|--help|help)
+            show_help
+            exit 0
+            ;;
+        *)
+            echo "Unknown command: $command"
+            echo ""
+            show_help
+            exit 1
+            ;;
+    esac
+}
+
+main "$@"
