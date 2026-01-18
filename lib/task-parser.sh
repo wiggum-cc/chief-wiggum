@@ -6,6 +6,25 @@ has_incomplete_tasks() {
     grep -q -- '- \[ \]' "$file"
 }
 
+get_prd_status() {
+    local file="$1"
+
+    # Check for failed tasks first
+    if grep -q -- '- \[\*\]' "$file"; then
+        echo "FAILED"
+        return
+    fi
+
+    # Check for incomplete tasks
+    if grep -q -- '- \[ \]' "$file"; then
+        echo "INCOMPLETE"
+        return
+    fi
+
+    # All tasks must be complete
+    echo "COMPLETE"
+}
+
 get_todo_tasks() {
     local kanban="$1"
     # Extract task IDs from TASKS section - ONLY incomplete tasks (- [ ])
@@ -28,22 +47,76 @@ extract_task() {
 
 $(awk -v task="$task_id" '
     /\*\*\['"$task_id"'\]\*\*/ {found=1; next}
-    found && /^  - Description:/ {sub(/^  - Description: /, ""); desc=$0}
-    found && /^  - Priority:/ {sub(/^  - Priority: /, ""); priority=$0}
-    found && /^  - Dependencies:/ {sub(/^  - Dependencies: /, ""); deps=$0}
+    found && /^  - Description:/ {sub(/^  - Description: /, ""); desc=$0; next}
+    found && /^  - Priority:/ {sub(/^  - Priority: /, ""); priority=$0; next}
+    found && /^  - Dependencies:/ {sub(/^  - Dependencies: /, ""); deps=$0; next}
+    found && /^  - Scope:/ {in_scope=1; in_oos=0; in_ac=0; next}
+    found && /^  - Out of Scope:/ {in_scope=0; in_oos=1; in_ac=0; next}
+    found && /^  - Acceptance Criteria:/ {in_scope=0; in_oos=0; in_ac=1; next}
+    found && in_scope && /^    - / {
+        sub(/^    - /, "");
+        scope[++scope_count] = $0
+        next
+    }
+    found && in_oos && /^    - / {
+        sub(/^    - /, "");
+        oos[++oos_count] = $0
+        next
+    }
+    found && in_ac && /^    - / {
+        sub(/^    - /, "");
+        ac[++ac_count] = $0
+        next
+    }
+    found && /^  - / && !/^  - (Description|Priority|Dependencies|Scope|Out of Scope|Acceptance Criteria):/ {
+        in_scope=0; in_oos=0; in_ac=0
+    }
     found && /^- \[/ {exit}
     found && /^## / {exit}
     END {
         if (desc) print "## Description\n" desc "\n"
         if (priority) print "## Priority\n" priority "\n"
         if (deps && deps != "none") print "## Dependencies\n" deps "\n"
+
+        # Output Scope items (what to do)
+        if (scope_count > 0) {
+            print "## Scope\n"
+            for (i = 1; i <= scope_count; i++) {
+                print "- " scope[i]
+            }
+            print ""
+        }
+
+        # Output Out of Scope items (what NOT to do)
+        if (oos_count > 0) {
+            print "## Out of Scope\n"
+            for (i = 1; i <= oos_count; i++) {
+                print "- " oos[i]
+            }
+            print ""
+        }
+
+        # Output Acceptance Criteria for validation reference
+        if (ac_count > 0) {
+            print "## Acceptance Criteria\n"
+            for (i = 1; i <= ac_count; i++) {
+                print "- " ac[i]
+            }
+            print ""
+        }
+
+        # Output Scope as the working checklist
+        print "## Checklist\n"
+        if (scope_count > 0) {
+            for (i = 1; i <= scope_count; i++) {
+                print "- [ ] " scope[i]
+            }
+        } else {
+            print "- [ ] Complete the task as described"
+            print "- [ ] Test the implementation"
+        }
+        print "- [ ] Mark this PRD as complete"
     }
 ' "$kanban")
-
-## Checklist
-
-- [ ] Complete the task as described
-- [ ] Test the implementation
-- [ ] Mark this PRD as complete
 EOF
 }

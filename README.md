@@ -120,6 +120,30 @@ wiggum-stop
 - **Ralph Loop**: The core execution loop (`lib/ralph-loop.sh`) that prompts Claude Code to read the PRD, execute work, and verify results.
 - **Skills**: Custom skills provided to the agent to help it report progress and complete tasks.
 
+### Context Window Management
+
+The Ralph Loop uses a **controlled context window** approach to prevent context bloat:
+
+1. Each iteration starts a fresh Claude session with a unique session ID
+2. Sessions are limited to a configurable number of turns (default: 20)
+3. When a session hits the turn limit:
+   - The session is resumed with `--resume <session-id>`
+   - Claude provides a summary of work completed
+   - The summary is appended to the PRD as a changelog entry
+4. The next iteration reads the updated PRD (with changelog) and continues with fresh context
+
+This ensures each session stays within ~10-15K tokens instead of growing unbounded.
+
+**Configuration:**
+
+```bash
+# Set via environment variables
+export WIGGUM_MAX_ITERATIONS=50      # Max outer loop iterations (default: 50)
+export WIGGUM_MAX_TURNS=20           # Max turns per session (default: 20)
+
+wiggum run
+```
+
 ## Directory Structure
 
 When running, Chief Wiggum creates:

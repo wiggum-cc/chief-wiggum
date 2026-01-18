@@ -59,6 +59,12 @@ update_kanban() {
     update_kanban_status "$1" "$2" "x"
 }
 
+# Update kanban.md to mark failed with locking (convenience function)
+# Usage: update_kanban_failed <kanban_file> <task_id>
+update_kanban_failed() {
+    update_kanban_status "$1" "$2" "*"
+}
+
 # Append to changelog.md with locking
 # Usage: append_changelog <changelog_file> <task_id> <worker_id> <description> <pr_url>
 append_changelog() {

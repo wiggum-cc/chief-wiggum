@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Ralph Wiggum Loop - Self-prompting execution pattern
+# Ralph Wiggum Loop - Self-prompting execution pattern with controlled context
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/task-parser.sh"
@@ -9,10 +9,11 @@ ralph_loop() {
     local prd_file="$1"                    # Worker's PRD file (absolute path)
     local agent_file="$2"                  # Agent definition
     local workspace="$3"                   # Worker's git worktree
-    local max_iterations="${4:-50}"
+    local max_iterations="${4:-10}"
+    local max_turns_per_session="${5:-20}" # Limit turns to control context window
     local iteration=0
 
-    log "Ralph loop starting for $prd_file"
+    log "Ralph loop starting for $prd_file (max $max_turns_per_session turns per session)"
 
     # Change to workspace BEFORE the loop
     cd "$workspace" || exit 1
@@ -27,25 +28,58 @@ ralph_loop() {
             break
         fi
 
-        # Build prompt using relative path to PRD
-        local prompt="IMPORTANT: Your working directory is $workspace. Do NOT cd into, read, or modify files outside this directory. INSTRUCTIONS:Read @$prd_relative, find the next incomplete task (- [ ]), execute it completely within your working directory, then mark it as complete (- [x]) by editing the PRD file."
+        # Generate unique session ID for this iteration
+        local session_id=$(uuidgen)
 
-        log_debug "Iteration $iteration: Executing Claude Code"
+        local sys_prompt="Your working directory is $workspace. Do NOT directly or indirectly cd into, read, or modify files outside this directory."
+        local user_prompt="Read @$prd_relative, find the next incomplete task (- [ ]), execute it completely within your working directory, then mark it as complete (- [x]) by editing the PRD file. If you are unable to complete the task, mark it as failed (- [*]) by editing the PRD file."
 
-        # Debug: show exact command
+        log_debug "Iteration $iteration: Session $session_id (max $max_turns_per_session turns)"
+
+        # Debug output
         {
-            echo "=== DEBUG ITERATION $iteration ==="
+            echo "=== ITERATION $iteration ==="
+            echo "Session ID: $session_id"
+            echo "Max turns: $max_turns_per_session"
             echo "PWD: $(pwd)"
-            echo "PRD file (relative): $prd_relative"
-            echo "Prompt: $prompt"
-            echo "Command: claude --verbose --output-format stream-json --plugin-dir \"$WIGGUM_HOME/skills\" -p \"$prompt\""
-            echo "=== RUNNING ==="
+            echo "=== WORK PHASE ==="
         } >> "../worker.log"
 
-        # Run Claude with the prompt (already in workspace directory)
-        # Load chief-wiggum skills for task completion and progress reporting
-        # Workspace isolation is enforced via PreToolUse hooks
-        claude --verbose --output-format stream-json --plugin-dir "$WIGGUM_HOME/skills" -p "$prompt" >> "../worker.log" 2>&1
+        # PHASE 1: Work session with turn limit
+        claude --verbose \
+            --output-format stream-json \
+            --plugin-dir "$WIGGUM_HOME/skills" \
+            --append-system-prompt "$sys_prompt" \
+            --session-id "$session_id" \
+            --max-turns "$max_turns_per_session" \
+            -p "$user_prompt" >> "../worker.log" 2>&1
+
+        local exit_code=$?
+
+        # PHASE 2: If session hit turn limit (exit code 1), resume for summary
+        if [ $exit_code -ne 0 ]; then
+            log "Session $session_id hit turn limit, requesting summary"
+
+            {
+                echo "=== SUMMARY PHASE ==="
+            } >> "../worker.log"
+
+            local summary_prompt="Provide a concise summary (3-5 bullet points) of what you accomplished in this session. Include: what task you worked on, what you completed, and what remains. Format as markdown bullets."
+
+            # Resume session to get summary (limit to 2 turns for summary only)
+            local summary=$(claude --resume "$session_id" --max-turns 2 -p "$summary_prompt" 2>&1 | tee -a "../worker.log")
+
+            # Append summary to PRD changelog section
+            {
+                echo ""
+                echo "## Session $iteration Changelog ($(date -u +"%Y-%m-%d %H:%M:%S UTC"))"
+                echo ""
+                echo "$summary"
+                echo ""
+            } >> "$prd_file"
+
+            log "Summary appended to PRD"
+        fi
 
         iteration=$((iteration + 1))
         sleep 2  # Prevent tight loop
