@@ -47,10 +47,31 @@ update_kanban_status() {
     local kanban_file="$1"
     local task_id="$2"
     local new_status="$3"
+    local max_retries=5
+    local retry=0
 
-    # Match any status and replace with new status
-    with_file_lock "$kanban_file" 5 \
-        "sed -i 's/- \[[^\]]*\] \*\*\[$task_id\]\*\*/- [$new_status] **[$task_id]**/' '$kanban_file'"
+    while [ $retry -lt $max_retries ]; do
+        # Perform atomic update with file lock and validation
+        local update_result=1
+        with_file_lock "$kanban_file" 5 \
+            "sed -i 's/- \[[^\]]*\] \*\*\[$task_id\]\*\*/- [$new_status] **[$task_id]**/' '$kanban_file' && \
+             grep -q -- '- \[$new_status\] \*\*\[$task_id\]\*\*' '$kanban_file'"
+        update_result=$?
+
+        # If update and validation succeeded, we're done
+        if [ $update_result -eq 0 ]; then
+            return 0
+        fi
+
+        # Failed - retry after delay
+        ((retry++))
+        if [ $retry -lt $max_retries ]; then
+            sleep $((retry * 2))  # Exponential backoff
+        fi
+    done
+
+    # All retries failed
+    return 1
 }
 
 # Update kanban.md to mark complete with locking (convenience function)
