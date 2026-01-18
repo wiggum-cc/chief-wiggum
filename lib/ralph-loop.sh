@@ -13,6 +13,10 @@ ralph_loop() {
     local max_turns_per_session="${5:-50}" # Limit turns to control context window
     local iteration=0
 
+    # Record start time
+    local start_time=$(date +%s)
+    echo "WORKER_START_TIME=$start_time" >> "../worker.log"
+
     log "Ralph loop starting for $prd_file (max $max_turns_per_session turns per session)"
 
     # Change to workspace BEFORE the loop
@@ -122,6 +126,10 @@ Format the response as a detailed markdown summary suitable for a project change
 
         log "Final summary saved to summary.txt"
     fi
+
+    # Record end time
+    local end_time=$(date +%s)
+    echo "WORKER_END_TIME=$end_time" >> "../worker.log"
 
     log "Worker finished after $iteration iterations"
     return 0
