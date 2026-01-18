@@ -6,7 +6,7 @@
 with_file_lock() {
     local file="$1"
     local max_retries="${2:-5}"
-    local command="${@:3}"
+    shift 2
     local lock_file="${file}.lock"
     local retry=0
 
@@ -16,7 +16,7 @@ with_file_lock() {
             flock -w 10 200 || exit 1
 
             # Execute command while holding lock
-            eval "$command"
+            "$@"
 
         ) 200>"$lock_file"
 
@@ -50,7 +50,7 @@ update_kanban_status() {
 
     # Match any status and replace with new status
     with_file_lock "$kanban_file" 5 \
-        "sed -i 's/- \[[^\]]*\] \*\*\[$task_id\]\*\*/- [$new_status] **[$task_id]**/' '$kanban_file'"
+        sed -i "s/- \[[^\]]*\] \*\*\[$task_id\]\*\*/- [$new_status] **[$task_id]**/" "$kanban_file"
 }
 
 # Update kanban.md to mark complete with locking (convenience function)
@@ -99,7 +99,7 @@ ${summary}
     echo "$entry" > "$temp_file"
 
     with_file_lock "$changelog_file" 5 \
-        "cat '$temp_file' >> '$changelog_file'"
+        bash -c 'cat "$1" >> "$2"' _ "$temp_file" "$changelog_file"
 
     rm -f "$temp_file"
 }
