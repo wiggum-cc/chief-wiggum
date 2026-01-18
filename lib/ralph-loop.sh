@@ -28,7 +28,7 @@ ralph_loop() {
         fi
 
         # Build prompt using relative path to PRD
-        local prompt="Read @$prd_relative, find the next incomplete task (- [ ]), execute it completely, then mark it as complete (- [x]) by editing the PRD file."
+        local prompt="IMPORTANT: Your working directory is $workspace. Do NOT cd into, read, or modify files outside this directory. Read @$prd_relative, find the next incomplete task (- [ ]), execute it completely within your working directory, then mark it as complete (- [x]) by editing the PRD file."
 
         log_debug "Iteration $iteration: Executing Claude Code"
 
@@ -38,12 +38,13 @@ ralph_loop() {
             echo "PWD: $(pwd)"
             echo "PRD file (relative): $prd_relative"
             echo "Prompt: $prompt"
-            echo "Command: claude --dangerously-skip-permissions --verbose --output-format stream-json -p \"$prompt\""
+            echo "Command: claude --dangerously-skip-permissions --verbose --output-format stream-json --plugin-dir \"$CHIEF_HOME/skills\" -p \"$prompt\""
             echo "=== RUNNING ==="
         } >> "../worker.log"
 
         # Run Claude with the prompt (already in workspace directory)
-        claude --dangerously-skip-permissions --verbose --output-format stream-json -p "$prompt" >> "../worker.log" 2>&1
+        # Load chief-wiggum skills for task completion and progress reporting
+        claude --dangerously-skip-permissions --verbose --output-format stream-json --plugin-dir "$CHIEF_HOME/skills" -p "$prompt" >> "../worker.log" 2>&1
 
         iteration=$((iteration + 1))
         sleep 2  # Prevent tight loop

@@ -1,6 +1,6 @@
 # Web Application Kanban
 
-## TODO
+## TASKS
 
 - [ ] **[TASK-001]** Setup FastAPI backend
   - Description: Create FastAPI app with basic structure, CORS middleware, and health endpoint
@@ -31,15 +31,3 @@
   - Description: Create Dockerfile and docker-compose.yml for backend, frontend, and PostgreSQL
   - Priority: LOW
   - Dependencies: TASK-001, TASK-002, TASK-004
-
-## IN_PROGRESS
-
-(Tasks being worked on by workers)
-
-## DONE
-
-(Completed tasks)
-
-## BLOCKED
-
-(Tasks with unmet dependencies)

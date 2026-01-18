@@ -5,7 +5,7 @@ PROJECT_DIR="$(pwd)"
 RALPH_DIR="$PROJECT_DIR/.ralph"
 
 if [ ! -f "$RALPH_DIR/.chief.pid" ]; then
-    echo "No active workers found. Run 'chief' first."
+    echo "No active workers found. Run 'chief run' first."
     exit 1
 fi
 

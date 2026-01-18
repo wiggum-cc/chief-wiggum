@@ -7,28 +7,45 @@ RALPH_DIR="$PROJECT_DIR/.ralph"
 
 source "$CHIEF_HOME/lib/task-parser.sh"
 source "$CHIEF_HOME/lib/logger.sh"
+source "$CHIEF_HOME/lib/file-lock.sh"
+
+# Default configuration
+MAX_WORKERS=4
 
 show_help() {
     cat << EOF
 Chief Wiggum - Autonomous Worker Orchestration
 
-Usage: chief [command]
+Usage: chief <command> [options]
 
 Commands:
-  (none)        Spawn workers for all TODO tasks in kanban
-  stop          Stop all running workers
-  cleanup       Clean up worktrees and worker directories
-  status        Show status of workers and tasks
-  monitor       Monitor worker logs in real-time
-  integrate     Manage worker Pull Requests
+  init             Initialize .ralph/ directory in current project
+  run              Orchestrate workers for incomplete tasks
+  stop             Stop all running workers
+  cleanup          Clean up worktrees and worker directories
+  status           Show status of workers and tasks
+  monitor          Monitor worker logs in real-time
+  integrate        Manage worker Pull Requests
+
+Run Options:
+  --max-workers N      Maximum concurrent workers (default: 4)
 
 Examples:
-  chief              # Spawn workers for TODO tasks
-  chief stop         # Stop all workers
-  chief cleanup      # Clean up worktrees
-  chief status       # Show worker status
-  chief monitor      # Monitor worker output
-  chief integrate    # Manage PRs
+  chief init                   # Initialize project
+  chief run                    # Start orchestration (max 4 workers)
+  chief run --max-workers 8    # Start with max 8 workers
+  chief stop                   # Stop all workers
+  chief cleanup                # Clean up worktrees
+  chief status                 # Show worker status
+  chief monitor                # Monitor worker output
+  chief integrate              # Manage PRs
+
+Behavior:
+  - Chief assigns pending tasks [ ] to workers
+  - Tasks are marked in-progress [=] when assigned
+  - Workers mark tasks complete [x] when done
+  - Chief waits until all tasks are complete
+  - New workers spawn as old ones finish (up to max)
 
 For more help on specific commands:
   chief-integrate --help
@@ -38,8 +55,54 @@ EOF
 }
 
 main() {
-    # Handle subcommands
-    case "${1:-}" in
+    # Require a command
+    if [ $# -eq 0 ]; then
+        echo "Error: No command specified"
+        echo ""
+        show_help
+        exit 1
+    fi
+
+    # Parse command
+    local command="$1"
+    shift
+
+    case "$command" in
+        init)
+            exec "$CHIEF_HOME/bin/chief-init"
+            ;;
+        run)
+            # Parse run options
+            while [[ $# -gt 0 ]]; do
+                case "$1" in
+                    --max-workers)
+                        if [[ -z "$2" ]] || [[ "$2" =~ ^- ]]; then
+                            echo "Error: --max-workers requires a number argument"
+                            exit 1
+                        fi
+                        MAX_WORKERS="$2"
+                        shift 2
+                        ;;
+                    -h|--help)
+                        show_help
+                        exit 0
+                        ;;
+                    -*)
+                        echo "Unknown option: $1"
+                        echo ""
+                        show_help
+                        exit 1
+                        ;;
+                    *)
+                        echo "Unknown argument: $1"
+                        echo ""
+                        show_help
+                        exit 1
+                        ;;
+                esac
+            done
+            # Continue to orchestration below
+            ;;
         stop)
             exec "$CHIEF_HOME/bin/chief-stop"
             ;;
@@ -50,22 +113,17 @@ main() {
             exec "$CHIEF_HOME/bin/chief-status"
             ;;
         monitor)
-            shift
             exec "$CHIEF_HOME/bin/chief-monitor" "$@"
             ;;
         integrate)
-            shift
             exec "$CHIEF_HOME/bin/chief-integrate" "$@"
             ;;
         -h|--help|help)
             show_help
             exit 0
             ;;
-        "")
-            # Default: spawn workers
-            ;;
         *)
-            echo "Unknown command: $1"
+            echo "Unknown command: $command"
             echo ""
             show_help
             exit 1
@@ -74,7 +132,7 @@ main() {
 
     # Initialize project if needed
     if [ ! -d "$RALPH_DIR" ]; then
-        log_error ".ralph/ directory not found. Run 'chief-init' first."
+        log_error ".ralph/ directory not found. Run 'chief init' first."
         exit 1
     fi
 
@@ -83,35 +141,108 @@ main() {
         exit 1
     fi
 
-    log "Starting Chief Wiggum in $PROJECT_DIR"
+    log "Starting Chief Wiggum in $PROJECT_DIR (max $MAX_WORKERS concurrent workers)"
+    echo ""
+    echo "Press Ctrl+C to stop and view 'chief status' for details"
+    echo "=========================================="
+    echo ""
 
-    # Parse kanban and spawn worker for each TODO task
-    local tasks=$(get_todo_tasks "$RALPH_DIR/kanban.md")
+    # Track active workers
+    declare -A active_workers  # PID -> task_id mapping
+    local all_pids=()
+    local iteration=0
 
-    if [ -z "$tasks" ]; then
-        log "No TODO tasks found in kanban. Nothing to do."
-        exit 0
-    fi
+    # Main orchestration loop
+    while true; do
+        ((iteration++))
+        # Get incomplete tasks ([ ] status)
+        local pending_tasks=$(get_todo_tasks "$RALPH_DIR/kanban.md")
 
-    local worker_pids=()
-    local worker_count=0
+        # Clean up finished workers
+        for pid in "${!active_workers[@]}"; do
+            if ! kill -0 "$pid" 2>/dev/null; then
+                log "Worker for ${active_workers[$pid]} finished (PID: $pid)"
+                unset active_workers[$pid]
+            fi
+        done
 
-    for task_id in $tasks; do
-        log "Spawning worker for $task_id"
-        spawn_worker "$task_id" &
-        worker_pids+=($!)
-        ((worker_count++))
+        # Check if we're done (no pending tasks and no active workers)
+        if [ -z "$pending_tasks" ] && [ ${#active_workers[@]} -eq 0 ]; then
+            log "All tasks completed!"
+            break
+        fi
+
+        # Spawn workers for pending tasks (up to MAX_WORKERS limit)
+        for task_id in $pending_tasks; do
+            # Check if we're at max capacity
+            if [ ${#active_workers[@]} -ge $MAX_WORKERS ]; then
+                break
+            fi
+
+            # Mark task as in-progress in kanban
+            log "Assigning $task_id to new worker"
+            if ! update_kanban_status "$RALPH_DIR/kanban.md" "$task_id" "="; then
+                log_error "Failed to mark $task_id as in-progress"
+                continue
+            fi
+
+            # Spawn worker
+            spawn_worker "$task_id" &
+            local worker_pid=$!
+            active_workers[$worker_pid]="$task_id"
+            all_pids+=($worker_pid)
+            log "Spawned worker for $task_id (PID: $worker_pid)"
+        done
+
+        # Save all PIDs for chief-stop
+        if [ ${#all_pids[@]} -gt 0 ]; then
+            printf '%s\n' "${all_pids[@]}" > "$RALPH_DIR/.chief.pid"
+        fi
+
+        # Show status and recent activity
+        if [ ${#active_workers[@]} -gt 0 ]; then
+            echo ""
+            echo "=== Status Update (iteration $iteration) ==="
+            echo "Active workers: ${#active_workers[@]}/$MAX_WORKERS"
+
+            # Show which tasks are being worked on
+            echo "In Progress:"
+            for pid in "${!active_workers[@]}"; do
+                echo "  - ${active_workers[$pid]} (PID: $pid)"
+            done
+
+            # Show recent log activity (last 10 lines)
+            if [ -f "$RALPH_DIR/logs/workers.log" ]; then
+                echo ""
+                echo "Recent activity:"
+                tail -n 10 "$RALPH_DIR/logs/workers.log" 2>/dev/null | sed 's/^/  /'
+            fi
+            echo "=========================================="
+        fi
+
+        # Wait a bit before checking again
+        sleep 5
     done
 
-    # Save PIDs for chief-stop
-    printf '%s\n' "${worker_pids[@]}" > "$RALPH_DIR/.chief.pid"
+    # Cleanup
+    rm -f "$RALPH_DIR/.chief.pid"
 
-    log "Spawned $worker_count workers"
-    log "Monitor: chief monitor"
-    log "Stop: chief stop"
+    echo ""
+    echo "=========================================="
+    log "Chief Wiggum finished - all tasks complete!"
+    echo ""
 
-    # Optionally wait for all workers (commented out by default)
-    # wait
+    # Show final summary
+    local completed_count=$(grep -c '^\- \[x\]' "$RALPH_DIR/kanban.md" 2>/dev/null || echo "0")
+    echo "Summary:"
+    echo "  - Total tasks completed: $completed_count"
+    echo "  - Changelog: .ralph/changelog.md"
+    echo ""
+    echo "Next steps:"
+    echo "  - Review completed work: chief integrate list"
+    echo "  - Merge PRs: chief integrate merge-all"
+    echo "  - Clean up: chief cleanup"
+    echo ""
 }
 
 spawn_worker() {

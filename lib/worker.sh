@@ -7,6 +7,7 @@ CHIEF_HOME="${CHIEF_HOME:-$HOME/.claude/chief-wiggum}"
 
 source "$CHIEF_HOME/lib/ralph-loop.sh"
 source "$CHIEF_HOME/lib/logger.sh"
+source "$CHIEF_HOME/lib/file-lock.sh"
 
 main() {
     log "Worker starting: $WORKER_ID for task $TASK_ID"
@@ -106,18 +107,23 @@ This PR contains the automated implementation of the task requirements.
                         log "✓ Created Pull Request for $TASK_ID"
 
                         # Save PR URL
-                        gh pr view "$branch_name" --json url -q .url > "$WORKER_DIR/pr_url.txt"
+                        local pr_url=$(gh pr view "$branch_name" --json url -q .url)
+                        echo "$pr_url" > "$WORKER_DIR/pr_url.txt"
                     else
                         log "Failed to create PR (gh CLI error), but branch is pushed"
+                        local pr_url="N/A"
                     fi
                 else
                     log "gh CLI not found, skipping PR creation. Branch pushed: $branch_name"
+                    local pr_url="N/A"
                 fi
             else
                 log "Failed to push branch (no remote configured?)"
+                local pr_url="N/A"
             fi
         else
             log "No changes to commit for $TASK_ID"
+            local pr_url="N/A (no changes)"
         fi
     fi
 
@@ -126,9 +132,23 @@ This PR contains the automated implementation of the task requirements.
     log_debug "Removing git worktree"
     git worktree remove "$WORKER_DIR/workspace" --force 2>&1 | tee -a "$WORKER_DIR/worker.log" || true
 
-    # Mark task complete in kanban (simple sed)
+    # Mark task complete in kanban with file locking
     log "Marking task $TASK_ID as complete in kanban"
-    sed -i "s/- \[ \] \*\*\[$TASK_ID\]\*\*/- [x] **[$TASK_ID]**/" "$PROJECT_DIR/.ralph/kanban.md"
+    if ! update_kanban "$PROJECT_DIR/.ralph/kanban.md" "$TASK_ID"; then
+        log_error "Failed to update kanban.md after retries"
+    fi
+
+    # Append to changelog with file locking
+    log "Appending to changelog"
+    # Get PR URL if it exists
+    local pr_url="${pr_url:-N/A}"
+    if [ -f "$WORKER_DIR/pr_url.txt" ]; then
+        pr_url=$(cat "$WORKER_DIR/pr_url.txt")
+    fi
+
+    if ! append_changelog "$PROJECT_DIR/.ralph/changelog.md" "$TASK_ID" "$WORKER_ID" "$task_desc" "$pr_url"; then
+        log_error "Failed to update changelog.md after retries"
+    fi
 
     log "Worker $WORKER_ID completed task $TASK_ID"
 }

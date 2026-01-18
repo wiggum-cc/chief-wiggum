@@ -24,28 +24,32 @@ if [ ! -f "$RALPH_DIR/kanban.md" ]; then
     cat > "$RALPH_DIR/kanban.md" <<'EOF'
 # Project Kanban
 
-## TODO
+## TASKS
 
 - [ ] **[TASK-001]** Example task
   - Description: This is an example task. Replace with your actual tasks.
   - Priority: HIGH
   - Dependencies: none
 
-## IN_PROGRESS
-
-(Tasks being worked on by workers)
-
-## DONE
-
-(Completed tasks)
-
-## BLOCKED
-
-(Tasks with unmet dependencies or issues)
 EOF
     echo "Created .ralph/kanban.md (edit this file to add your tasks)"
 else
     echo ".ralph/kanban.md already exists"
+fi
+
+# Create changelog.md if it doesn't exist
+if [ ! -f "$RALPH_DIR/changelog.md" ]; then
+    cat > "$RALPH_DIR/changelog.md" <<'EOF'
+# Chief Wiggum Changelog
+
+This file tracks all tasks completed by workers.
+
+---
+
+EOF
+    echo "Created .ralph/changelog.md (automatic task completion log)"
+else
+    echo ".ralph/changelog.md already exists"
 fi
 
 echo ""
@@ -53,6 +57,6 @@ echo "✓ Initialized .ralph/ directory"
 echo ""
 echo "Next steps:"
 echo "  1. Edit .ralph/kanban.md to add your tasks"
-echo "  2. Run 'chief' to start workers"
-echo "  3. Monitor with 'chief-status'"
+echo "  2. Run 'chief run' to start workers"
+echo "  3. Monitor progress with 'chief status' or 'chief monitor'"
 echo ""

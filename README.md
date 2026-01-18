@@ -8,7 +8,7 @@ It is built around the **[Ralph Wiggum](https://awesomeclaude.ai/ralph-wiggum)**
 
 ## Overview
 
-Chief Wiggum monitors a `.ralph/kanban.md` file in your project. for every task in the **TODO** column, it spawns an isolated worker. Each worker:
+Chief Wiggum monitors a `.ralph/kanban.md` file in your project. For every incomplete task, it spawns an isolated worker. Each worker:
 
 1.  Creates a dedicated **git worktree** to ensure complete isolation from your main working directory and other workers.
 2.  Generates a **PRD (Product Requirement Document)** specific to that task.
@@ -56,32 +56,48 @@ Navigate to any git repository where you want to use Chief Wiggum and initialize
 
 ```bash
 cd /path/to/your/project
-chief-init
+chief init
 ```
 
 This creates a `.ralph/` directory containing a `kanban.md` file.
 
 ### 2. Define Tasks
 
-Edit `.ralph/kanban.md` to add tasks to the **TODO** section.
+Edit `.ralph/kanban.md` to add tasks to the **TASKS** section.
 
 ```markdown
-## TODO
+## TASKS
 
 - [ ] **[TASK-001]** Refactor Authentication
   - Description: Split auth logic into a separate service...
   - Priority: HIGH
 ```
 
+Task statuses:
+- `- [ ]` - Pending (not yet assigned)
+- `- [=]` - In Progress (worker actively working on it)
+- `- [x]` - Complete (worker finished successfully)
+
 ### 3. Start Workers
 
-Run `chief` to spawn workers for all TODO tasks:
+Run `chief run` to spawn workers for incomplete tasks:
 
 ```bash
-chief
+chief run
 ```
 
-Workers will run in the background. You can continue working in your main directory without interference.
+Chief will:
+- Assign pending tasks to workers (up to 4 concurrent workers by default)
+- Mark assigned tasks as `[=]` in-progress
+- Monitor workers and spawn new ones as workers finish
+- Wait until all tasks are complete
+- Display progress updates
+
+To change the maximum concurrent workers:
+
+```bash
+chief run --max-workers 8
+```
 
 ### 4. Monitor & Manage
 
