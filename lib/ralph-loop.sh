@@ -9,7 +9,7 @@ ralph_loop() {
     local prd_file="$1"                    # Worker's PRD file (absolute path)
     local agent_file="$2"                  # Agent definition
     local workspace="$3"                   # Worker's git worktree
-    local max_iterations="${4:-10}"
+    local max_iterations="${4:-50}"
     local max_turns_per_session="${5:-20}" # Limit turns to control context window
     local iteration=0
 
@@ -46,12 +46,14 @@ ralph_loop() {
         } >> "../worker.log"
 
         # PHASE 1: Work session with turn limit
+        # Use --dangerously-skip-permissions to allow PRD edits (hooks still enforce workspace boundaries)
         claude --verbose \
             --output-format stream-json \
             --plugin-dir "$WIGGUM_HOME/skills" \
             --append-system-prompt "$sys_prompt" \
             --session-id "$session_id" \
             --max-turns "$max_turns_per_session" \
+            --dangerously-skip-permissions \
             -p "$user_prompt" >> "../worker.log" 2>&1
 
         local exit_code=$?
@@ -67,7 +69,7 @@ ralph_loop() {
             local summary_prompt="Provide a concise summary (3-5 bullet points) of what you accomplished in this session. Include: what task you worked on, what you completed, and what remains. Format as markdown bullets."
 
             # Resume session to get summary (limit to 2 turns for summary only)
-            local summary=$(claude --resume "$session_id" --max-turns 2 -p "$summary_prompt" 2>&1 | tee -a "../worker.log")
+            local summary=$(claude --resume "$session_id" --max-turns 2 --dangerously-skip-permissions -p "$summary_prompt" 2>&1 | tee -a "../worker.log")
 
             # Append summary to PRD changelog section
             {
