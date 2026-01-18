@@ -28,7 +28,7 @@ ralph_loop() {
         fi
 
         # Build prompt using relative path to PRD
-        local prompt="IMPORTANT: Your working directory is $workspace. Do NOT cd into, read, or modify files outside this directory. Read @$prd_relative, find the next incomplete task (- [ ]), execute it completely within your working directory, then mark it as complete (- [x]) by editing the PRD file."
+        local prompt="IMPORTANT: Your working directory is $workspace. Do NOT cd into, read, or modify files outside this directory. INSTRUCTIONS:Read @$prd_relative, find the next incomplete task (- [ ]), execute it completely within your working directory, then mark it as complete (- [x]) by editing the PRD file."
 
         log_debug "Iteration $iteration: Executing Claude Code"
 

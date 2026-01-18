@@ -54,6 +54,9 @@ cleanup_worker() {
         # Get task priority
         local task_priority=$(grep -A2 "**\[$TASK_ID\]**" "$PROJECT_DIR/.ralph/kanban.md" | grep "Priority:" | sed 's/.*Priority: //')
 
+        # Get task dependencies
+        local task_deps=$(grep -A3 "**\[$TASK_ID\]**" "$PROJECT_DIR/.ralph/kanban.md" | grep "Dependencies:" | sed 's/.*Dependencies: //')
+
         # Commit any changes in the worktree
         if ! git diff --quiet || ! git diff --cached --quiet || [ -n "$(git ls-files --others --exclude-standard)" ]; then
             log "Creating branch and PR for $TASK_ID"
@@ -90,6 +93,7 @@ Automated PR for $TASK_ID created by Chief Wiggum worker.
 
 **Task Description:** $task_desc
 **Priority:** ${task_priority:-MEDIUM}
+**Dependencies:** ${task_deps:-none}
 **Worker ID:** $WORKER_ID
 
 ## Changes
