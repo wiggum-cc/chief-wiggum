@@ -5,6 +5,11 @@ WORKER_DIR="$1"         # e.g., .ralph/workers/worker-TASK-001-12345
 PROJECT_DIR="$2"        # Project root directory
 WIGGUM_HOME="${WIGGUM_HOME:-$HOME/.claude/chief-wiggum}"
 
+# Extract WORKER_ID and TASK_ID from WORKER_DIR
+# WORKER_DIR format: .ralph/workers/worker-TASK-001-12345
+WORKER_ID=$(basename "$WORKER_DIR")  # e.g., worker-TASK-001-12345
+TASK_ID=$(echo "$WORKER_ID" | sed -E 's/worker-(TASK-[0-9]+)-.*/\1/')  # e.g., TASK-001
+
 # Configuration for ralph loop
 MAX_ITERATIONS="${WIGGUM_MAX_ITERATIONS:-20}"           # Max outer loop iterations
 MAX_TURNS_PER_SESSION="${WIGGUM_MAX_TURNS:-50}"         # Max turns per Claude session (controls context window)
@@ -14,6 +19,7 @@ source "$WIGGUM_HOME/lib/logger.sh"
 source "$WIGGUM_HOME/lib/file-lock.sh"
 source "$WIGGUM_HOME/lib/calculate-cost.sh"
 source "$WIGGUM_HOME/lib/audit-logger.sh"
+source "$WIGGUM_HOME/lib/task-parser.sh"
 
 main() {
     log "Worker starting: $WORKER_ID for task $TASK_ID"
