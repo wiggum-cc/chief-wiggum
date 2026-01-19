@@ -1,0 +1,434 @@
+#!/usr/bin/env bash
+# wiggum worker - Manage individual workers
+#
+# Commands:
+#   wiggum worker <id> stop       Gracefully stop a worker (SIGTERM)
+#   wiggum worker <id> kill       Immediately terminate a worker (SIGKILL)
+#   wiggum worker <id> resume     Resume a previously stopped worker
+#   wiggum worker start <TASK-ID> Start a new worker for a task
+
+set -euo pipefail
+
+WIGGUM_HOME="${WIGGUM_HOME:-$HOME/.claude/chief-wiggum}"
+PROJECT_DIR="$(pwd)"
+RALPH_DIR="$PROJECT_DIR/.ralph"
+
+source "$WIGGUM_HOME/lib/logger.sh"
+source "$WIGGUM_HOME/lib/task-parser.sh"
+source "$WIGGUM_HOME/lib/audit-logger.sh"
+
+# Default configuration (can be overridden by env vars)
+MAX_ITERATIONS="${WIGGUM_MAX_ITERATIONS:-20}"
+MAX_TURNS="${WIGGUM_MAX_TURNS:-50}"
+
+show_help() {
+    cat << EOF
+wiggum worker - Manage individual workers
+
+Usage:
+  wiggum worker <id> stop       Gracefully stop a worker (SIGTERM)
+  wiggum worker <id> kill       Immediately terminate a worker (SIGKILL)
+  wiggum worker <id> resume     Resume a previously stopped worker
+  wiggum worker start <TASK-ID> Start a new worker for a task
+
+Worker ID Resolution:
+  Worker IDs can be partial as long as they match exactly one worker:
+  - 1891712              (timestamp)
+  - K-030                (partial task ID)
+  - TASK-030             (task ID)
+  - worker-TASK-030-1891712  (full ID)
+
+Examples:
+  wiggum worker TASK-030 stop     # Stop worker for TASK-030
+  wiggum worker 1891712 resume    # Resume worker by timestamp
+  wiggum worker start TASK-040    # Start new worker for TASK-040
+
+EOF
+}
+
+# Resolve partial worker ID to full worker directory path
+# Returns: worker_dir path on stdout, or error message on stderr
+resolve_worker_id() {
+    local partial="$1"
+    local matches=()
+
+    if [ ! -d "$RALPH_DIR/workers" ]; then
+        echo "Error: No workers directory found at $RALPH_DIR/workers" >&2
+        return 1
+    fi
+
+    for worker_dir in "$RALPH_DIR/workers"/worker-*; do
+        [ -d "$worker_dir" ] || continue
+        local worker_id
+        worker_id=$(basename "$worker_dir")
+
+        # Check if partial matches any part of worker_id
+        if [[ "$worker_id" == *"$partial"* ]]; then
+            matches+=("$worker_dir")
+        fi
+    done
+
+    case ${#matches[@]} in
+        0)
+            echo "Error: No worker matches '$partial'" >&2
+            echo "Use 'wiggum status' to see available workers." >&2
+            return 1
+            ;;
+        1)
+            echo "${matches[0]}"
+            return 0
+            ;;
+        *)
+            echo "Error: Multiple workers match '$partial':" >&2
+            for m in "${matches[@]}"; do
+                echo "  - $(basename "$m")" >&2
+            done
+            echo "Please be more specific." >&2
+            return 1
+            ;;
+    esac
+}
+
+# Get worker PID from worker directory, validate it's still running
+get_worker_pid() {
+    local worker_dir="$1"
+    local pid_file="$worker_dir/worker.pid"
+
+    if [ ! -f "$pid_file" ]; then
+        echo "Error: No PID file found for worker (not running?)" >&2
+        return 1
+    fi
+
+    local pid
+    pid=$(cat "$pid_file" 2>/dev/null)
+
+    # Validate PID is a number
+    if ! [[ "$pid" =~ ^[0-9]+$ ]]; then
+        echo "Error: Invalid PID in worker.pid file" >&2
+        return 1
+    fi
+
+    # Check if process is running AND is a worker process
+    if kill -0 "$pid" 2>/dev/null; then
+        if ps -p "$pid" -o args= 2>/dev/null | grep -q "lib/worker.sh"; then
+            echo "$pid"
+            return 0
+        else
+            echo "Error: PID $pid exists but is not a worker process (PID reused?)" >&2
+            return 1
+        fi
+    else
+        echo "Error: Worker process $pid is not running" >&2
+        return 1
+    fi
+}
+
+# Stop worker gracefully (SIGTERM)
+cmd_stop() {
+    local worker_dir="$1"
+    local worker_id
+    worker_id=$(basename "$worker_dir")
+
+    local pid
+    pid=$(get_worker_pid "$worker_dir") || exit 1
+
+    echo "Stopping worker $worker_id (PID: $pid)..."
+    kill -TERM "$pid"
+
+    # Wait for graceful shutdown (up to 30 seconds)
+    local timeout=30
+    local elapsed=0
+    while kill -0 "$pid" 2>/dev/null && [ $elapsed -lt $timeout ]; do
+        sleep 1
+        ((elapsed++))
+        echo -ne "\rWaiting for worker to stop... ${elapsed}s"
+    done
+    echo ""
+
+    if kill -0 "$pid" 2>/dev/null; then
+        echo "Warning: Worker did not stop gracefully within ${timeout}s"
+        echo "Use 'wiggum worker $(basename "$worker_dir") kill' to force terminate"
+        exit 1
+    else
+        echo "Worker $worker_id stopped successfully"
+        rm -f "$worker_dir/worker.pid"
+    fi
+}
+
+# Kill worker immediately (SIGKILL)
+cmd_kill() {
+    local worker_dir="$1"
+    local worker_id
+    worker_id=$(basename "$worker_dir")
+
+    local pid
+    pid=$(get_worker_pid "$worker_dir") || exit 1
+
+    echo "Force killing worker $worker_id (PID: $pid)..."
+    kill -9 "$pid" 2>/dev/null || true
+
+    sleep 1
+    if kill -0 "$pid" 2>/dev/null; then
+        echo "Error: Failed to kill worker $worker_id"
+        exit 1
+    else
+        echo "Worker $worker_id killed"
+        rm -f "$worker_dir/worker.pid"
+    fi
+}
+
+# Determine which iteration to resume from
+determine_resume_iteration() {
+    local worker_dir="$1"
+    local logs_dir="$worker_dir/logs"
+    local max_iter=-1
+
+    # Find the highest iteration number
+    if [ -d "$logs_dir" ]; then
+        for log_file in "$logs_dir"/iteration-*.log; do
+            [ -f "$log_file" ] || continue
+            local iter
+            iter=$(basename "$log_file" | sed 's/iteration-\([0-9]*\).log/\1/')
+            if [ "$iter" -gt "$max_iter" ]; then
+                max_iter=$iter
+            fi
+        done
+    fi
+
+    if [ "$max_iter" -lt 0 ]; then
+        # No iterations found, start from 0
+        echo "0"
+        return
+    fi
+
+    # If N has summary, resume from N+1; else redo N
+    if [ -f "$worker_dir/iteration-${max_iter}-summary.txt" ]; then
+        echo "$((max_iter + 1))"
+    else
+        echo "$max_iter"
+    fi
+}
+
+# Prepare context for resume
+prepare_resume_context() {
+    local worker_dir="$1"
+    local resume_iter="$2"
+
+    if [ "$resume_iter" -gt 0 ]; then
+        local prev_iter=$((resume_iter - 1))
+        local prev_summary="$worker_dir/iteration-${prev_iter}-summary.txt"
+
+        if [ -f "$prev_summary" ]; then
+            # Use the previous summary as context
+            cp "$prev_summary" "$worker_dir/resume-context.md"
+            echo "Using summary from iteration $prev_iter as context"
+        else
+            # No summary available, try to generate from log
+            local prev_log="$worker_dir/logs/iteration-${prev_iter}.log"
+            if [ -f "$prev_log" ]; then
+                echo "Converting iteration $prev_iter log to markdown..."
+                "$WIGGUM_HOME/lib/log-converter.sh" "$prev_log" "$worker_dir/resume-context.md"
+            else
+                echo "Warning: No context available for resume (starting fresh)"
+                touch "$worker_dir/resume-context.md"
+            fi
+        fi
+    else
+        # Starting from iteration 0, no context needed
+        touch "$worker_dir/resume-context.md"
+    fi
+}
+
+# Resume a stopped worker
+cmd_resume() {
+    local worker_dir="$1"
+    local worker_id
+    worker_id=$(basename "$worker_dir")
+    local task_id
+    task_id=$(echo "$worker_id" | sed -E 's/worker-(TASK-[0-9]+)-.*/\1/')
+
+    # Check if already running
+    if [ -f "$worker_dir/worker.pid" ]; then
+        local existing_pid
+        existing_pid=$(cat "$worker_dir/worker.pid" 2>/dev/null)
+        if kill -0 "$existing_pid" 2>/dev/null; then
+            echo "Error: Worker $worker_id is already running (PID: $existing_pid)"
+            exit 1
+        fi
+    fi
+
+    # Check PRD exists
+    if [ ! -f "$worker_dir/prd.md" ]; then
+        echo "Error: PRD not found at $worker_dir/prd.md"
+        exit 1
+    fi
+
+    # Check workspace exists
+    if [ ! -d "$worker_dir/workspace" ]; then
+        echo "Error: Workspace not found at $worker_dir/workspace"
+        echo "The worktree may have been cleaned up."
+        exit 1
+    fi
+
+    # Determine resume iteration
+    local resume_iteration
+    resume_iteration=$(determine_resume_iteration "$worker_dir")
+
+    echo "Resuming worker $worker_id for task $task_id"
+    echo "Starting from iteration $resume_iteration"
+
+    # Prepare context for resume
+    prepare_resume_context "$worker_dir" "$resume_iteration"
+
+    # Launch worker with resume context
+    export WORKER_ID="$worker_id"
+    export TASK_ID="$task_id"
+    export WIGGUM_HOME
+    export WIGGUM_MAX_ITERATIONS="$MAX_ITERATIONS"
+    export WIGGUM_MAX_TURNS="$MAX_TURNS"
+    export WIGGUM_RESUME_ITERATION="$resume_iteration"
+    export WIGGUM_RESUME_CONTEXT="$worker_dir/resume-context.md"
+
+    mkdir -p "$RALPH_DIR/logs"
+    bash "$WIGGUM_HOME/lib/worker.sh" "$worker_dir" "$PROJECT_DIR" \
+        >> "$RALPH_DIR/logs/workers.log" 2>&1 &
+
+    local new_pid=$!
+    echo "Worker resumed in background (PID: $new_pid)"
+    echo "Use 'wiggum monitor' to follow progress"
+}
+
+# Start a new worker for a task
+cmd_start() {
+    local task_id="$1"
+
+    if [ -z "$task_id" ]; then
+        echo "Error: Task ID required"
+        echo "Usage: wiggum worker start <TASK-ID>"
+        exit 1
+    fi
+
+    # Validate task ID format (allow flexible format like TASK-XXX, FEAT-XXX, etc.)
+    if ! [[ "$task_id" =~ ^[A-Za-z]+-[0-9]+$ ]]; then
+        echo "Error: Invalid task ID format: $task_id"
+        echo "Expected format: PREFIX-NUMBER (e.g., TASK-030, FEAT-001)"
+        exit 1
+    fi
+
+    # Check .ralph directory exists
+    if [ ! -d "$RALPH_DIR" ]; then
+        echo "Error: No .ralph directory found. Run 'wiggum init' first."
+        exit 1
+    fi
+
+    # Check if task exists in kanban
+    if [ ! -f "$RALPH_DIR/kanban.md" ]; then
+        echo "Error: No kanban.md found at $RALPH_DIR/kanban.md"
+        exit 1
+    fi
+
+    if ! grep -q "\\*\\*\\[$task_id\\]\\*\\*" "$RALPH_DIR/kanban.md" 2>/dev/null; then
+        echo "Error: Task $task_id not found in kanban.md"
+        exit 1
+    fi
+
+    # Check if a worker already exists for this task
+    local existing
+    existing=$(find "$RALPH_DIR/workers" -maxdepth 1 -type d -name "worker-$task_id-*" 2>/dev/null | head -1)
+    if [ -n "$existing" ]; then
+        echo "Warning: Worker already exists for $task_id: $(basename "$existing")"
+        echo "Use 'wiggum worker $task_id resume' to resume it, or clean it up first."
+        exit 1
+    fi
+
+    # Create worker directory with unique timestamp
+    local timestamp=$(date +%s)
+    local worker_id="worker-${task_id}-${timestamp}"
+    local worker_dir="$RALPH_DIR/workers/$worker_id"
+
+    mkdir -p "$worker_dir"
+    mkdir -p "$RALPH_DIR/logs"
+
+    # Extract task from kanban and create worker PRD
+    extract_task "$task_id" "$RALPH_DIR/kanban.md" > "$worker_dir/prd.md"
+
+    echo "Starting worker $worker_id for task $task_id"
+
+    # Launch worker in background
+    # Worker writes its own PID to worker.pid - orchestrator can poll for it
+    export WORKER_ID="$worker_id"
+    export TASK_ID="$task_id"
+    export WIGGUM_HOME
+    export WIGGUM_MAX_ITERATIONS="$MAX_ITERATIONS"
+    export WIGGUM_MAX_TURNS="$MAX_TURNS"
+
+    bash "$WIGGUM_HOME/lib/worker.sh" "$worker_dir" "$PROJECT_DIR" \
+        >> "$RALPH_DIR/logs/workers.log" 2>&1 &
+
+    # Wait briefly for worker.pid to be created
+    local wait_count=0
+    while [ ! -f "$worker_dir/worker.pid" ] && [ $wait_count -lt 10 ]; do
+        sleep 0.1
+        ((wait_count++))
+    done
+
+    if [ -f "$worker_dir/worker.pid" ]; then
+        local worker_pid=$(cat "$worker_dir/worker.pid")
+        echo "Worker running (PID: $worker_pid)"
+    else
+        echo "Worker started (PID file pending)"
+    fi
+    echo "Use 'wiggum monitor' to follow progress"
+}
+
+# Main
+main() {
+    if [ $# -eq 0 ]; then
+        show_help
+        exit 1
+    fi
+
+    case "$1" in
+        -h|--help|help)
+            show_help
+            exit 0
+            ;;
+        start)
+            cmd_start "$2"
+            ;;
+        *)
+            # First arg is worker ID, second is action
+            local partial_id="$1"
+            local action="${2:-}"
+
+            if [ -z "$action" ]; then
+                echo "Error: Missing action (stop|kill|resume)"
+                echo ""
+                show_help
+                exit 1
+            fi
+
+            local worker_dir
+            worker_dir=$(resolve_worker_id "$partial_id") || exit 1
+
+            case "$action" in
+                stop)
+                    cmd_stop "$worker_dir"
+                    ;;
+                kill)
+                    cmd_kill "$worker_dir"
+                    ;;
+                resume)
+                    cmd_resume "$worker_dir"
+                    ;;
+                *)
+                    echo "Error: Unknown action '$action'"
+                    echo "Valid actions: stop, kill, resume"
+                    exit 1
+                    ;;
+            esac
+            ;;
+    esac
+}
+
+main "$@"

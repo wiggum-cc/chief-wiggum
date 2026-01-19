@@ -42,25 +42,42 @@ Behavior:
 EOF
 }
 
+# Spawn a worker for a task using wiggum-worker
+# Sets: SPAWNED_WORKER_ID, SPAWNED_WORKER_PID (for caller to use)
 spawn_worker() {
     local task_id="$1"
-    local worker_id="worker-${task_id}-$$"
-    local worker_dir="$RALPH_DIR/workers/$worker_id"
 
-    # Create worker directory
-    mkdir -p "$worker_dir"
-    mkdir -p "$RALPH_DIR/logs"
-
-    # Extract task from kanban and create worker PRD
-    extract_task "$task_id" "$RALPH_DIR/kanban.md" > "$worker_dir/prd.md"
-
-    # Launch worker
-    export WORKER_ID="$worker_id"
-    export TASK_ID="$task_id"
-    export WIGGUM_HOME
+    # Pass configuration via environment
     export WIGGUM_MAX_ITERATIONS="$MAX_ITERATIONS"
     export WIGGUM_MAX_TURNS="$MAX_TURNS"
-    bash "$WIGGUM_HOME/lib/worker.sh" "$worker_dir" "$PROJECT_DIR" >> "$RALPH_DIR/logs/workers.log" 2>&1
+
+    # Use wiggum-worker to start the worker
+    "$WIGGUM_HOME/bin/wiggum-worker" start "$task_id" > /dev/null 2>&1
+
+    # Find the worker directory that was just created
+    local worker_dir
+    worker_dir=$(find "$RALPH_DIR/workers" -maxdepth 1 -type d -name "worker-$task_id-*" -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
+
+    if [ -z "$worker_dir" ]; then
+        log_error "Failed to find worker directory for $task_id"
+        return 1
+    fi
+
+    SPAWNED_WORKER_ID=$(basename "$worker_dir")
+
+    # Wait for worker.pid to appear (worker writes it on startup)
+    local wait_count=0
+    while [ ! -f "$worker_dir/worker.pid" ] && [ $wait_count -lt 30 ]; do
+        sleep 0.1
+        ((wait_count++))
+    done
+
+    if [ -f "$worker_dir/worker.pid" ]; then
+        SPAWNED_WORKER_PID=$(cat "$worker_dir/worker.pid")
+    else
+        log_error "Worker PID file not created for $task_id"
+        return 1
+    fi
 }
 
 main() {
@@ -341,17 +358,20 @@ main() {
                 continue
             fi
 
-            # Spawn worker
-            spawn_worker "$task_id" &
-            local worker_pid=$!
-            active_workers[$worker_pid]="$task_id"
-            all_pids+=($worker_pid)
+            # Spawn worker (wiggum-worker handles backgrounding)
+            if ! spawn_worker "$task_id"; then
+                log_error "Failed to spawn worker for $task_id"
+                update_kanban_status "$RALPH_DIR/kanban.md" "$task_id" "*"
+                continue
+            fi
+
+            active_workers[$SPAWNED_WORKER_PID]="$task_id"
+            all_pids+=($SPAWNED_WORKER_PID)
 
             # Log task assignment to audit log
-            local worker_id="worker-${task_id}-$$"
-            audit_log_task_assigned "$task_id" "$worker_id" "$worker_pid"
+            audit_log_task_assigned "$task_id" "$SPAWNED_WORKER_ID" "$SPAWNED_WORKER_PID"
 
-            log "Spawned worker for $task_id (PID: $worker_pid)"
+            log "Spawned worker $SPAWNED_WORKER_ID for $task_id (PID: $SPAWNED_WORKER_PID)"
         done
 
         # Show status and recent activity

@@ -53,6 +53,13 @@ main() {
 
     setup_worker
 
+    # Handle resume mode - pass environment variables to ralph_loop
+    if [ -n "${WIGGUM_RESUME_ITERATION:-}" ]; then
+        log "Worker resuming from iteration $WIGGUM_RESUME_ITERATION"
+        export WIGGUM_RESUME_ITERATION
+        export WIGGUM_RESUME_CONTEXT
+    fi
+
     # Start Ralph loop for this worker's task in background to capture PID
     # Params: prd_file, workspace, max_iterations, max_turns_per_session
     ralph_loop \
@@ -303,8 +310,9 @@ ${metrics_section}
                     pr_url="N/A"
                 fi
             else
-                log "No changes to commit for $TASK_ID"
+                log_error "No changes to commit for $TASK_ID - marking as FAILED"
                 pr_url="N/A (no changes)"
+                final_status="FAILED"
             fi
         fi
     else

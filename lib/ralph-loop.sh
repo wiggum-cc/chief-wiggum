@@ -75,7 +75,11 @@ ralph_loop() {
     local workspace="$2"                   # Worker's git worktree
     local max_iterations="${3:-20}"
     local max_turns_per_session="${4:-50}" # Limit turns to control context window
-    local iteration=0
+
+    # Resume mode support - set by wiggum worker resume command
+    local resume_iteration="${WIGGUM_RESUME_ITERATION:-0}"
+    local resume_context="${WIGGUM_RESUME_CONTEXT:-}"
+    local iteration=$resume_iteration
 
     # Track if shutdown was requested
     local shutdown_requested=false
@@ -103,6 +107,14 @@ ralph_loop() {
     } >> "../worker.log"
 
     log "Ralph loop starting for $prd_file (max $max_turns_per_session turns per session)"
+
+    # Log resume mode if active
+    if [ "$resume_iteration" -gt 0 ]; then
+        log "Resuming from iteration $resume_iteration"
+        if [ -n "$resume_context" ] && [ -f "$resume_context" ]; then
+            log "Using resume context from: $resume_context"
+        fi
+    fi
 
     # Change to workspace BEFORE the loop
     cd "$workspace" || exit 1
@@ -198,33 +210,50 @@ IMPORTANT NOTES:
 
         # Add context from previous iterations if available
         if [ $iteration -gt 0 ]; then
-            # Build list of summary files to read
-            local summary_files=""
-            for ((i=0; i<iteration; i++)); do
-                if [ -f "../iteration-$i-summary.txt" ]; then
-                    if [ -z "$summary_files" ]; then
-                        summary_files="iteration-$i-summary.txt"
-                    else
-                        summary_files="$summary_files, iteration-$i-summary.txt"
-                    fi
+            # Check if this is a resumed iteration with resume context
+            if [ "$iteration" -eq "$resume_iteration" ] && [ -n "$resume_context" ] && [ -f "$resume_context" ]; then
+                # First iteration after resume - use the prepared resume context
+                user_prompt="$user_prompt
+
+CONTEXT FROM PREVIOUS SESSION (RESUMED):
+
+This worker was previously interrupted and is now resuming from iteration $iteration.
+
+To understand what was accomplished before the interruption:
+- Read the file @../resume-context.md - it contains a summary of the previous session's work
+
+Continue from where the previous session left off:
+- Do NOT repeat work that was already completed
+- Pick up where the previous session stopped
+- If a task was partially completed, continue from where it left off
+- Use the context to maintain consistency in approach and patterns
+
+CRITICAL: Do NOT read files in the logs/ directory - they contain full conversation JSON streams that are too large (100KB-500KB each) and will deplete your context window."
+            else
+                # Normal iteration context - use previous iteration summaries
+                # Build list of summary files to read (only the previous one for efficiency)
+                local prev_iter=$((iteration - 1))
+                local summary_file=""
+                if [ -f "../iteration-$prev_iter-summary.txt" ]; then
+                    summary_file="iteration-$prev_iter-summary.txt"
                 fi
-            done
 
-            user_prompt="$user_prompt
+                if [ -n "$summary_file" ]; then
+                    user_prompt="$user_prompt
 
-CONTEXT FROM PREVIOUS ITERATIONS:
+CONTEXT FROM PREVIOUS ITERATION:
 
 This is iteration $iteration of a multi-iteration work session. Previous work has been completed in earlier iterations.
 
 To understand what has already been accomplished and maintain continuity:
-- Read the following summary files (in order) to understand completed work and context:
-  $summary_files
-- These summaries are located in the parent directory (../iteration-X-summary.txt)
-- Each summary describes what was done in that iteration, decisions made, and files modified
+- Read the file @../$summary_file to understand completed work and context
+- This summary describes what was done, decisions made, and files modified
 - Use this information to avoid duplicating work and to build upon previous progress
 - Ensure your approach aligns with patterns and decisions from earlier iterations
 
 CRITICAL: Do NOT read files in the logs/ directory - they contain full conversation JSON streams that are too large (100KB-500KB each) and will deplete your context window. Only read the iteration-X-summary.txt files for context."
+                fi
+            fi
         fi
 
         log_debug "Iteration $iteration: Session $session_id (max $max_turns_per_session turns)"

@@ -18,6 +18,7 @@ Commands:
   status           Show status of workers and tasks
   monitor          Monitor worker logs in real-time
   review           Review and manage worker Pull Requests
+  worker           Manage individual workers (stop/kill/resume/start)
 
 Run Options:
   --max-workers N      Maximum concurrent workers (default: 4)
@@ -85,6 +86,9 @@ main() {
             ;;
         review)
             exec "$WIGGUM_HOME/bin/wiggum-review" "$@"
+            ;;
+        worker)
+            exec "$WIGGUM_HOME/bin/wiggum-worker" "$@"
             ;;
         -h|--help|help)
             show_help

@@ -15,3 +15,10 @@
 
 # Test artifacts
 test-*/
+
+# UI dependencies and build artifacts
+ui/node_modules/
+ui/client/node_modules/
+ui/server/node_modules/
+ui/client/dist/
+ui/server/dist/

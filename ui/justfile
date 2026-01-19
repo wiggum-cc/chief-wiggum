@@ -1,0 +1,19 @@
+# Start both server and client
+serve:
+    npm run dev
+
+# Start server only
+server:
+    npm run dev:server
+
+# Start client only
+client:
+    npm run dev:client
+
+# Build client for production
+build:
+    npm run build
+
+# Install dependencies
+install:
+    npm install
