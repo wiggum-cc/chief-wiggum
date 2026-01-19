@@ -172,9 +172,27 @@ CRITICAL: Do NOT read files in the logs/ directory - they contain full conversat
 
         log "Work phase starting (see logs/iteration-$iteration.log for details)"
 
+        # Log initial prompt to iteration log as JSON (matching stream-json format)
+        {
+            jq -n --arg iteration "$iteration" \
+                  --arg session "$session_id" \
+                  --arg sys_prompt "$sys_prompt" \
+                  --arg user_prompt "$user_prompt" \
+                  --arg max_turns "$max_turns_per_session" \
+                  '{
+                    type: "iteration_start",
+                    iteration: ($iteration | tonumber),
+                    session_id: $session,
+                    max_turns: ($max_turns | tonumber),
+                    system_prompt: $sys_prompt,
+                    user_prompt: $user_prompt,
+                    timestamp: now | strftime("%Y-%m-%dT%H:%M:%SZ")
+                  }'
+        } > "../logs/iteration-$iteration.log"
+
         # PHASE 1: Work session with turn limit
         # Use --dangerously-skip-permissions to allow PRD edits (hooks still enforce workspace boundaries)
-        # Redirect verbose output to iteration-specific file
+        # Append verbose output to iteration-specific file (after the initial prompt JSON)
         claude --verbose \
             --output-format stream-json \
             --plugin-dir "$WIGGUM_HOME/skills" \
@@ -182,10 +200,15 @@ CRITICAL: Do NOT read files in the logs/ directory - they contain full conversat
             --session-id "$session_id" \
             --max-turns "$max_turns_per_session" \
             --dangerously-skip-permissions \
-            -p "$user_prompt" > "../logs/iteration-$iteration.log" 2>&1
+            -p "$user_prompt" >> "../logs/iteration-$iteration.log" 2>&1
 
         local exit_code=$?
-        log "Work phase completed (exit code: $exit_code)"
+        log "Work phase completed (exit code: $exit_code, session: $session_id)"
+
+        # Log work phase completion to worker.log
+        {
+            echo "Work phase exit code: $exit_code"
+        } >> "../worker.log"
 
         # Check if interrupted (SIGINT typically gives exit code 130)
         if [ $exit_code -eq 130 ] || [ $exit_code -eq 143 ]; then
@@ -201,13 +224,13 @@ CRITICAL: Do NOT read files in the logs/ directory - they contain full conversat
         fi
 
         # PHASE 2: ALWAYS generate summary for context continuity (not conditional)
-        log "Generating summary for iteration $iteration"
+        log "Generating summary for iteration $iteration (session: $session_id)"
 
         {
             echo "=== SUMMARY PHASE ==="
         } >> "../worker.log"
 
-            local summary_prompt="Your task is to create a detailed summary of the conversation so far, paying close attention to the user's explicit requests and your previous actions.
+        local summary_prompt="Your task is to create a detailed summary of the conversation so far, paying close attention to the user's explicit requests and your previous actions.
 This summary should be thorough in capturing technical details, code patterns, and architectural decisions that would be essential for continuing development work without losing context.
 
 Before providing your final summary, wrap your analysis in <analysis> tags to organize your thoughts and ensure you've covered all necessary points. In your analysis process:
@@ -274,34 +297,59 @@ Here's an example of how your output should be structured:
 
 Please provide your summary based on the conversation so far, following this structure and ensuring precision and thoroughness in your response. "
 
-            log "Requesting summary for session $session_id"
+        log "Requesting summary for session $session_id"
 
-            # Capture full output to iteration summary file (in worker root, not logs/)
-            local summary_full=$(claude --resume "$session_id" --max-turns 2 \
-                --dangerously-skip-permissions -p "$summary_prompt" 2>&1 | \
-                tee "../iteration-$iteration-summary.txt")
+        # Capture full output to iteration summary file (in worker root, not logs/)
+        local summary_full=$(claude --resume "$session_id" --max-turns 2 \
+            --dangerously-skip-permissions -p "$summary_prompt" 2>&1 | \
+            tee "../iteration-$iteration-summary.txt")
 
-            # Extract clean text from JSON stream
-            local summary=$(extract_summary_text "$summary_full")
+        local summary_exit_code=$?
+        log "Summary generation completed (exit code: $summary_exit_code)"
 
-            # Append clean summary to worker.log
-            {
-                echo "--- Session $iteration Summary ---"
-                echo "$summary"
-                echo "--- End Summary ---"
-                echo ""
-            } >> "../worker.log"
+        # Extract clean text from JSON stream
+        local summary=$(extract_summary_text "$summary_full")
 
-            # Append summary to PRD changelog section
-            {
-                echo ""
-                echo "## Session $iteration Changelog ($(date -u +"%Y-%m-%d %H:%M:%S UTC"))"
-                echo ""
-                echo "$summary"
-                echo ""
-            } >> "$prd_file"
+        # Check if summary is empty
+        if [ -z "$summary" ]; then
+            log_error "Warning: Summary for iteration $iteration is empty"
+            summary="[Summary generation failed or produced no output]"
+        fi
 
-            log "Summary appended to PRD and worker.log"
+        # Append clean summary to worker.log
+        {
+            echo "--- Session $iteration Summary ---"
+            echo "$summary"
+            echo "--- End Summary ---"
+            echo ""
+        } >> "../worker.log"
+
+        # Append summary to PRD changelog section
+        {
+            echo ""
+            echo "## Session $iteration Changelog ($(date -u +"%Y-%m-%d %H:%M:%S UTC"))"
+            echo ""
+            echo "$summary"
+            echo ""
+        } >> "$prd_file"
+
+        log "Summary appended to PRD and worker.log"
+
+        # Log iteration completion to iteration log file as JSON
+        {
+            jq -n --arg iteration "$iteration" \
+                  --arg session "$session_id" \
+                  --arg exit_code "$exit_code" \
+                  --arg summary_exit_code "$summary_exit_code" \
+                  '{
+                    type: "iteration_complete",
+                    iteration: ($iteration | tonumber),
+                    session_id: $session,
+                    work_exit_code: ($exit_code | tonumber),
+                    summary_exit_code: ($summary_exit_code | tonumber),
+                    timestamp: now | strftime("%Y-%m-%dT%H:%M:%SZ")
+                  }'
+        } >> "../logs/iteration-$iteration.log"
 
         # Check if shutdown was requested during summary phase
         if [ "$shutdown_requested" = true ]; then
