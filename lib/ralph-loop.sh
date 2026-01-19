@@ -24,6 +24,16 @@ ralph_loop() {
     local max_turns_per_session="${5:-50}" # Limit turns to control context window
     local iteration=0
 
+    # Track if shutdown was requested
+    local shutdown_requested=false
+
+    # Setup signal handlers for graceful shutdown
+    handle_worker_signal() {
+        log "Worker received shutdown signal - cleaning up gracefully"
+        shutdown_requested=true
+    }
+    trap handle_worker_signal INT TERM
+
     # Record start time
     local start_time=$(date +%s)
     {
@@ -49,6 +59,12 @@ ralph_loop() {
     local last_session_id=""
 
     while [ $iteration -lt $max_iterations ]; do
+        # Exit if shutdown was requested
+        if [ "$shutdown_requested" = true ]; then
+            log "Worker shutting down due to signal"
+            break
+        fi
+
         # Exit if all tasks complete
         if ! has_incomplete_tasks "$prd_file"; then
             log "Worker completed all tasks in $prd_file"
@@ -170,6 +186,13 @@ CRITICAL: Do NOT read files in the logs/ directory - they contain full conversat
 
         local exit_code=$?
         log "Work phase completed (exit code: $exit_code)"
+
+        # Check if interrupted (SIGINT typically gives exit code 130)
+        if [ $exit_code -eq 130 ] || [ $exit_code -eq 143 ]; then
+            log "Work phase was interrupted by signal (exit code: $exit_code)"
+            shutdown_requested=true
+            break
+        fi
 
         # PHASE 2: ALWAYS generate summary for context continuity (not conditional)
         log "Generating summary for iteration $iteration"

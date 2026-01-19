@@ -154,12 +154,50 @@ main() {
     echo "$$" > "$orchestrator_lock"
     log "Created orchestrator lock (PID: $$)"
 
+    # Track shutdown state
+    local shutdown_requested=false
+
     # Setup trap to cleanup lock file on exit (normal or Ctrl+C)
     cleanup_orchestrator() {
-        log "Cleaning up orchestrator lock"
-        rm -f "$orchestrator_lock"
+        if [ "$shutdown_requested" = false ]; then
+            log "Cleaning up orchestrator lock"
+            shutdown_requested=true
+
+            # Kill all active workers gracefully
+            if [ ${#active_workers[@]} -gt 0 ]; then
+                log "Terminating active workers..."
+                for pid in "${!active_workers[@]}"; do
+                    if kill -0 "$pid" 2>/dev/null; then
+                        log "Sending SIGTERM to worker ${active_workers[$pid]} (PID: $pid)"
+                        kill -TERM "$pid" 2>/dev/null || true
+                    fi
+                done
+
+                # Wait a moment for graceful shutdown
+                sleep 2
+
+                # Force kill any remaining workers
+                for pid in "${!active_workers[@]}"; do
+                    if kill -0 "$pid" 2>/dev/null; then
+                        log "Force killing worker ${active_workers[$pid]} (PID: $pid)"
+                        kill -9 "$pid" 2>/dev/null || true
+                    fi
+                done
+            fi
+
+            rm -f "$orchestrator_lock"
+        fi
     }
-    trap cleanup_orchestrator EXIT INT TERM
+    trap cleanup_orchestrator EXIT
+
+    # Handle INT and TERM signals specially to exit immediately
+    handle_shutdown_signal() {
+        log ""
+        log "Shutdown signal received (Ctrl+C or SIGTERM)"
+        cleanup_orchestrator
+        exit 130  # Standard exit code for SIGINT
+    }
+    trap handle_shutdown_signal INT TERM
 
     if [ ! -f "$RALPH_DIR/kanban.md" ]; then
         log_error ".ralph/kanban.md not found. Create a kanban file first."

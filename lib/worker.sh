@@ -24,6 +24,17 @@ source "$WIGGUM_HOME/lib/task-parser.sh"
 main() {
     log "Worker starting: $WORKER_ID for task $TASK_ID"
 
+    # Track if shutdown was requested
+    local worker_interrupted=false
+
+    # Setup signal handlers for graceful shutdown
+    handle_worker_shutdown() {
+        log "Worker $WORKER_ID received shutdown signal"
+        worker_interrupted=true
+        # The signal will propagate to child processes (ralph_loop)
+    }
+    trap handle_worker_shutdown INT TERM
+
     # Log worker start to audit log
     audit_log_worker_start "$TASK_ID" "$WORKER_ID"
 
@@ -37,9 +48,17 @@ main() {
         "$WORKER_DIR/workspace" \
         "$MAX_ITERATIONS" \
         "$MAX_TURNS_PER_SESSION"; then
-        log "Worker $WORKER_ID completed successfully"
+        if [ "$worker_interrupted" = true ]; then
+            log "Worker $WORKER_ID interrupted by signal"
+        else
+            log "Worker $WORKER_ID completed successfully"
+        fi
     else
-        log_error "Worker $WORKER_ID failed or timed out"
+        if [ "$worker_interrupted" = true ]; then
+            log "Worker $WORKER_ID interrupted by signal"
+        else
+            log_error "Worker $WORKER_ID failed or timed out"
+        fi
     fi
 
     cleanup_worker
