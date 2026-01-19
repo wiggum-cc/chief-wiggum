@@ -77,15 +77,15 @@ ralph_loop() {
 
         local sys_prompt="WORKSPACE BOUNDARY ENFORCEMENT:
 
-Your working directory is: $workspace
+Your allowed workspace is: $workspace and $prd_relative
 
 CRITICAL SECURITY RULE: You MUST NOT directly or indirectly:
-- cd into, read, or modify files outside this directory
-- Use relative paths that escape this directory (e.g., ../../)
-- Follow symlinks that point outside this directory
-- Execute commands that affect files outside this directory
+- cd into, read, or modify files outside this workspace
+- Use relative paths that escape this workspace (e.g., ../../)
+- Follow symlinks that point outside this workspace
+- Execute commands that affect files outside this workspace
 
-All file operations must remain within the workspace boundary. Violations will be logged and blocked by system hooks."
+All file operations must remain within the workspace boundary. Violations will cause validation to fail."
 
         local user_prompt="TASK EXECUTION PROTOCOL:
 
