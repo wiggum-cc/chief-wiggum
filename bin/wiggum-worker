@@ -186,7 +186,10 @@ resume_from_validation() {
     echo "$$" > "$worker_dir/worker.pid"
 
     # Cleanup PID on exit (success or failure)
-    trap 'rm -f "$worker_dir/worker.pid"' EXIT
+    trap "rm -f '$worker_dir/worker.pid'" EXIT
+
+    # Mark task as in-progress before running validation
+    update_kanban_status "$PROJECT_DIR/.ralph/kanban.md" "$task_id" "="
 
     # Run validation review using shared library
     run_validation_review "$worker_dir" 50
@@ -196,6 +199,8 @@ resume_from_validation() {
         local result
         result=$(cat "$worker_dir/validation-result.txt" 2>/dev/null || echo "UNKNOWN")
         echo "Validation $result - cannot proceed with commit/PR"
+        # Mark task as failed in kanban
+        update_kanban_failed "$PROJECT_DIR/.ralph/kanban.md" "$task_id"
         return 1
     fi
 
@@ -213,6 +218,7 @@ resume_from_validation() {
         return 0
     else
         echo "Failed to create commit/PR"
+        update_kanban_failed "$PROJECT_DIR/.ralph/kanban.md" "$task_id"
         return 1
     fi
 }
