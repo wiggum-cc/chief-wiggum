@@ -26,10 +26,14 @@ show_help() {
 wiggum worker - Manage individual workers
 
 Usage:
-  wiggum worker <id> stop       Gracefully stop a worker (SIGTERM)
-  wiggum worker <id> kill       Immediately terminate a worker (SIGKILL)
-  wiggum worker <id> resume     Resume a previously stopped worker
-  wiggum worker start <TASK-ID> Start a new worker for a task
+  wiggum worker <id> stop         Gracefully stop a worker (SIGTERM)
+  wiggum worker <id> kill         Immediately terminate a worker (SIGKILL)
+  wiggum worker <id> resume [-f]  Resume a previously stopped worker
+  wiggum worker start <TASK-ID>   Start a new worker for a task
+
+Resume Options:
+  -f    Force resume, clearing any workspace violation status.
+        Use this after manually resolving violations.
 
 Worker ID Resolution:
   Worker IDs can be partial as long as they match exactly one worker:
@@ -39,9 +43,10 @@ Worker ID Resolution:
   - worker-TASK-030-1891712  (full ID)
 
 Examples:
-  wiggum worker TASK-030 stop     # Stop worker for TASK-030
-  wiggum worker 1891712 resume    # Resume worker by timestamp
-  wiggum worker start TASK-040    # Start new worker for TASK-040
+  wiggum worker TASK-030 stop       # Stop worker for TASK-030
+  wiggum worker 1891712 resume      # Resume worker by timestamp
+  wiggum worker TASK-030 resume -f  # Force resume after fixing violations
+  wiggum worker start TASK-040      # Start new worker for TASK-040
 
 EOF
 }
@@ -239,9 +244,253 @@ prepare_resume_context() {
     fi
 }
 
+# Resume from validation phase (summary.txt exists, work is complete)
+# Runs validation review, then commits and creates PR if passed
+resume_from_validation() {
+    local worker_dir="$1"
+    local task_id="$2"
+    local worker_id
+    worker_id=$(basename "$worker_dir")
+
+    # Source worker dependencies
+    source "$WIGGUM_HOME/lib/run-agent-once.sh"
+    source "$WIGGUM_HOME/lib/calculate-cost.sh"
+    source "$WIGGUM_HOME/lib/task-parser.sh"
+
+    echo "Running validation review..."
+
+    local review_system_prompt="VALIDATION REVIEWER ROLE:
+
+You are a code reviewer and validation agent. Your job is to review completed work
+and verify it meets the requirements specified in the PRD.
+
+WORKSPACE: $worker_dir/workspace
+
+You have READ-ONLY intent - focus on reviewing and validating, not making changes.
+If you find issues, document them clearly but do not attempt fixes."
+
+    local review_user_prompt="VALIDATION AND REVIEW TASK:
+
+Review the completed work in this workspace against the requirements in @../prd.md.
+
+REVIEW CHECKLIST:
+
+1. **Requirements Verification**
+   - Read the PRD and identify all requirements
+   - For each completed task, verify the implementation meets the stated requirements
+   - Check for any missed requirements or partial implementations
+
+2. **Code Quality Review**
+   - Check for obvious bugs, errors, or anti-patterns
+   - Verify error handling is appropriate
+   - Look for potential security issues (injection, XSS, hardcoded secrets, etc.)
+   - Check for proper input validation at boundaries
+
+3. **Implementation Consistency**
+   - Verify code follows existing project patterns and conventions
+   - Check naming conventions are consistent
+   - Verify file organization matches project structure
+
+4. **Testing Coverage**
+   - Identify what testing was performed (documented in PRD or summaries)
+   - Note any gaps in test coverage
+   - Check if edge cases were considered
+
+DECISION CRITERIA:
+
+- PASS: All requirements met, no critical issues, code is production-ready
+- FAIL: Missing requirements, critical bugs, security vulnerabilities, or broken functionality
+
+OUTPUT FORMAT:
+
+You MUST provide your response in this EXACT structure with both tags:
+
+<review>
+
+## Requirements Check
+
+| Requirement | Status | Notes |
+|-------------|--------|-------|
+| [requirement] | [PASS/FAIL] | [brief note] |
+
+## Issues Found
+
+### Critical (blocks release)
+- [issue description and location]
+
+### Warnings (should fix)
+- [issue description and location]
+
+### Suggestions (optional)
+- [suggestion]
+
+## Security Review
+
+[Any security concerns found, or confirmation that common issues were checked]
+
+## Summary
+
+[Brief overall assessment]
+
+</review>
+
+<result>PASS</result>
+
+OR
+
+<result>FAIL</result>
+
+CRITICAL: The <result> tag MUST contain exactly one word: either PASS or FAIL. No other text.
+This tag is parsed programmatically to determine if the work can proceed to commit/PR creation."
+
+    mkdir -p "$worker_dir/logs"
+    run_agent_once "$worker_dir/workspace" "$review_system_prompt" "$review_user_prompt" "$worker_dir/logs/validation-review.log" 5
+    local validation_exit=$?
+    local validation_result="UNKNOWN"
+
+    # Extract review content between <review> tags
+    if [ -f "$worker_dir/logs/validation-review.log" ]; then
+        if grep -q '<review>' "$worker_dir/logs/validation-review.log"; then
+            sed -n '/<review>/,/<\/review>/p' "$worker_dir/logs/validation-review.log" | sed '1d;$d' > "$worker_dir/validation-review.md"
+            echo "Validation review saved to validation-review.md"
+        fi
+
+        # Extract result tag (PASS or FAIL)
+        validation_result=$(grep -oP '(?<=<result>)(PASS|FAIL)(?=</result>)' "$worker_dir/logs/validation-review.log" | head -1)
+        if [ -z "$validation_result" ]; then
+            validation_result="UNKNOWN"
+        fi
+    fi
+
+    echo "Validation result: $validation_result"
+    echo "$validation_result" > "$worker_dir/validation-result.txt"
+
+    if [ "$validation_result" = "FAIL" ]; then
+        echo "Validation FAILED - cannot proceed with commit/PR"
+        return 1
+    elif [ "$validation_result" = "UNKNOWN" ]; then
+        echo "Validation result UNKNOWN - cannot proceed safely"
+        return 1
+    fi
+
+    # Validation passed - proceed with commit and PR
+    echo "Validation PASSED - creating commit and PR..."
+
+    cd "$worker_dir/workspace" || return 1
+
+    # Get task description from kanban
+    local task_desc
+    task_desc=$(grep "**\[$task_id\]**" "$PROJECT_DIR/.ralph/kanban.md" | sed 's/.*\*\*\[.*\]\*\* //' | head -1)
+
+    # Get task priority
+    local task_priority
+    task_priority=$(grep -A2 "**\[$task_id\]**" "$PROJECT_DIR/.ralph/kanban.md" | grep "Priority:" | sed 's/.*Priority: //')
+
+    # Check if there are changes to commit
+    if git diff --quiet && git diff --cached --quiet && [ -z "$(git ls-files --others --exclude-standard)" ]; then
+        echo "No changes to commit"
+        return 1
+    fi
+
+    # Create branch and commit
+    local timestamp=$(date +%s)
+    local branch_name="task/$task_id-$timestamp"
+
+    if ! git checkout -b "$branch_name" 2>&1; then
+        echo "Error: Failed to create branch $branch_name"
+        return 1
+    fi
+
+    git add -A
+
+    local commit_msg="${task_id}: ${task_desc}
+
+Worker: $worker_id
+Priority: ${task_priority:-MEDIUM}
+Completed by Chief Wiggum autonomous worker.
+
+Co-Authored-By: Chief Wiggum Worker <noreply@chief-wiggum.local>"
+
+    git commit --no-gpg-sign -m "$commit_msg" 2>&1
+    local commit_hash=$(git rev-parse HEAD)
+    echo "Created commit: $commit_hash on branch $branch_name"
+
+    # Push and create PR
+    if git push -u origin "$branch_name" 2>&1; then
+        echo "Pushed branch $branch_name to remote"
+
+        if command -v gh &> /dev/null; then
+            local changes_section
+            changes_section=$(cat "$worker_dir/summary.txt")
+
+            # Calculate metrics
+            calculate_worker_cost "$worker_dir/worker.log" > "$worker_dir/metrics.txt" 2>&1 || true
+
+            local metrics_section=""
+            if [ -f "$worker_dir/metrics.txt" ]; then
+                metrics_section="
+## Metrics
+
+\`\`\`
+$(tail -n +3 "$worker_dir/metrics.txt")
+\`\`\`
+"
+            fi
+
+            local prd_body=""
+            if [ -f "$worker_dir/prd.md" ]; then
+                prd_body=$(cat "$worker_dir/prd.md")
+            fi
+
+            local pr_body="## Summary
+
+$prd_body
+
+## Changes
+
+${changes_section}
+${metrics_section}
+---
+🤖 Generated by [Chief Wiggum](https://github.com/0kenx/chief-wiggum)"
+
+            if gh pr create \
+                --title "$task_id: $task_desc" \
+                --body "$pr_body" \
+                --base main \
+                --head "$branch_name" 2>&1; then
+
+                echo "✓ Created Pull Request for $task_id"
+
+                local pr_url
+                pr_url=$(gh pr view "$branch_name" --json url -q .url)
+                echo "$pr_url" > "$worker_dir/pr_url.txt"
+                echo "PR URL: $pr_url"
+
+                # Update kanban to done
+                source "$WIGGUM_HOME/lib/task-parser.sh"
+                if update_kanban "$PROJECT_DIR/.ralph/kanban.md" "$task_id"; then
+                    echo "Task $task_id marked as complete in kanban"
+                fi
+
+                return 0
+            else
+                echo "Warning: Failed to create PR, but branch is pushed"
+                return 1
+            fi
+        else
+            echo "gh CLI not found, skipping PR creation. Branch pushed: $branch_name"
+            return 1
+        fi
+    else
+        echo "Failed to push branch"
+        return 1
+    fi
+}
+
 # Resume a stopped worker
 cmd_resume() {
     local worker_dir="$1"
+    local force_mode="${2:-false}"
     local worker_id
     worker_id=$(basename "$worker_dir")
     local task_id
@@ -257,6 +506,35 @@ cmd_resume() {
         fi
     fi
 
+    # Check for workspace violations
+    if [ -f "$worker_dir/violation_status.txt" ]; then
+        local violation_status
+        violation_status=$(cat "$worker_dir/violation_status.txt" 2>/dev/null)
+        if [ "$violation_status" = "WORKSPACE_VIOLATION" ]; then
+            if [ "$force_mode" = "true" ]; then
+                echo "Warning: Clearing workspace violation status (forced)"
+                rm -f "$worker_dir/violation_status.txt"
+            else
+                echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                echo "⚠️  WORKSPACE VIOLATION DETECTED"
+                echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                echo ""
+                echo "This worker was previously stopped due to a workspace violation."
+                echo "Files were modified outside the worker's isolated workspace."
+                echo ""
+                echo "Before resuming, you should:"
+                echo "  1. Review the violation log: $RALPH_DIR/logs/violations.log"
+                echo "  2. Ensure no uncommitted changes exist in the main repo"
+                echo "  3. Manually inspect $worker_dir/workspace for issues"
+                echo ""
+                echo "To force resume (clears violation status):"
+                echo "  wiggum worker $worker_id resume -f"
+                echo ""
+                exit 1
+            fi
+        fi
+    fi
+
     # Check PRD exists
     if [ ! -f "$worker_dir/prd.md" ]; then
         echo "Error: PRD not found at $worker_dir/prd.md"
@@ -268,6 +546,13 @@ cmd_resume() {
         echo "Error: Workspace not found at $worker_dir/workspace"
         echo "The worktree may have been cleaned up."
         exit 1
+    fi
+
+    # Check if summary.txt exists - work is complete, run validation/finalize
+    if [ -f "$worker_dir/summary.txt" ]; then
+        echo "Summary found - work is complete, running validation and finalization..."
+        resume_from_validation "$worker_dir" "$task_id"
+        return $?
     fi
 
     # Determine resume iteration
@@ -419,7 +704,12 @@ main() {
                     cmd_kill "$worker_dir"
                     ;;
                 resume)
-                    cmd_resume "$worker_dir"
+                    # Check for -f flag
+                    local force_mode="false"
+                    if [ "${3:-}" = "-f" ]; then
+                        force_mode="true"
+                    fi
+                    cmd_resume "$worker_dir" "$force_mode"
                     ;;
                 *)
                     echo "Error: Unknown action '$action'"
