@@ -72,12 +72,6 @@ class ConversationPanel(Widget):
         layout: vertical;
     }
 
-    ConversationPanel .conv-header {
-        height: 1;
-        background: #1e293b;
-        padding: 0 1;
-    }
-
     ConversationPanel .conv-controls {
         height: 3;
         background: #1e293b;
@@ -85,7 +79,8 @@ class ConversationPanel(Widget):
     }
 
     ConversationPanel Select {
-        width: 40;
+        width: 30;
+        margin-top: -1;
     }
 
     ConversationPanel Tree {
@@ -129,12 +124,6 @@ class ConversationPanel(Widget):
     def compose(self) -> ComposeResult:
         self._load_workers()
 
-        yield Static(
-            "[bold]Conversation[/] │ Select a worker to view chat history",
-            classes="conv-header",
-            id="conv-header",
-        )
-
         with Horizontal(classes="conv-controls"):
             yield Select(
                 [(label, worker_id) for worker_id, label in self._workers_list],
@@ -176,7 +165,6 @@ class ConversationPanel(Widget):
         worker_dir = self.ralph_dir / "workers" / worker_id
         self.conversation = parse_iteration_logs(worker_dir)
         self._populate_tree()
-        self._update_header()
 
     def _populate_tree(self) -> None:
         """Populate the tree with conversation turns."""
@@ -195,6 +183,12 @@ class ConversationPanel(Widget):
                 f"{summary['tool_calls']} tool calls │ "
                 f"${summary['cost_usd']:.2f}"
             )
+
+            # Add initial prompt if available
+            if self.conversation.user_prompt:
+                prompt_node = tree.root.add("[#f59e0b]Initial Prompt[/]", expand=False)
+                for line in format_content(self.conversation.user_prompt, 100):
+                    prompt_node.add_leaf(f"[#94a3b8]{line}[/]")
 
             # Group turns by iteration
             current_iteration = -1
@@ -441,21 +435,6 @@ class ConversationPanel(Widget):
         elif isinstance(result, str):
             for line in format_content(result, 100):
                 result_node.add_leaf(f"[#94a3b8]{line}[/]")
-
-    def _update_header(self) -> None:
-        """Update header with current worker info."""
-        try:
-            header = self.query_one("#conv-header", Static)
-            if self.conversation:
-                summary = get_conversation_summary(self.conversation)
-                header.update(
-                    f"[bold]Conversation[/] │ {self.current_worker} │ "
-                    f"{summary['turns']} turns │ ${summary['cost_usd']:.2f}"
-                )
-            else:
-                header.update("[bold]Conversation[/] │ Select a worker")
-        except Exception:
-            pass
 
     def on_select_changed(self, event: Select.Changed) -> None:
         """Handle worker selection change."""
