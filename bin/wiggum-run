@@ -78,9 +78,9 @@ spawn_worker() {
             # Process not running, safe to clean up stale directory
             log "Cleaning up stale worker directory for $task_id: $(basename "$existing_dir")"
             rm -rf "$existing_dir"
-            # Retry spawning
+            # Retry spawning - reset exit code first
+            start_exit_code=0
             start_output=$("$WIGGUM_HOME/bin/wiggum-start" "$task_id" 2>&1) || start_exit_code=$?
-            start_exit_code=${start_exit_code:-0}
         fi
     fi
 
