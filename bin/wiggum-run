@@ -91,13 +91,13 @@ spawn_worker() {
 
     SPAWNED_WORKER_ID=$(basename "$worker_dir")
 
-    # Wait for worker.pid to appear (using shared library)
+    # Wait for agent.pid to appear (using shared library)
     if ! wait_for_worker_pid "$worker_dir" 30; then
-        log_error "Worker PID file not created for $task_id"
+        log_error "Agent PID file not created for $task_id"
         return 1
     fi
 
-    SPAWNED_WORKER_PID=$(cat "$worker_dir/worker.pid")
+    SPAWNED_WORKER_PID=$(cat "$worker_dir/agent.pid")
 }
 
 main() {

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# run-agent-resume.sh - Resume a Claude session for follow-up prompts
+# run-claude-resume.sh - Resume a Claude session for follow-up prompts
 #
 # Used for generating summaries or continuing a conversation after
 # the main work loop completes. This is a primitive that agents can use.

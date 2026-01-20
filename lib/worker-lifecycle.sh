@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
-# worker-lifecycle.sh - Worker discovery and PID management
+# worker-lifecycle.sh - Agent/worker discovery and PID management
 #
-# Provides functions for finding workers, validating PIDs, and managing
-# worker lifecycle. Used by wiggum-run, wiggum-start, wiggum-stop, etc.
+# Provides functions for finding workers/agents, validating PIDs, and managing
+# lifecycle. Used by wiggum-run, wiggum-start, wiggum-stop, etc.
+#
+# Note: All agents use agent.pid for their PID file. Process validation uses
+# the "bash" pattern since agents run via run_agent() in subshells.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/logger.sh"
@@ -80,7 +83,7 @@ resolve_worker_id() {
 # Exit: 0 if valid and running, 1 otherwise
 get_valid_worker_pid() {
     local pid_file="$1"
-    local process_pattern="${2:-lib/worker.sh}"
+    local process_pattern="${2:-bash}"
 
     if [ ! -f "$pid_file" ]; then
         return 1
@@ -99,7 +102,7 @@ get_valid_worker_pid() {
         return 1
     fi
 
-    # Verify it's the expected process type
+    # Verify it's the expected process type (bash for agent subshells)
     if [ -n "$process_pattern" ]; then
         if ! ps -p "$pid" -o args= 2>/dev/null | grep -q "$process_pattern"; then
             return 1
@@ -115,9 +118,9 @@ get_valid_worker_pid() {
 # Returns: 0 if running, 1 if not
 is_worker_running() {
     local worker_dir="$1"
-    local pid_file="$worker_dir/worker.pid"
+    local pid_file="$worker_dir/agent.pid"
 
-    get_valid_worker_pid "$pid_file" "lib/worker.sh" > /dev/null 2>&1
+    get_valid_worker_pid "$pid_file" "bash" > /dev/null 2>&1
 }
 
 # Get worker PID or return error
@@ -126,10 +129,10 @@ is_worker_running() {
 # Exit: 0 if found and valid, 1 otherwise
 get_worker_pid() {
     local worker_dir="$1"
-    local pid_file="$worker_dir/worker.pid"
+    local pid_file="$worker_dir/agent.pid"
 
     if [ ! -f "$pid_file" ]; then
-        echo "Error: No PID file found for worker (not running?)" >&2
+        echo "Error: No PID file found for agent (not running?)" >&2
         return 1
     fi
 
@@ -138,21 +141,21 @@ get_worker_pid() {
 
     # Validate PID is a number
     if ! [[ "$pid" =~ ^[0-9]+$ ]]; then
-        echo "Error: Invalid PID in worker.pid file" >&2
+        echo "Error: Invalid PID in agent.pid file" >&2
         return 1
     fi
 
-    # Check if process is running AND is a worker process
+    # Check if process is running AND is a bash process (agent subshell)
     if kill -0 "$pid" 2>/dev/null; then
-        if ps -p "$pid" -o args= 2>/dev/null | grep -q "lib/worker.sh"; then
+        if ps -p "$pid" -o args= 2>/dev/null | grep -q "bash"; then
             echo "$pid"
             return 0
         else
-            echo "Error: PID $pid exists but is not a worker process (PID reused?)" >&2
+            echo "Error: PID $pid exists but is not an agent process (PID reused?)" >&2
             return 1
         fi
     else
-        echo "Error: Worker process $pid is not running" >&2
+        echo "Error: Agent process $pid is not running" >&2
         return 1
     fi
 }
@@ -197,7 +200,7 @@ scan_active_workers() {
     for worker_dir in "$ralph_dir/workers"/worker-*; do
         [ -d "$worker_dir" ] || continue
 
-        local pid_file="$worker_dir/worker.pid"
+        local pid_file="$worker_dir/agent.pid"
         [ -f "$pid_file" ] || continue
 
         local worker_id
@@ -206,7 +209,7 @@ scan_active_workers() {
         task_id=$(get_task_id_from_worker "$worker_id")
 
         local pid
-        pid=$(get_valid_worker_pid "$pid_file" "lib/worker.sh")
+        pid=$(get_valid_worker_pid "$pid_file" "bash")
         if [ -n "$pid" ]; then
             echo "$pid $task_id $worker_id"
         else
@@ -224,10 +227,10 @@ wait_for_worker_pid() {
     local timeout="${2:-30}"  # Default 3 seconds (30 * 0.1s)
 
     local wait_count=0
-    while [ ! -f "$worker_dir/worker.pid" ] && [ $wait_count -lt $timeout ]; do
+    while [ ! -f "$worker_dir/agent.pid" ] && [ $wait_count -lt $timeout ]; do
         sleep 0.1
         ((wait_count++))
     done
 
-    [ -f "$worker_dir/worker.pid" ]
+    [ -f "$worker_dir/agent.pid" ]
 }

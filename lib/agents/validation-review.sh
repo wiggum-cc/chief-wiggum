@@ -9,7 +9,7 @@
 AGENT_TYPE="validation-review"
 
 # Source dependencies
-source "$WIGGUM_HOME/lib/run-agent-once.sh"
+source "$WIGGUM_HOME/lib/run-claude-once.sh"
 source "$WIGGUM_HOME/lib/logger.sh"
 
 # Required paths before agent can run

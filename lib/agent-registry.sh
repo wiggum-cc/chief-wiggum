@@ -6,12 +6,22 @@
 #   - agent_required_paths()  - List of paths that must exist before running
 #   - agent_run()             - Main entry point
 #   - agent_cleanup()         - Optional cleanup after completion
+#
+# Two invocation modes:
+#   - run_agent()     - Full lifecycle (PID, signals, violation monitor) for top-level agents
+#   - run_sub_agent() - Execution only, for nested agents (no lifecycle management)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/logger.sh"
+source "$SCRIPT_DIR/agent-runner.sh"
 
 # Track currently loaded agent to prevent re-sourcing
 _LOADED_AGENT=""
+
+# Global state for agent lifecycle
+_AGENT_REGISTRY_IS_TOP_LEVEL=false
+_AGENT_REGISTRY_PROJECT_DIR=""
+_AGENT_REGISTRY_WORKER_DIR=""
 
 # Load an agent by type
 #
@@ -81,22 +91,43 @@ validate_agent_prerequisites() {
     return $missing
 }
 
-# Run an agent with validation
+# Run a top-level agent with full lifecycle management
+#
+# This is for top-level agents that need:
+# - PID file recording
+# - Signal handlers for graceful shutdown
+# - Violation monitoring
 #
 # Args:
-#   agent_type  - The agent type to run
-#   worker_dir  - Worker directory
-#   project_dir - Project root directory
-#   ...         - Additional args passed to agent_run
+#   agent_type       - The agent type to run
+#   worker_dir       - Worker directory
+#   project_dir      - Project root directory
+#   monitor_interval - Violation monitor interval in seconds (default: 30, 0 to disable)
+#   ...              - Additional args passed to agent_run
 #
 # Returns: Exit code from agent_run
 run_agent() {
     local agent_type="$1"
     local worker_dir="$2"
     local project_dir="$3"
-    shift 3
+    local monitor_interval="${4:-30}"
+    shift 4 2>/dev/null || shift 3
 
-    log "Running agent: $agent_type"
+    log "Running top-level agent: $agent_type"
+
+    # Store globals for sub-agents to inherit
+    _AGENT_REGISTRY_IS_TOP_LEVEL=true
+    _AGENT_REGISTRY_PROJECT_DIR="$project_dir"
+    _AGENT_REGISTRY_WORKER_DIR="$worker_dir"
+
+    # Initialize agent lifecycle (PID, signals, violation monitor)
+    if ! agent_runner_init "$worker_dir" "$project_dir" "$monitor_interval"; then
+        log_error "Failed to initialize agent lifecycle"
+        return 1
+    fi
+
+    # Setup cleanup on exit
+    trap '_agent_registry_cleanup' EXIT
 
     # Load agent
     if ! load_agent "$agent_type"; then
@@ -113,13 +144,77 @@ run_agent() {
     agent_run "$worker_dir" "$project_dir" "$@"
     local exit_code=$?
 
-    # Call cleanup if defined
+    # Call agent-specific cleanup if defined
     if type agent_cleanup &>/dev/null; then
         log_debug "Running agent cleanup"
         agent_cleanup "$worker_dir" "$exit_code"
     fi
 
     log "Agent $agent_type completed with exit code: $exit_code"
+    return $exit_code
+}
+
+# Internal cleanup function called on exit
+_agent_registry_cleanup() {
+    if [ "$_AGENT_REGISTRY_IS_TOP_LEVEL" = true ]; then
+        agent_runner_cleanup
+        _AGENT_REGISTRY_IS_TOP_LEVEL=false
+        _AGENT_REGISTRY_PROJECT_DIR=""
+        _AGENT_REGISTRY_WORKER_DIR=""
+    fi
+}
+
+# Run a nested sub-agent without lifecycle management
+#
+# This is for agents that are spawned by other agents (nested execution).
+# Sub-agents inherit the lifecycle from their parent:
+# - No PID file (parent owns the PID)
+# - No signal handlers (signals propagate naturally)
+# - No violation monitor (parent's monitor covers the workspace)
+#
+# Args:
+#   agent_type  - The agent type to run
+#   worker_dir  - Worker directory (optional, inherits from parent if not specified)
+#   project_dir - Project root directory (optional, inherits from parent if not specified)
+#   ...         - Additional args passed to agent_run
+#
+# Returns: Exit code from agent_run
+run_sub_agent() {
+    local agent_type="$1"
+    local worker_dir="${2:-$_AGENT_REGISTRY_WORKER_DIR}"
+    local project_dir="${3:-$_AGENT_REGISTRY_PROJECT_DIR}"
+    shift 3 2>/dev/null || shift 1
+
+    log "Running sub-agent: $agent_type"
+
+    # Validate we have required directories
+    if [ -z "$worker_dir" ] || [ -z "$project_dir" ]; then
+        log_error "run_sub_agent: worker_dir and project_dir required (not inherited from parent)"
+        return 1
+    fi
+
+    # Load agent
+    if ! load_agent "$agent_type"; then
+        return 1
+    fi
+
+    # Validate prerequisites
+    if ! validate_agent_prerequisites "$worker_dir"; then
+        log_error "Agent prerequisites not met"
+        return 1
+    fi
+
+    # Run the agent (no lifecycle management)
+    agent_run "$worker_dir" "$project_dir" "$@"
+    local exit_code=$?
+
+    # Call agent-specific cleanup if defined
+    if type agent_cleanup &>/dev/null; then
+        log_debug "Running agent cleanup"
+        agent_cleanup "$worker_dir" "$exit_code"
+    fi
+
+    log "Sub-agent $agent_type completed with exit code: $exit_code"
     return $exit_code
 }
 

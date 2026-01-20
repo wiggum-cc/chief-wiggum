@@ -15,6 +15,7 @@ source "$WIGGUM_HOME/lib/logger.sh"
 source "$WIGGUM_HOME/lib/task-parser.sh"
 source "$WIGGUM_HOME/lib/audit-logger.sh"
 source "$WIGGUM_HOME/lib/worker-lifecycle.sh"
+source "$WIGGUM_HOME/lib/agent-registry.sh"
 
 # Default configuration (can be overridden by env vars)
 MAX_ITERATIONS="${WIGGUM_MAX_ITERATIONS:-20}"
@@ -98,26 +99,28 @@ do_start() {
 
     echo "Starting worker $worker_id for task $task_id"
 
-    # Launch worker in background
-    # Worker writes its own PID to worker.pid - orchestrator can poll for it
+    # Launch task-worker agent in background
+    # run_agent writes PID to agent.pid - orchestrator can poll for it
     export WORKER_ID="$worker_id"
     export TASK_ID="$task_id"
     export WIGGUM_HOME
     export WIGGUM_MAX_ITERATIONS="$MAX_ITERATIONS"
     export WIGGUM_MAX_TURNS="$MAX_TURNS"
 
-    bash "$WIGGUM_HOME/lib/worker.sh" "$worker_dir" "$PROJECT_DIR" \
-        >> "$RALPH_DIR/logs/workers.log" 2>&1 &
+    (
+        # Run agent in subshell to isolate it
+        run_agent "task-worker" "$worker_dir" "$PROJECT_DIR"
+    ) >> "$RALPH_DIR/logs/workers.log" 2>&1 &
 
-    # Wait briefly for worker.pid to be created
+    # Wait briefly for agent.pid to be created
     local wait_count=0
-    while [ ! -f "$worker_dir/worker.pid" ] && [ $wait_count -lt 10 ]; do
+    while [ ! -f "$worker_dir/agent.pid" ] && [ $wait_count -lt 10 ]; do
         sleep 0.1
         ((wait_count++))
     done
 
-    if [ -f "$worker_dir/worker.pid" ]; then
-        local worker_pid=$(cat "$worker_dir/worker.pid")
+    if [ -f "$worker_dir/agent.pid" ]; then
+        local worker_pid=$(cat "$worker_dir/agent.pid")
         echo "Worker running (PID: $worker_pid)"
     else
         echo "Worker started (PID file pending)"

@@ -2,26 +2,43 @@
 # task-worker.sh - Main task execution agent
 #
 # Self-contained agent for executing tasks from a PRD.
-# Uses ralph loop pattern with violation monitoring.
+# Manages the complete task lifecycle:
+# - Git worktree setup
+# - PRD task execution via ralph loop
+# - Validation review (nested sub-agent)
+# - Commit and PR creation
+# - Kanban status updates
+# - Worktree cleanup
 #
-# Required paths: prd.md, workspace
+# Required paths: prd.md
+# Note: workspace is created by this agent, not required in advance
 
 AGENT_TYPE="task-worker"
 
 # Source dependencies
-source "$WIGGUM_HOME/lib/run-agent-ralph-loop.sh"
-source "$WIGGUM_HOME/lib/run-agent-resume.sh"
+source "$WIGGUM_HOME/lib/run-claude-ralph-loop.sh"
+source "$WIGGUM_HOME/lib/run-claude-resume.sh"
 source "$WIGGUM_HOME/lib/violation-monitor.sh"
 source "$WIGGUM_HOME/lib/task-parser.sh"
 source "$WIGGUM_HOME/lib/logger.sh"
+source "$WIGGUM_HOME/lib/worktree-helpers.sh"
+source "$WIGGUM_HOME/lib/git-operations.sh"
+source "$WIGGUM_HOME/lib/file-lock.sh"
+source "$WIGGUM_HOME/lib/audit-logger.sh"
+source "$WIGGUM_HOME/lib/metrics-export.sh"
+source "$WIGGUM_HOME/lib/agent-registry.sh"
+
+# Save references to sourced kanban functions before defining wrappers
+eval "_kanban_mark_done() $(declare -f update_kanban | sed '1d')"
+eval "_kanban_mark_failed() $(declare -f update_kanban_failed | sed '1d')"
 
 # Required paths before agent can run
 agent_required_paths() {
     echo "prd.md"
-    echo "workspace"
+    # Note: workspace is created by this agent, not required in advance
 }
 
-# Main entry point
+# Main entry point - manages complete task lifecycle
 agent_run() {
     local worker_dir="$1"
     local project_dir="$2"
@@ -32,28 +49,51 @@ agent_run() {
     local resume_iteration="${WIGGUM_RESUME_ITERATION:-0}"
     local resume_context="${WIGGUM_RESUME_CONTEXT:-}"
 
-    local workspace="$worker_dir/workspace"
+    # Extract worker and task IDs
+    local worker_id=$(basename "$worker_dir")
+    local task_id=$(echo "$worker_id" | sed -E 's/worker-(TASK-[0-9]+)-.*/\1/')
+
+    # Setup environment
+    export WORKER_ID="$worker_id"
+    export TASK_ID="$task_id"
+    export LOG_FILE="$worker_dir/worker.log"
+    export WIGGUM_HOME
+
     local prd_file="$worker_dir/prd.md"
 
     # Record start time
     local start_time=$(date +%s)
-    echo "[$(date -Iseconds)] AGENT_STARTED agent=task-worker start_time=$start_time" >> "$worker_dir/worker.log"
+    echo "[$(date -Iseconds)] AGENT_STARTED agent=task-worker worker_id=$worker_id task_id=$task_id start_time=$start_time" >> "$worker_dir/worker.log"
 
-    log "Task worker agent starting for $prd_file (max $max_turns turns per session)"
+    log "Task worker agent starting for $task_id (max $max_turns turns per session)"
+
+    # Log worker start to audit log
+    audit_log_worker_start "$task_id" "$worker_id"
+
+    # === SETUP PHASE ===
+    # Create git worktree for isolation
+    if ! setup_worktree "$project_dir" "$worker_dir"; then
+        log_error "Failed to setup worktree"
+        _task_worker_cleanup "$worker_dir" "$project_dir" "$task_id" "FAILED" "" "N/A"
+        return 1
+    fi
+    local workspace="$WORKTREE_PATH"
 
     # Start violation monitoring
     start_violation_monitor "$project_dir" "$worker_dir" 30
-    trap '_stop_and_cleanup' EXIT
+    trap '_task_worker_stop_monitor' EXIT
 
     # Change to workspace
     cd "$workspace" || {
         log_error "Cannot access workspace: $workspace"
+        _task_worker_cleanup "$worker_dir" "$project_dir" "$task_id" "FAILED" "" "N/A"
         return 1
     }
 
     # Create logs subdirectory
     mkdir -p "$worker_dir/logs"
 
+    # === EXECUTION PHASE ===
     # Set up callback context
     _TASK_WORKER_DIR="$worker_dir"
     _TASK_WORKSPACE="$workspace"
@@ -86,17 +126,193 @@ agent_run() {
         fi
     fi
 
+    # Stop violation monitor before validation
+    stop_violation_monitor "$VIOLATION_MONITOR_PID"
+
+    # === VALIDATION PHASE ===
+    # Run validation-review as a nested sub-agent
+    if [ -d "$workspace" ]; then
+        log "Running validation review on completed work"
+        run_sub_agent "validation-review" "$worker_dir" "$project_dir" 5
+    fi
+
+    # === FINALIZATION PHASE ===
+    _determine_finality "$worker_dir" "$workspace" "$project_dir" "$prd_file"
+    local has_violations="$FINALITY_HAS_VIOLATIONS"
+    local final_status="$FINALITY_STATUS"
+
+    # Check validation result - override final_status if validation failed
+    if [ -f "$worker_dir/validation-result.txt" ]; then
+        local validation_result=$(cat "$worker_dir/validation-result.txt")
+        if [ "$validation_result" = "FAIL" ]; then
+            log_error "Validation review FAILED - marking task as failed"
+            final_status="FAILED"
+        elif [ "$validation_result" = "UNKNOWN" ]; then
+            log_error "Validation result UNKNOWN - cannot proceed safely"
+            log_error "Worker exiting without commit/PR or status update"
+            return 1
+        fi
+    fi
+
+    local pr_url="N/A"
+    local task_desc=""
+
+    # Only create commits and PRs if no violations and task is complete
+    if [ "$has_violations" = false ] && [ "$final_status" = "COMPLETE" ]; then
+        if [ -d "$workspace" ]; then
+            cd "$workspace" || return 1
+
+            # Get task description from kanban for commit message
+            task_desc=$(grep "**\[$task_id\]**" "$project_dir/.ralph/kanban.md" | sed 's/.*\*\*\[.*\]\*\* //' | head -1)
+
+            # Get task priority
+            local task_priority=$(grep -A2 "**\[$task_id\]**" "$project_dir/.ralph/kanban.md" | grep "Priority:" | sed 's/.*Priority: //')
+
+            # Create commit using shared library
+            if git_create_commit "$workspace" "$task_id" "$task_desc" "$task_priority" "$worker_id"; then
+                local branch_name="$GIT_COMMIT_BRANCH"
+
+                # Create PR using shared library
+                git_create_pr "$branch_name" "$task_id" "$task_desc" "$worker_dir" "$project_dir"
+                pr_url="$GIT_PR_URL"
+            else
+                final_status="FAILED"
+            fi
+        fi
+    else
+        log "Skipping commit and PR creation - task status: $final_status"
+    fi
+
+    # === CLEANUP PHASE ===
+    _task_worker_cleanup "$worker_dir" "$project_dir" "$task_id" "$final_status" "$task_desc" "$pr_url"
+
     # Record end time
     local end_time=$(date +%s)
     local duration=$((end_time - start_time))
     echo "[$(date -Iseconds)] AGENT_COMPLETED agent=task-worker duration_sec=$duration exit_code=$loop_result" >> "$worker_dir/worker.log"
 
+    log "Task worker finished: $worker_id"
     return $loop_result
 }
 
-# Internal cleanup function
-_stop_and_cleanup() {
-    stop_violation_monitor "$VIOLATION_MONITOR_PID"
+# Internal cleanup function for violation monitor
+_task_worker_stop_monitor() {
+    stop_violation_monitor "$VIOLATION_MONITOR_PID" 2>/dev/null || true
+}
+
+# Determine final task status
+_determine_finality() {
+    local worker_dir="$1"
+    local workspace="$2"
+    local project_dir="$3"
+    local prd_file="$4"
+
+    local has_violations=false
+    local final_status="COMPLETE"
+
+    # Check for workspace violations before processing results
+    if ! agent_runner_detect_violations "$workspace" "$project_dir"; then
+        log_error "Workspace violation detected - changes outside workspace were reverted"
+        echo "WORKSPACE_VIOLATION" > "$worker_dir/violation_status.txt"
+        has_violations=true
+        final_status="FAILED"
+    fi
+
+    # Check PRD status
+    local prd_status=$(get_prd_status "$prd_file")
+    log "PRD status: $prd_status"
+
+    # Determine final task status
+    if [ "$has_violations" = true ]; then
+        final_status="FAILED"
+        log_error "Task marked as FAILED due to workspace violations"
+    elif [ "$prd_status" = "FAILED" ]; then
+        final_status="FAILED"
+        log_error "Task marked as FAILED - PRD contains failed tasks"
+    elif [ "$prd_status" = "INCOMPLETE" ]; then
+        final_status="FAILED"
+        log_error "Task marked as FAILED - PRD has incomplete tasks (timeout or error)"
+    else
+        final_status="COMPLETE"
+        log "Task completed successfully - all PRD tasks complete"
+    fi
+
+    # Return values via global variables (bash limitation)
+    FINALITY_HAS_VIOLATIONS="$has_violations"
+    FINALITY_STATUS="$final_status"
+}
+
+# Full cleanup including kanban update
+_task_worker_cleanup() {
+    local worker_dir="$1"
+    local project_dir="$2"
+    local task_id="$3"
+    local final_status="$4"
+    local task_desc="$5"
+    local pr_url="$6"
+
+    log "Cleaning up task worker"
+
+    # Log cleanup start to audit log
+    audit_log_worker_cleanup "$task_id" "$(basename "$worker_dir")"
+
+    # Clean up git worktree
+    cleanup_worktree "$project_dir" "$worker_dir" "$final_status" "$task_id"
+
+    # Update kanban and finalize
+    _update_kanban_status "$worker_dir" "$project_dir" "$task_id" "$final_status" "$task_desc" "$pr_url"
+}
+
+# Update kanban based on final status
+_update_kanban_status() {
+    local worker_dir="$1"
+    local project_dir="$2"
+    local task_id="$3"
+    local final_status="$4"
+    local task_desc="$5"
+    local pr_url="$6"
+
+    local worker_id=$(basename "$worker_dir")
+
+    if [ "$final_status" = "COMPLETE" ]; then
+        log "Marking task $task_id as complete in kanban"
+        if ! _kanban_mark_done "$project_dir/.ralph/kanban.md" "$task_id"; then
+            log_error "Failed to update kanban.md after retries"
+        fi
+
+        # Append to changelog only on success
+        log "Appending to changelog"
+        # Get PR URL if it exists
+        if [ -f "$worker_dir/pr_url.txt" ]; then
+            pr_url=$(cat "$worker_dir/pr_url.txt")
+        fi
+
+        # Get detailed summary if it exists
+        local summary=""
+        if [ -f "$worker_dir/summary.txt" ]; then
+            summary=$(cat "$worker_dir/summary.txt")
+            log "Including detailed summary in changelog"
+        fi
+
+        if ! append_changelog "$project_dir/.ralph/changelog.md" "$task_id" "$worker_id" "$task_desc" "$pr_url" "$summary"; then
+            log_error "Failed to update changelog.md after retries"
+        fi
+
+        log "Task worker $worker_id completed task $task_id"
+    else
+        log_error "Marking task $task_id as FAILED in kanban"
+        if ! _kanban_mark_failed "$project_dir/.ralph/kanban.md" "$task_id"; then
+            log_error "Failed to update kanban.md after retries"
+        fi
+        log_error "Task worker $worker_id failed task $task_id"
+    fi
+
+    # Log final worker status to audit log
+    audit_log_worker_complete "$task_id" "$worker_id" "$final_status"
+
+    # Update metrics.json with latest worker data
+    log_debug "Exporting metrics to metrics.json"
+    export_metrics "$project_dir/.ralph" 2>/dev/null || true
 }
 
 # System prompt - workspace boundary enforcement

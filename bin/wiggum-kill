@@ -63,7 +63,7 @@ kill_single_worker() {
         return 1
     else
         echo "Worker $worker_id killed"
-        rm -f "$worker_dir/worker.pid"
+        rm -f "$worker_dir/agent.pid"
     fi
 }
 
@@ -107,8 +107,8 @@ kill_all_workers() {
             # Find and clean up PID file
             local worker_id="${worker_pids_map[$pid]}"
             local worker_dir="$RALPH_DIR/workers/$worker_id"
-            if [ -f "$worker_dir/worker.pid" ]; then
-                rm -f "$worker_dir/worker.pid"
+            if [ -f "$worker_dir/agent.pid" ]; then
+                rm -f "$worker_dir/agent.pid"
             fi
         fi
     done

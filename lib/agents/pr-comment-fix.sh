@@ -9,7 +9,7 @@
 AGENT_TYPE="pr-comment-fix"
 
 # Source dependencies
-source "$WIGGUM_HOME/lib/run-agent-ralph-loop.sh"
+source "$WIGGUM_HOME/lib/run-claude-ralph-loop.sh"
 source "$WIGGUM_HOME/lib/defaults.sh"
 source "$WIGGUM_HOME/lib/logger.sh"
 

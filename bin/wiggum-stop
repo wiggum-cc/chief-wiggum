@@ -72,7 +72,7 @@ stop_single_worker() {
         return 1
     else
         echo "Worker $worker_id stopped successfully"
-        rm -f "$worker_dir/worker.pid"
+        rm -f "$worker_dir/agent.pid"
     fi
 }
 

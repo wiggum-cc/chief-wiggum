@@ -60,7 +60,7 @@ declare -a worker_names
 # Count total workers with PID files
 for worker_dir in "$RALPH_DIR/workers"/worker-*; do
     [ -d "$worker_dir" ] || continue
-    [ -f "$worker_dir/worker.pid" ] || continue
+    [ -f "$worker_dir/agent.pid" ] || continue
     ((worker_count++))
 done
 

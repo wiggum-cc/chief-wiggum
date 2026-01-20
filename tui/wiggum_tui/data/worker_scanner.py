@@ -32,7 +32,8 @@ def is_worker_process(pid: int) -> bool:
             text=True,
             timeout=5,
         )
-        return "lib/worker.sh" in result.stdout
+        # Agents run in bash subshells via run_agent()
+        return "bash" in result.stdout
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return False
 
@@ -101,7 +102,7 @@ def scan_workers(ralph_dir: Path) -> list[Worker]:
             timestamp = 0
 
         worker_dir = entry
-        pid_path = worker_dir / "worker.pid"
+        pid_path = worker_dir / "agent.pid"
         prd_path = worker_dir / "prd.md"
         log_path = worker_dir / "worker.log"
         workspace_path = worker_dir / "workspace"

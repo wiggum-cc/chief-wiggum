@@ -54,7 +54,8 @@ def verify_worker_process(pid: int) -> bool:
         cmdline_path = Path(f"/proc/{pid}/cmdline")
         if cmdline_path.exists():
             cmdline = cmdline_path.read_text()
-            return "lib/worker.sh" in cmdline
+            # Agents run in bash subshells via run_agent()
+            return "bash" in cmdline
         return False
     except (OSError, PermissionError):
         return False

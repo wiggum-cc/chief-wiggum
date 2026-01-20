@@ -31,7 +31,8 @@ function isProcessRunning(pid: number): boolean {
 function isWorkerProcess(pid: number): boolean {
   try {
     const result = execSync(`ps -p ${pid} -o args=`, { encoding: "utf-8" });
-    return result.includes("lib/worker.sh");
+    // Agents run in bash subshells via run_agent()
+    return result.includes("bash");
   } catch {
     return false;
   }
@@ -80,7 +81,7 @@ export async function scanWorkers(ralphDir: string): Promise<Worker[]> {
       const [, taskId, timestampStr] = match;
       const timestamp = parseInt(timestampStr, 10);
 
-      const pidPath = join(workerDir, "worker.pid");
+      const pidPath = join(workerDir, "agent.pid");
       const prdPath = join(workerDir, "prd.md");
       const logPath = join(workerDir, "worker.log");
       const workspacePath = join(workerDir, "workspace");

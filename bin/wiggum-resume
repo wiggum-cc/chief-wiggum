@@ -121,17 +121,12 @@ resume_from_validation() {
     local worker_dir="$1"
     local task_id="$2"
 
-    # Register as worker with PID (same as worker.sh does)
-    echo "$$" > "$worker_dir/worker.pid"
-
-    # Cleanup PID on exit (success or failure)
-    trap "rm -f '$worker_dir/worker.pid'" EXIT
-
     # Mark task as in-progress before running validation
     update_kanban_status "$PROJECT_DIR/.ralph/kanban.md" "$task_id" "="
 
-    # Run validation-review agent
-    run_agent "validation-review" "$worker_dir" "$PROJECT_DIR" 50
+    # Run validation-review as top-level agent (handles PID internally)
+    # Note: using 0 for monitor_interval since validation is quick and read-only
+    run_agent "validation-review" "$worker_dir" "$PROJECT_DIR" 0 5
 
     # Check validation result
     if ! check_validation_result "$worker_dir"; then
@@ -172,9 +167,9 @@ do_resume() {
     task_id=$(echo "$worker_id" | sed -E 's/worker-(TASK-[0-9]+)-.*/\1/')
 
     # Check if already running
-    if [ -f "$worker_dir/worker.pid" ]; then
+    if [ -f "$worker_dir/agent.pid" ]; then
         local existing_pid
-        existing_pid=$(cat "$worker_dir/worker.pid" 2>/dev/null)
+        existing_pid=$(cat "$worker_dir/agent.pid" 2>/dev/null)
         if kill -0 "$existing_pid" 2>/dev/null; then
             echo "Error: Worker $worker_id is already running (PID: $existing_pid)"
             exit $EXIT_ERROR
@@ -257,7 +252,7 @@ do_resume() {
     # Prepare context for resume
     prepare_resume_context "$worker_dir" "$resume_iteration"
 
-    # Launch worker with resume context
+    # Launch task-worker agent with resume context
     export WORKER_ID="$worker_id"
     export TASK_ID="$task_id"
     export WIGGUM_HOME
@@ -267,18 +262,20 @@ do_resume() {
     export WIGGUM_RESUME_CONTEXT="$worker_dir/resume-context.md"
 
     mkdir -p "$RALPH_DIR/logs"
-    bash "$WIGGUM_HOME/lib/worker.sh" "$worker_dir" "$PROJECT_DIR" \
-        >> "$RALPH_DIR/logs/workers.log" 2>&1 &
+    (
+        # Run agent in subshell to isolate it
+        run_agent "task-worker" "$worker_dir" "$PROJECT_DIR"
+    ) >> "$RALPH_DIR/logs/workers.log" 2>&1 &
 
-    # Wait briefly for worker.pid to be created
+    # Wait briefly for agent.pid to be created
     local wait_count=0
-    while [ ! -f "$worker_dir/worker.pid" ] && [ $wait_count -lt 10 ]; do
+    while [ ! -f "$worker_dir/agent.pid" ] && [ $wait_count -lt 10 ]; do
         sleep 0.1
         ((wait_count++))
     done
 
-    if [ -f "$worker_dir/worker.pid" ]; then
-        local worker_pid=$(cat "$worker_dir/worker.pid")
+    if [ -f "$worker_dir/agent.pid" ]; then
+        local worker_pid=$(cat "$worker_dir/agent.pid")
         echo "Worker running (PID: $worker_pid)"
     else
         echo "Worker started (PID file pending)"

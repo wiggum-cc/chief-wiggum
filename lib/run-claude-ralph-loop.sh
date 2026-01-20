@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# run-agent-ralph-loop.sh - Generic self-prompting loop mechanism
+# run-claude-ralph-loop.sh - Generic self-prompting loop mechanism
 #
 # Provides the core ralph loop pattern that can be parameterized for different use cases:
 # - Task execution (original ralph-loop)
