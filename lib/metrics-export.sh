@@ -160,10 +160,10 @@ export_metrics() {
     fi
 
     local total_tokens=$((total_input_tokens + total_output_tokens + total_cache_creation + total_cache_read))
-    local total_context_size=$((total_workers * 200000))
+    local total_context_size=200000
     local total_context_percent=0
-    if [ $total_context_size -gt 0 ]; then
-        total_context_percent=$(echo "scale=1; $total_context_tokens * 100 / $total_context_size" | bc 2>/dev/null || echo "0")
+    if [ $total_workers -gt 0 ]; then
+        total_context_percent=$(echo "scale=1; ($total_context_tokens / $total_workers) * 100 / $total_context_size" | bc 2>/dev/null || echo "0")
     fi
 
     # Format total time
@@ -226,7 +226,10 @@ update_worker_metrics() {
     local ralph_dir="$1"
     local worker_id="$2"
 
-    # Re-export all metrics (simple approach for now)
+    # Currently we ignore worker_id and re-export all metrics (simple approach for now).
+    # The worker_id parameter is kept for future enhancements (e.g., partial per-worker updates).
+    : "$worker_id"
+
     export_metrics "$ralph_dir"
 }
 

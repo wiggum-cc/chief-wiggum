@@ -26,7 +26,7 @@ get_context_size() {
 # Format model name for display (extract short name)
 format_model_name() {
     local model="$1"
-    # Extract the base model name (e.g., "claude-3-5-sonnet" from "claude-3-5-sonnet-20241022")
+    # Strip date suffix, then remove "claude-" prefix (e.g., "claude-3-5-sonnet-20241022" → "claude-3-5-sonnet" → "3-5-sonnet", then uppercased)
     echo "$model" | sed -E 's/-[0-9]{8}$//' | sed 's/claude-//' | tr '[:lower:]' '[:upper:]'
 }
 
@@ -118,7 +118,7 @@ calculate_worker_cost() {
         # Calculate context tokens (input + cache_read + cache_creation)
         local context_tokens=$((model_input + model_cache_read + model_cache_create))
         local context_size=$(get_context_size "$model_name")
-        local context_percent=$(echo "scale=1; $context_tokens * 100 / $context_size" | bc)
+        local context_percent=$(echo "scale=1; $context_tokens * 100 / $context_size" | bc 2>/dev/null || echo "0")
 
         local display_name=$(format_model_name "$model_name")
         echo "  [$display_name] Context: ${context_percent}% (${context_tokens}/${context_size} tokens)"
@@ -137,7 +137,7 @@ calculate_worker_cost() {
     # Calculate total context usage for primary model (use the one with highest usage)
     local primary_context_tokens=$((input_tokens + cache_read_tokens + cache_creation_tokens))
     local primary_context_size="${MODEL_CONTEXT_SIZES[default]}"
-    local primary_context_percent=$(echo "scale=1; $primary_context_tokens * 100 / $primary_context_size" | bc)
+    local primary_context_percent=$(echo "scale=1; $primary_context_tokens * 100 / $primary_context_size" | bc 2>/dev/null || echo "0")
 
     # Export for use in PR summary
     export WORKER_TIME_SPENT="$time_formatted"
@@ -189,7 +189,12 @@ calculate_latest_context_usage() {
 
     local context_tokens=$((input_tokens + cache_read + cache_create))
     local context_size=$(get_context_size "$model_name")
-    local context_percent=$(echo "scale=1; $context_tokens * 100 / $context_size" | bc)
+    local context_percent
+    if [ "$context_size" -gt 0 ] 2>/dev/null; then
+        context_percent=$(echo "scale=1; $context_tokens * 100 / $context_size" | bc 2>/dev/null || echo "0")
+    else
+        context_percent="0"
+    fi
 
     local display_name=$(format_model_name "$model_name")
 
