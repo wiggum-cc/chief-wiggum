@@ -44,6 +44,12 @@ export interface InitialPrompt {
   timestamp?: string;
 }
 
+export interface ContextUsage {
+  tokens: number;
+  size: number;
+  percent: number;
+}
+
 export interface IterationResult {
   iteration: number;
   subtype: string;
@@ -58,6 +64,7 @@ export interface IterationResult {
     cacheReadInputTokens: number;
     cacheCreationInputTokens: number;
   };
+  context?: ContextUsage;
 }
 
 interface RawLogEntry {
@@ -144,6 +151,15 @@ export async function parseIterationLogs(
 
           // Capture iteration result/metrics
           if (entry.type === "result") {
+            const inputTokens = entry.usage?.input_tokens || 0;
+            const cacheReadInputTokens = entry.usage?.cache_read_input_tokens || 0;
+            const cacheCreationInputTokens = entry.usage?.cache_creation_input_tokens || 0;
+
+            // Calculate context usage (input + cache tokens)
+            const contextTokens = inputTokens + cacheReadInputTokens + cacheCreationInputTokens;
+            const contextSize = 200000; // Claude models have 200k context
+            const contextPercent = (contextTokens / contextSize) * 100;
+
             iterationResults.push({
               iteration: currentIteration,
               subtype: entry.subtype || "success",
@@ -153,10 +169,15 @@ export async function parseIterationLogs(
               totalCostUsd: entry.total_cost_usd || 0,
               isError: entry.is_error || false,
               usage: {
-                inputTokens: entry.usage?.input_tokens || 0,
+                inputTokens,
                 outputTokens: entry.usage?.output_tokens || 0,
-                cacheReadInputTokens: entry.usage?.cache_read_input_tokens || 0,
-                cacheCreationInputTokens: entry.usage?.cache_creation_input_tokens || 0,
+                cacheReadInputTokens,
+                cacheCreationInputTokens,
+              },
+              context: {
+                tokens: contextTokens,
+                size: contextSize,
+                percent: parseFloat(contextPercent.toFixed(1)),
               },
             });
             continue;

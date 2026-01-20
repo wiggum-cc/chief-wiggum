@@ -84,6 +84,15 @@ class TokenUsage:
 
 
 @dataclass
+class ContextUsage:
+    """Context window usage."""
+
+    tokens: int = 0
+    size: int = 200000  # Default 200k context window
+    percent: float = 0.0
+
+
+@dataclass
 class CostBreakdown:
     """Cost breakdown in USD."""
 
@@ -105,6 +114,7 @@ class WorkerMetrics:
     tokens: TokenUsage
     cost: float
     pr_url: str = ""
+    context: ContextUsage = field(default_factory=ContextUsage)
 
 
 @dataclass
@@ -120,6 +130,7 @@ class Metrics:
     total_cost: float = 0.0
     tokens: TokenUsage = field(default_factory=TokenUsage)
     cost_breakdown: CostBreakdown = field(default_factory=CostBreakdown)
+    context: ContextUsage = field(default_factory=ContextUsage)
     workers: list[WorkerMetrics] = field(default_factory=list)
 
 

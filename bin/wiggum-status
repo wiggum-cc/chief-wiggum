@@ -5,6 +5,7 @@ WIGGUM_HOME="${WIGGUM_HOME:-$HOME/.claude/chief-wiggum}"
 source "$WIGGUM_HOME/lib/exit-codes.sh"
 source "$WIGGUM_HOME/lib/defaults.sh"
 source "$WIGGUM_HOME/lib/worker-lifecycle.sh"
+source "$WIGGUM_HOME/lib/calculate-cost.sh"
 
 show_help() {
     cat << EOF
@@ -19,6 +20,7 @@ Description:
   Displays the current status of all workers including:
   - Which workers are running
   - Worker PIDs
+  - Context window usage ([MODEL] Context: N%)
   - Recent activity from logs
 
 Examples:
@@ -98,9 +100,23 @@ else
 fi
 echo ""
 
-# Display running workers
+# Display running workers with context usage
 for i in "${!worker_pids[@]}"; do
-    echo "✓ Worker ${worker_names[$i]} (PID: ${worker_pids[$i]}) - RUNNING"
+    worker_name="${worker_names[$i]}"
+    worker_pid="${worker_pids[$i]}"
+    worker_dir="$RALPH_DIR/workers/$worker_name"
+
+    # Get context usage if available
+    context_info=""
+    if [ -d "$worker_dir/logs" ]; then
+        context_result=$(calculate_latest_context_usage "$worker_dir/logs" 2>/dev/null)
+        if [ -n "$context_result" ]; then
+            read -r model_name context_tokens context_size context_percent <<< "$context_result"
+            context_info=" - [$model_name] Context: ${context_percent}%"
+        fi
+    fi
+
+    echo "✓ Worker $worker_name (PID: $worker_pid) - RUNNING$context_info"
 done
 
 echo ""

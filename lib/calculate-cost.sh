@@ -1,6 +1,35 @@
 #!/usr/bin/env bash
 # Calculate time spent and API cost from worker logs
 
+# Model context window sizes (in tokens)
+# All current Claude models have 200k context windows
+declare -A MODEL_CONTEXT_SIZES=(
+    ["claude-3-5-sonnet-20241022"]=200000
+    ["claude-sonnet-4-20250514"]=200000
+    ["claude-3-opus-20240229"]=200000
+    ["claude-opus-4-0-20250514"]=200000
+    ["claude-3-5-haiku-20241022"]=200000
+    ["claude-3-haiku-20240307"]=200000
+    ["default"]=200000
+)
+
+# Get context window size for a model
+get_context_size() {
+    local model="$1"
+    if [[ -n "${MODEL_CONTEXT_SIZES[$model]}" ]]; then
+        echo "${MODEL_CONTEXT_SIZES[$model]}"
+    else
+        echo "${MODEL_CONTEXT_SIZES[default]}"
+    fi
+}
+
+# Format model name for display (extract short name)
+format_model_name() {
+    local model="$1"
+    # Strip date suffix, then remove "claude-" prefix (e.g., "claude-3-5-sonnet-20241022" → "claude-3-5-sonnet" → "3-5-sonnet", then uppercased)
+    echo "$model" | sed -E 's/-[0-9]{8}$//' | sed 's/claude-//' | tr '[:lower:]' '[:upper:]'
+}
+
 calculate_worker_cost() {
     local log_file="$1"
     local log_dir="$(dirname "$log_file")/logs"
@@ -76,8 +105,39 @@ calculate_worker_cost() {
     echo "Per-Model Usage:"
     echo "$totals" | jq -r '.model_usage | to_entries[] | "  \(.key):\n    Input: \(.value.inputTokens), Output: \(.value.outputTokens)\n    Cache read: \(.value.cacheReadInputTokens), Cache create: \(.value.cacheCreationInputTokens)\n    Cost: $\(.value.costUSD | . * 100 | round / 100)"'
     echo ""
+
+    # Calculate and display context usage per model
+    echo "Context Usage:"
+    local model_context_json=""
+    while IFS= read -r model_line; do
+        local model_name=$(echo "$model_line" | jq -r '.key')
+        local model_input=$(echo "$model_line" | jq -r '.value.inputTokens // 0')
+        local model_cache_read=$(echo "$model_line" | jq -r '.value.cacheReadInputTokens // 0')
+        local model_cache_create=$(echo "$model_line" | jq -r '.value.cacheCreationInputTokens // 0')
+
+        # Calculate context tokens (input + cache_read + cache_creation)
+        local context_tokens=$((model_input + model_cache_read + model_cache_create))
+        local context_size=$(get_context_size "$model_name")
+        local context_percent=$(echo "scale=1; $context_tokens * 100 / $context_size" | bc 2>/dev/null || echo "0")
+
+        local display_name=$(format_model_name "$model_name")
+        echo "  [$display_name] Context: ${context_percent}% (${context_tokens}/${context_size} tokens)"
+
+        # Build JSON for export
+        if [ -n "$model_context_json" ]; then
+            model_context_json="${model_context_json},"
+        fi
+        model_context_json="${model_context_json}\"$model_name\":{\"context_tokens\":$context_tokens,\"context_size\":$context_size,\"context_percent\":$context_percent}"
+    done < <(echo "$totals" | jq -c '.model_usage | to_entries[]')
+    echo ""
+
     echo "Total Cost: \$$(printf "%.2f" $total_cost)"
     echo ""
+
+    # Calculate total context usage for primary model (use the one with highest usage)
+    local primary_context_tokens=$((input_tokens + cache_read_tokens + cache_creation_tokens))
+    local primary_context_size="${MODEL_CONTEXT_SIZES[default]}"
+    local primary_context_percent=$(echo "scale=1; $primary_context_tokens * 100 / $primary_context_size" | bc 2>/dev/null || echo "0")
 
     # Export for use in PR summary
     export WORKER_TIME_SPENT="$time_formatted"
@@ -86,6 +146,59 @@ calculate_worker_cost() {
     export WORKER_OUTPUT_TOKENS=$output_tokens
     export WORKER_CACHE_CREATION_TOKENS=$cache_creation_tokens
     export WORKER_CACHE_READ_TOKENS=$cache_read_tokens
+    export WORKER_CONTEXT_TOKENS=$primary_context_tokens
+    export WORKER_CONTEXT_SIZE=$primary_context_size
+    export WORKER_CONTEXT_PERCENT=$primary_context_percent
+    export WORKER_MODEL_CONTEXT_JSON="{$model_context_json}"
+}
+
+# Calculate context usage for the latest iteration (for real-time display)
+# Returns: model_name, context_tokens, context_size, context_percent
+calculate_latest_context_usage() {
+    local log_dir="$1"
+
+    if [ ! -d "$log_dir" ]; then
+        return 1
+    fi
+
+    # Find the latest iteration log file with result entries
+    local latest_log=$(find "$log_dir" -type f -name "iteration-*.log" -exec grep -l '"type":"result"' {} \; 2>/dev/null | sort -V | tail -1)
+
+    if [ -z "$latest_log" ]; then
+        return 1
+    fi
+
+    # Get the latest result entry
+    local result=$(grep '"type":"result"' "$latest_log" | tail -1)
+
+    if [ -z "$result" ]; then
+        return 1
+    fi
+
+    # Extract model usage from the result
+    local model_usage=$(echo "$result" | jq -r '.modelUsage | to_entries | sort_by(.value.inputTokens) | reverse | .[0] // empty')
+
+    if [ -z "$model_usage" ] || [ "$model_usage" = "null" ]; then
+        return 1
+    fi
+
+    local model_name=$(echo "$model_usage" | jq -r '.key')
+    local input_tokens=$(echo "$model_usage" | jq -r '.value.inputTokens // 0')
+    local cache_read=$(echo "$model_usage" | jq -r '.value.cacheReadInputTokens // 0')
+    local cache_create=$(echo "$model_usage" | jq -r '.value.cacheCreationInputTokens // 0')
+
+    local context_tokens=$((input_tokens + cache_read + cache_create))
+    local context_size=$(get_context_size "$model_name")
+    local context_percent
+    if [ "$context_size" -gt 0 ] 2>/dev/null; then
+        context_percent=$(echo "scale=1; $context_tokens * 100 / $context_size" | bc 2>/dev/null || echo "0")
+    else
+        context_percent="0"
+    fi
+
+    local display_name=$(format_model_name "$model_name")
+
+    echo "$display_name $context_tokens $context_size $context_percent"
 }
 
 # If called directly with log file argument (not when sourced)

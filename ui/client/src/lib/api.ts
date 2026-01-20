@@ -96,6 +96,12 @@ export interface InitialPrompt {
   timestamp?: string;
 }
 
+export interface ContextUsage {
+  tokens: number;
+  size: number;
+  percent: number;
+}
+
 export interface IterationResult {
   iteration: number;
   subtype: string;
@@ -110,6 +116,7 @@ export interface IterationResult {
     cacheReadInputTokens: number;
     cacheCreationInputTokens: number;
   };
+  context?: ContextUsage;
 }
 
 export interface ConversationResponse {

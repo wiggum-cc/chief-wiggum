@@ -18,6 +18,7 @@ source "$WIGGUM_HOME/lib/file-lock.sh"
 source "$WIGGUM_HOME/lib/audit-logger.sh"
 source "$WIGGUM_HOME/lib/task-parser.sh"
 source "$WIGGUM_HOME/lib/git-operations.sh"
+source "$WIGGUM_HOME/lib/metrics-export.sh"
 
 # Save references to sourced kanban functions before defining wrapper
 eval "_kanban_mark_done() $(declare -f update_kanban | sed '1d')"
@@ -311,6 +312,10 @@ update_kanban() {
 
     # Log final worker status to audit log
     audit_log_worker_complete "$TASK_ID" "$WORKER_ID" "$final_status"
+
+    # Update metrics.json with latest worker data
+    log_debug "Exporting metrics to metrics.json"
+    export_metrics "$PROJECT_DIR/.ralph" 2>/dev/null || true
 
     # Remove worker PID file
     rm -f "$WORKER_DIR/worker.pid"

@@ -2,7 +2,7 @@
 
 import json
 from pathlib import Path
-from .models import Metrics, TokenUsage, CostBreakdown, WorkerMetrics
+from .models import Metrics, TokenUsage, CostBreakdown, ContextUsage, WorkerMetrics
 
 
 def read_metrics(file_path: Path) -> Metrics:
@@ -46,6 +46,14 @@ def read_metrics(file_path: Path) -> Metrics:
         total=cost_data.get("total", 0.0),
     )
 
+    # Parse context usage
+    context_data = data.get("context", {})
+    context = ContextUsage(
+        tokens=context_data.get("tokens", 0),
+        size=context_data.get("size", 200000),
+        percent=context_data.get("percent", 0.0),
+    )
+
     # Parse workers
     workers_data = data.get("workers", [])
     workers = []
@@ -58,6 +66,12 @@ def read_metrics(file_path: Path) -> Metrics:
             cache_read=w_tokens_data.get("cache_read", 0),
             total=w_tokens_data.get("total", 0),
         )
+        w_context_data = w.get("context", {})
+        w_context = ContextUsage(
+            tokens=w_context_data.get("tokens", 0),
+            size=w_context_data.get("size", 200000),
+            percent=w_context_data.get("percent", 0.0),
+        )
         workers.append(
             WorkerMetrics(
                 worker_id=w.get("worker_id", ""),
@@ -67,6 +81,7 @@ def read_metrics(file_path: Path) -> Metrics:
                 tokens=w_tokens,
                 cost=w.get("cost", 0.0),
                 pr_url=w.get("pr_url", ""),
+                context=w_context,
             )
         )
 
@@ -80,6 +95,7 @@ def read_metrics(file_path: Path) -> Metrics:
         total_cost=summary.get("total_cost", 0.0),
         tokens=tokens,
         cost_breakdown=cost_breakdown,
+        context=context,
         workers=workers,
     )
 
@@ -132,3 +148,15 @@ def format_duration(seconds: int) -> str:
         return f"{minutes}m {secs}s"
     else:
         return f"{seconds}s"
+
+
+def format_context(percent: float) -> str:
+    """Format context usage percentage for display.
+
+    Args:
+        percent: Context usage percentage (0-100).
+
+    Returns:
+        Formatted string (e.g., "45.2%").
+    """
+    return f"{percent:.1f}%"
