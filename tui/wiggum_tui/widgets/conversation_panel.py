@@ -161,14 +161,22 @@ class ConversationPanel(Widget):
     def _load_workers(self) -> None:
         """Load list of workers with conversations."""
         workers = scan_workers(self.ralph_dir)
-        self._workers_list = []
+        workers_with_mtime: list[tuple[str, str, float]] = []  # (id, label, mtime)
 
         for worker in workers:
             worker_dir = self.ralph_dir / "workers" / worker.id
             logs_dir = worker_dir / "logs"
-            if logs_dir.is_dir() and list(logs_dir.glob("iteration-*.log")):
-                label = f"{worker.task_id} - {worker.status.value}"
-                self._workers_list.append((worker.id, label))
+            if logs_dir.is_dir():
+                log_files = list(logs_dir.glob("*.log"))
+                if log_files:
+                    # Get the most recent log modification time
+                    max_mtime = max(f.stat().st_mtime for f in log_files)
+                    label = f"{worker.task_id} - {worker.status.value}"
+                    workers_with_mtime.append((worker.id, label, max_mtime))
+
+        # Sort by modification time descending (most recent first)
+        workers_with_mtime.sort(key=lambda x: x[2], reverse=True)
+        self._workers_list = [(w[0], w[1]) for w in workers_with_mtime]
 
     def _load_conversation(self, worker_id: str) -> None:
         """Load conversation for a worker."""
@@ -201,29 +209,31 @@ class ConversationPanel(Widget):
                 for line in format_content(self.conversation.user_prompt, 100):
                     prompt_node.add_leaf(f"[#94a3b8]{line}[/]")
 
-            # Group turns by iteration
-            current_iteration = -1
-            iteration_node: TreeNode | None = None
+            # Group turns by log file
+            current_log_name = ""
+            log_node: TreeNode | None = None
+            first_log = True
 
             for i, turn in enumerate(self.conversation.turns):
-                if turn.iteration != current_iteration:
-                    current_iteration = turn.iteration
-                    # Find iteration result for this iteration
+                if turn.log_name != current_log_name:
+                    current_log_name = turn.log_name
+                    # Find result for this log file
                     result = next(
-                        (r for r in self.conversation.results if r.iteration == current_iteration),
+                        (r for r in self.conversation.results if r.log_name == current_log_name),
                         None,
                     )
                     result_info = ""
                     if result:
                         result_info = f" │ {result.num_turns} turns │ ${result.total_cost_usd:.2f}"
 
-                    iteration_node = tree.root.add(
-                        f"[#f59e0b]Iteration {current_iteration}[/]{result_info}",
-                        expand=current_iteration == 0,
+                    log_node = tree.root.add(
+                        f"[#f59e0b]{current_log_name}[/]{result_info}",
+                        expand=first_log,
                     )
+                    first_log = False
 
-                if iteration_node:
-                    self._add_turn_to_tree(iteration_node, turn, i)
+                if log_node:
+                    self._add_turn_to_tree(log_node, turn, i)
 
             tree.root.expand()
 

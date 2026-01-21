@@ -29,13 +29,14 @@ def parse_iteration_logs(worker_dir: Path) -> Conversation:
     if not logs_dir.is_dir():
         return conversation
 
-    # Find all iteration log files
-    log_files = sorted(logs_dir.glob("iteration-*.log"))
+    # Find all log files, sorted by modification time
+    log_files = sorted(logs_dir.glob("*.log"), key=lambda f: f.stat().st_mtime)
 
     all_entries: list[dict[str, Any]] = []
     results: list[IterationResult] = []
 
-    for log_file in log_files:
+    for idx, log_file in enumerate(log_files):
+        log_name = log_file.stem  # e.g., "iteration-0", "validation-review"
         try:
             content = log_file.read_text()
             for line in content.split("\n"):
@@ -44,13 +45,19 @@ def parse_iteration_logs(worker_dir: Path) -> Conversation:
                 try:
                     entry = json.loads(line)
                     entry_type = entry.get("type")
+                    # Tag entry with its iteration index and log name
+                    entry["_iteration_idx"] = idx
+                    entry["_log_name"] = log_name
 
                     if entry_type == "iteration_start":
                         if not conversation.system_prompt:
                             conversation.system_prompt = entry.get("system_prompt", "")
                             conversation.user_prompt = entry.get("user_prompt", "")
                     elif entry_type == "result":
-                        results.append(_parse_result(entry))
+                        result = _parse_result(entry)
+                        result.iteration = idx  # Override with mtime-based index
+                        result.log_name = log_name
+                        results.append(result)
                     elif entry_type in ("assistant", "user"):
                         all_entries.append(entry)
                 except json.JSONDecodeError:
@@ -103,16 +110,18 @@ def _group_into_turns(entries: list[dict[str, Any]]) -> list[ConversationTurn]:
     current_text: str | None = None
     current_tool_calls: list[ToolCall] = []
     current_timestamp: str | None = None
-    iteration = 0
+    current_iteration = 0
+    current_log_name = ""
 
     def save_turn():
         nonlocal current_text, current_tool_calls, current_timestamp
         if current_text or current_tool_calls:
             turns.append(ConversationTurn(
-                iteration=iteration,
+                iteration=current_iteration,
                 assistant_text=current_text,
                 tool_calls=current_tool_calls.copy(),
                 timestamp=current_timestamp,
+                log_name=current_log_name,
             ))
         current_text = None
         current_tool_calls = []
@@ -120,8 +129,12 @@ def _group_into_turns(entries: list[dict[str, Any]]) -> list[ConversationTurn]:
 
     for entry in entries:
         entry_type = entry.get("type")
+        entry_iteration = entry.get("_iteration_idx", 0)
+        entry_log_name = entry.get("_log_name", "")
 
         if entry_type == "assistant":
+            current_iteration = entry_iteration
+            current_log_name = entry_log_name
             message_content = entry.get("message", {}).get("content", [])
 
             for block in message_content:

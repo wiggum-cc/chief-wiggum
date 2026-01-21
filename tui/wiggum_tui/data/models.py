@@ -151,6 +151,7 @@ class ConversationTurn:
     assistant_text: str | None = None
     tool_calls: list[ToolCall] = field(default_factory=list)
     timestamp: str | None = None
+    log_name: str = ""
 
 
 @dataclass
@@ -165,6 +166,7 @@ class IterationResult:
     total_cost_usd: float = 0.0
     is_error: bool = False
     usage: TokenUsage = field(default_factory=TokenUsage)
+    log_name: str = ""
 
 
 @dataclass
