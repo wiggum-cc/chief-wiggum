@@ -18,6 +18,9 @@ get_current_github_user() {
 # Find PRs matching task regex patterns
 # Args: <comma-separated-patterns>
 # Output: JSON array of PR info (number, headRefName, url)
+# Supports:
+#   - Full task ID: PIPELINE-001, TASK-030
+#   - Partial number: 001, 030 (searches for branches containing the pattern)
 find_prs_by_task_patterns() {
     local patterns="$1"
 
@@ -29,14 +32,28 @@ find_prs_by_task_patterns() {
         # Trim whitespace
         pattern=$(echo "$pattern" | xargs)
 
-        # Search for PRs with branches matching task/$pattern*
-        # Try open PRs first, then all PRs if nothing found
-        local prs
+        local prs="[]"
+
+        # Try exact match first: head:task/$pattern
         prs=$(gh pr list --search "head:task/$pattern" --state open --json number,headRefName,url 2>/dev/null || echo "[]")
 
+        # If not found, try partial match by listing all task/* branches and filtering
         if [ "$(echo "$prs" | jq 'length')" -eq 0 ]; then
-            # Try without state filter (might be merged/closed)
+            # Get all PRs with task/ branches and filter locally for pattern match
+            local all_task_prs
+            all_task_prs=$(gh pr list --search "head:task/" --state open --json number,headRefName,url 2>/dev/null || echo "[]")
+            prs=$(echo "$all_task_prs" | jq --arg pat "$pattern" '[.[] | select(.headRefName | contains($pat))]')
+        fi
+
+        # If still not found, try without state filter (might be merged/closed)
+        if [ "$(echo "$prs" | jq 'length')" -eq 0 ]; then
             prs=$(gh pr list --search "head:task/$pattern" --json number,headRefName,url 2>/dev/null || echo "[]")
+
+            if [ "$(echo "$prs" | jq 'length')" -eq 0 ]; then
+                local all_task_prs
+                all_task_prs=$(gh pr list --search "head:task/" --json number,headRefName,url 2>/dev/null || echo "[]")
+                prs=$(echo "$all_task_prs" | jq --arg pat "$pattern" '[.[] | select(.headRefName | contains($pat))]')
+            fi
         fi
 
         # Merge results, keeping unique by PR number
