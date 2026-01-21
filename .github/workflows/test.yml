@@ -1,0 +1,106 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  shellcheck:
+    name: Shellcheck Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run shellcheck on bin scripts
+        run: |
+          find bin -type f -executable -exec shellcheck --severity=warning {} +
+
+      - name: Run shellcheck on lib scripts
+        run: |
+          find lib -name "*.sh" -type f -exec shellcheck --severity=warning {} +
+
+      - name: Run shellcheck on test scripts
+        run: |
+          shellcheck --severity=warning tests/test-framework.sh tests/test-runner.sh
+          find tests -name "test_*.sh" -type f -exec shellcheck --severity=warning {} +
+
+      - name: Run shellcheck on install script
+        run: |
+          shellcheck --severity=warning install.sh
+
+  test:
+    name: Test Suite
+    runs-on: ubuntu-latest
+    needs: shellcheck
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Make test scripts executable
+        run: |
+          chmod +x tests/test-runner.sh
+          chmod +x tests/test-framework.sh
+          find tests -name "test_*.sh" -exec chmod +x {} \;
+
+      - name: Run test suite
+        run: |
+          bash tests/test-runner.sh
+
+      - name: Upload test logs
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: test-logs
+          path: |
+            tests/*.log
+          retention-days: 7
+
+  coverage:
+    name: Test Coverage
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install kcov
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y kcov
+
+      - name: Make scripts executable
+        run: |
+          chmod +x tests/test-runner.sh
+          chmod +x tests/test-framework.sh
+          find tests -name "test_*.sh" -exec chmod +x {} \;
+          find bin -type f -exec chmod +x {} \;
+          find lib -name "*.sh" -exec chmod +x {} \;
+
+      - name: Run tests with coverage
+        run: |
+          mkdir -p coverage
+          kcov --include-path=./lib,./bin coverage/kcov-output bash tests/test-runner.sh
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/kcov-output
+          retention-days: 30
+
+      - name: Generate coverage summary
+        run: |
+          if [ -f coverage/kcov-output/index.html ]; then
+            echo "## Coverage Report Generated" >> $GITHUB_STEP_SUMMARY
+            echo "Coverage report has been uploaded as an artifact." >> $GITHUB_STEP_SUMMARY
+            if [ -f coverage/kcov-output/kcov-merged/coverage.json ]; then
+              COVERAGE=$(jq -r '.percent_covered' coverage/kcov-output/kcov-merged/coverage.json)
+              echo "**Line Coverage: ${COVERAGE}%**" >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "## Coverage Report" >> $GITHUB_STEP_SUMMARY
+            echo "Coverage data was collected. See the uploaded artifact for details." >> $GITHUB_STEP_SUMMARY
+          fi
