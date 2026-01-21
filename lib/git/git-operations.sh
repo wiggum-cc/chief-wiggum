@@ -34,7 +34,8 @@ git_create_commit() {
     log "Creating branch and commit for $task_id"
 
     # Create a unique branch for this task attempt
-    local timestamp=$(date +%s)
+    local timestamp
+    timestamp=$(date +%s)
     local branch_name="task/$task_id-$timestamp"
 
     if ! git checkout -b "$branch_name" 2>&1; then
@@ -61,7 +62,8 @@ Co-Authored-By: Chief Wiggum <noreply@chief-wiggum.local>"
         return 1
     fi
 
-    local commit_hash=$(git rev-parse HEAD)
+    local commit_hash
+    commit_hash=$(git rev-parse HEAD)
     log "Created commit: $commit_hash on branch $branch_name"
 
     GIT_COMMIT_BRANCH="$branch_name"
@@ -158,14 +160,11 @@ git_verify_pushed() {
     local task_id="$2"
 
     # Get local commit from worktree
-    local local_commit
+    local local_commit remote_commit pr_exists
     local_commit=$(git -C "$workspace" rev-parse HEAD 2>/dev/null)
 
     # Check if commit exists on remote branch and PR exists
-    local remote_commit
     remote_commit=$(git ls-remote --heads origin "task/$task_id-*" 2>/dev/null | head -1 | cut -f1)
-
-    local pr_exists
     pr_exists=$(gh pr list --head "task/$task_id-*" --json number -q '.[0].number' 2>/dev/null)
 
     if [ -n "$remote_commit" ] && [ "$local_commit" = "$remote_commit" ] && [ -n "$pr_exists" ]; then
@@ -201,13 +200,10 @@ git_finalize_worker() {
 
     cd "$workspace" || return 1
 
-    # Get task description from kanban
-    local task_desc
-    task_desc=$(grep "**\[$task_id\]**" "$project_dir/.ralph/kanban.md" 2>/dev/null | sed 's/.*\*\*\[.*\]\*\* //' | head -1)
-
-    # Get task priority
-    local task_priority
-    task_priority=$(grep -A2 "**\[$task_id\]**" "$project_dir/.ralph/kanban.md" 2>/dev/null | grep "Priority:" | sed 's/.*Priority: //')
+    # Get task description and priority from kanban
+    local task_desc task_priority
+    task_desc=$(grep -F "**[$task_id]**" "$project_dir/.ralph/kanban.md" 2>/dev/null | sed 's/.*\*\*\[.*\]\*\* //' | head -1)
+    task_priority=$(grep -F -A2 "**[$task_id]**" "$project_dir/.ralph/kanban.md" 2>/dev/null | grep "Priority:" | sed 's/.*Priority: //')
 
     # Create commit
     if ! git_create_commit "$workspace" "$task_id" "$task_desc" "$task_priority" "$worker_id"; then

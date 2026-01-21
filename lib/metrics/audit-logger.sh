@@ -6,8 +6,9 @@ AUDIT_LOG="${AUDIT_LOG:-$PROJECT_DIR/.ralph/logs/audit.log}"
 
 # Get git user information
 get_git_user_info() {
-    local user_name=$(git config user.name 2>/dev/null || echo "unknown")
-    local user_email=$(git config user.email 2>/dev/null || echo "unknown")
+    local user_name user_email
+    user_name=$(git config user.name 2>/dev/null || echo "unknown")
+    user_email=$(git config user.email 2>/dev/null || echo "unknown")
     echo "$user_name <$user_email>"
 }
 
@@ -18,7 +19,8 @@ get_system_user_info() {
 
 # Initialize audit log with header if it doesn't exist
 init_audit_log() {
-    local log_dir=$(dirname "$AUDIT_LOG")
+    local log_dir
+    log_dir=$(dirname "$AUDIT_LOG")
     mkdir -p "$log_dir"
 
     if [ ! -f "$AUDIT_LOG" ]; then
@@ -61,7 +63,8 @@ audit_log() {
     # Ensure log is initialized
     init_audit_log
 
-    local timestamp=$(date -Iseconds)
+    local timestamp
+    timestamp=$(date -Iseconds)
     local log_entry="[$timestamp] $event_type"
 
     # Append all key=value pairs
@@ -79,8 +82,9 @@ audit_log_task_assigned() {
     local worker_id="$2"
     local pid="$3"
 
-    local git_user=$(get_git_user_info)
-    local system_user=$(get_system_user_info)
+    local git_user system_user
+    git_user=$(get_git_user_info)
+    system_user=$(get_system_user_info)
 
     audit_log "TASK_ASSIGNED" \
         "task_id=$task_id" \
@@ -96,9 +100,9 @@ audit_log_worker_start() {
     local task_id="$1"
     local worker_id="$2"
 
-    local git_user=$(get_git_user_info)
-    local system_user=$(get_system_user_info)
-    local pid=$$
+    local git_user system_user pid=$$
+    git_user=$(get_git_user_info)
+    system_user=$(get_system_user_info)
 
     audit_log "WORKER_START" \
         "task_id=$task_id" \
@@ -115,9 +119,9 @@ audit_log_worker_complete() {
     local worker_id="$2"
     local status="$3"  # COMPLETE, FAILED, or TIMEOUT
 
-    local git_user=$(get_git_user_info)
-    local system_user=$(get_system_user_info)
-    local pid=$$
+    local git_user system_user pid=$$
+    git_user=$(get_git_user_info)
+    system_user=$(get_system_user_info)
 
     local event_type="WORKER_COMPLETE"
     if [ "$status" != "COMPLETE" ]; then
@@ -139,9 +143,9 @@ audit_log_worker_cleanup() {
     local task_id="$1"
     local worker_id="$2"
 
-    local git_user=$(get_git_user_info)
-    local system_user=$(get_system_user_info)
-    local pid=$$
+    local git_user system_user pid=$$
+    git_user=$(get_git_user_info)
+    system_user=$(get_system_user_info)
 
     audit_log "WORKER_CLEANUP" \
         "task_id=$task_id" \

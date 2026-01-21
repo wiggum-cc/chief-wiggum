@@ -263,9 +263,10 @@ detect_circular_dependencies() {
     tasks=$(echo "$all_metadata" | cut -d'|' -f1)
 
     # Create temp files for cycle detection
-    local visited_file=$(mktemp)
-    local stack_file=$(mktemp)
-    local cycle_file=$(mktemp)
+    local visited_file stack_file cycle_file
+    visited_file=$(mktemp)
+    stack_file=$(mktemp)
+    cycle_file=$(mktemp)
 
     # Cleanup function
     _cleanup_cycle_files() {

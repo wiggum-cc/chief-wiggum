@@ -31,7 +31,8 @@ find_prs_by_task_patterns() {
 
         # Search for PRs with branches matching task/$pattern*
         # Try open PRs first, then all PRs if nothing found
-        local prs=$(gh pr list --search "head:task/$pattern" --state open --json number,headRefName,url 2>/dev/null || echo "[]")
+        local prs
+        prs=$(gh pr list --search "head:task/$pattern" --state open --json number,headRefName,url 2>/dev/null || echo "[]")
 
         if [ "$(echo "$prs" | jq 'length')" -eq 0 ]; then
             # Try without state filter (might be merged/closed)
@@ -52,7 +53,8 @@ fetch_pr_comments() {
     local pr_number="$1"
 
     # Get repository info
-    local repo=$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null)
+    local repo
+    repo=$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null)
     if [ -z "$repo" ]; then
         log_error "Could not determine repository"
         echo "[]"
@@ -60,7 +62,8 @@ fetch_pr_comments() {
     fi
 
     # Fetch regular PR comments (issue comments)
-    local issue_comments=$(gh api "repos/$repo/issues/$pr_number/comments" --jq '[.[] | {
+    local issue_comments
+    issue_comments=$(gh api "repos/$repo/issues/$pr_number/comments" --jq '[.[] | {
         type: "issue_comment",
         id: .id,
         author: .user.login,
@@ -70,7 +73,8 @@ fetch_pr_comments() {
     }]' 2>/dev/null || echo "[]")
 
     # Fetch review comments (inline code comments)
-    local review_comments=$(gh api "repos/$repo/pulls/$pr_number/comments" --jq '[.[] | {
+    local review_comments
+    review_comments=$(gh api "repos/$repo/pulls/$pr_number/comments" --jq '[.[] | {
         type: "review_comment",
         id: .id,
         author: .user.login,
@@ -85,7 +89,8 @@ fetch_pr_comments() {
     }]' 2>/dev/null || echo "[]")
 
     # Fetch PR reviews (approve/request changes with body)
-    local reviews=$(gh api "repos/$repo/pulls/$pr_number/reviews" --jq '[.[] | select(.body != null and .body != "") | {
+    local reviews
+    reviews=$(gh api "repos/$repo/pulls/$pr_number/reviews" --jq '[.[] | select(.body != null and .body != "") | {
         type: "review",
         id: .id,
         author: .user.login,
@@ -165,7 +170,8 @@ find_worker_by_task_id() {
     fi
 
     # Find most recent worker directory matching the pattern
-    local worker_dir=$(find "$workers_dir" -maxdepth 1 -type d -name "worker-$task_pattern-*" 2>/dev/null | sort -r | head -1)
+    local worker_dir
+    worker_dir=$(find "$workers_dir" -maxdepth 1 -type d -name "worker-$task_pattern-*" 2>/dev/null | sort -r | head -1)
 
     if [ -n "$worker_dir" ] && [ -d "$worker_dir" ]; then
         echo "$worker_dir"
@@ -180,7 +186,8 @@ sync_pr_comments() {
     local output_dir="$2"
 
     # Get current GitHub user
-    local current_user=$(get_current_github_user)
+    local current_user
+    current_user=$(get_current_github_user)
     if [ -z "$current_user" ]; then
         log_error "Could not determine current GitHub user. Are you logged in with 'gh auth login'?"
         return 1
@@ -190,8 +197,9 @@ sync_pr_comments() {
     log "Approved authors: $WIGGUM_APPROVED_AUTHORS"
 
     # Find matching PRs
-    local prs=$(find_prs_by_task_patterns "$patterns")
-    local pr_count=$(echo "$prs" | jq 'length')
+    local prs pr_count
+    prs=$(find_prs_by_task_patterns "$patterns")
+    pr_count=$(echo "$prs" | jq 'length')
 
     if [ "$pr_count" -eq 0 ]; then
         log "No PRs found matching patterns: $patterns"
@@ -219,15 +227,17 @@ sync_pr_comments() {
 
     # Process each PR
     echo "$prs" | jq -c '.[]' | while read -r pr; do
-        local pr_number=$(echo "$pr" | jq -r '.number')
-        local pr_url=$(echo "$pr" | jq -r '.url')
-        local branch=$(echo "$pr" | jq -r '.headRefName')
+        local pr_number pr_url branch
+        pr_number=$(echo "$pr" | jq -r '.number')
+        pr_url=$(echo "$pr" | jq -r '.url')
+        branch=$(echo "$pr" | jq -r '.headRefName')
 
         log "Fetching comments for PR #$pr_number ($branch)..."
 
-        local comments=$(fetch_pr_comments "$pr_number")
-        local filtered=$(filter_comments_by_authors "$comments" "$WIGGUM_APPROVED_AUTHORS" "$current_user")
-        local comment_count=$(echo "$filtered" | jq 'length')
+        local comments filtered comment_count
+        comments=$(fetch_pr_comments "$pr_number")
+        filtered=$(filter_comments_by_authors "$comments" "$WIGGUM_APPROVED_AUTHORS" "$current_user")
+        comment_count=$(echo "$filtered" | jq 'length')
 
         log "  Found $comment_count relevant comment(s) from approved authors"
 

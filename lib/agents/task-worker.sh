@@ -14,6 +14,7 @@
 # Note: workspace is created by this agent, not required in advance
 
 AGENT_TYPE="task-worker"
+export AGENT_TYPE
 
 # Source dependencies
 source "$WIGGUM_HOME/lib/claude/run-claude-ralph-loop.sh"
@@ -50,8 +51,9 @@ agent_run() {
     local resume_context="${WIGGUM_RESUME_CONTEXT:-}"
 
     # Extract worker and task IDs
-    local worker_id=$(basename "$worker_dir")
-    local task_id=$(echo "$worker_id" | sed -E 's/worker-(TASK-[0-9]+)-.*/\1/')
+    local worker_id task_id
+    worker_id=$(basename "$worker_dir")
+    task_id=$(echo "$worker_id" | sed -E 's/worker-(TASK-[0-9]+)-.*/\1/')
 
     # Setup environment
     export WORKER_ID="$worker_id"
@@ -62,7 +64,8 @@ agent_run() {
     local prd_file="$worker_dir/prd.md"
 
     # Record start time
-    local start_time=$(date +%s)
+    local start_time
+    start_time=$(date +%s)
     echo "[$(date -Iseconds)] AGENT_STARTED agent=task-worker worker_id=$worker_id task_id=$task_id start_time=$start_time" >> "$worker_dir/worker.log"
 
     log "Task worker agent starting for $task_id (max $max_turns turns per session)"
@@ -147,7 +150,8 @@ agent_run() {
 
     # Check validation result - override final_status if validation failed
     if [ -f "$worker_dir/validation-result.txt" ]; then
-        local validation_result=$(cat "$worker_dir/validation-result.txt")
+        local validation_result
+        validation_result=$(cat "$worker_dir/validation-result.txt")
         if [ "$validation_result" = "FAIL" ]; then
             log_error "Validation review FAILED - marking task as failed"
             final_status="FAILED"
@@ -167,10 +171,11 @@ agent_run() {
             cd "$workspace" || return 1
 
             # Get task description from kanban for commit message
-            task_desc=$(grep "**\[$task_id\]**" "$project_dir/.ralph/kanban.md" | sed 's/.*\*\*\[.*\]\*\* //' | head -1)
+            task_desc=$(grep -F "**[$task_id]**" "$project_dir/.ralph/kanban.md" | sed 's/.*\*\*\[.*\]\*\* //' | head -1)
 
             # Get task priority
-            local task_priority=$(grep -A2 "**\[$task_id\]**" "$project_dir/.ralph/kanban.md" | grep "Priority:" | sed 's/.*Priority: //')
+            local task_priority
+            task_priority=$(grep -F -A2 "**[$task_id]**" "$project_dir/.ralph/kanban.md" | grep "Priority:" | sed 's/.*Priority: //')
 
             # Create commit using shared library
             if git_create_commit "$workspace" "$task_id" "$task_desc" "$task_priority" "$worker_id"; then
@@ -191,7 +196,8 @@ agent_run() {
     _task_worker_cleanup "$worker_dir" "$project_dir" "$task_id" "$final_status" "$task_desc" "$pr_url"
 
     # Record end time
-    local end_time=$(date +%s)
+    local end_time
+    end_time=$(date +%s)
     local duration=$((end_time - start_time))
     echo "[$(date -Iseconds)] AGENT_COMPLETED agent=task-worker duration_sec=$duration exit_code=$loop_result" >> "$worker_dir/worker.log"
 
@@ -276,7 +282,8 @@ _update_kanban_status() {
     local task_desc="$5"
     local pr_url="$6"
 
-    local worker_id=$(basename "$worker_dir")
+    local worker_id
+    worker_id=$(basename "$worker_dir")
 
     if [ "$final_status" = "COMPLETE" ]; then
         log "Marking task $task_id as complete in kanban"

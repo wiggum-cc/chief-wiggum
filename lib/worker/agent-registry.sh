@@ -43,6 +43,7 @@ load_agent() {
         unset -f agent_required_paths agent_run agent_cleanup 2>/dev/null || true
     fi
 
+    # shellcheck source=/dev/null
     source "$agent_file"
     _LOADED_AGENT="$agent_type"
 

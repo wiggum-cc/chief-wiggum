@@ -56,6 +56,7 @@ setup_worktree() {
     export CLAUDE_HOOKS_CONFIG="$WIGGUM_HOME/hooks/worker-hooks.json"
 
     WORKTREE_PATH="$workspace"
+    export WORKTREE_PATH
     log_debug "Worktree created successfully at $workspace"
     return 0
 }

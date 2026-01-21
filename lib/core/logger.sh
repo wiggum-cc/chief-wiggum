@@ -33,8 +33,9 @@ _should_log() {
         min_level="DEBUG"
     fi
 
-    local level_val=$(_log_level_value "$level")
-    local min_val=$(_log_level_value "$min_level")
+    local level_val min_val
+    level_val=$(_log_level_value "$level")
+    min_val=$(_log_level_value "$min_level")
 
     [[ $level_val -ge $min_val ]]
 }
@@ -50,7 +51,8 @@ _log_output() {
         return
     fi
 
-    local formatted="[$(date -Iseconds)] ${level}: $message"
+    local formatted
+    formatted="[$(date -Iseconds)] ${level}: $message"
 
     # Output to appropriate stream
     if [[ "$stream" == "2" ]]; then

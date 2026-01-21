@@ -74,7 +74,8 @@ append_changelog() {
     local description="$4"
     local pr_url="${5:-N/A}"
     local summary="${6:-}"
-    local timestamp=$(date -Iseconds)
+    local timestamp
+    timestamp=$(date -Iseconds)
 
     local entry="
 ## [$task_id] - $timestamp
@@ -95,7 +96,8 @@ ${summary}
     fi
 
     # Use a temporary file to handle multi-line content safely
-    local temp_file=$(mktemp)
+    local temp_file
+    temp_file=$(mktemp)
     echo "$entry" > "$temp_file"
 
     with_file_lock "$changelog_file" 5 \

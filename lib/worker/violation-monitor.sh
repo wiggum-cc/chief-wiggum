@@ -39,7 +39,8 @@ start_violation_monitor() {
             sleep 0.1
 
             # Find the current iteration log file
-            local new_log=$(ls -t "$logs_dir"/iteration-*.log 2>/dev/null | head -1)
+            local new_log
+            new_log=$(ls -t "$logs_dir"/iteration-*.log 2>/dev/null | head -1)
 
             # If log file changed, reset position
             if [[ "$new_log" != "$current_log" ]]; then

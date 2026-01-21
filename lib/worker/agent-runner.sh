@@ -41,6 +41,7 @@ agent_runner_init() {
     local agent_dir="$1"
     local project_dir="$2"
     local monitor_interval="${3:-30}"
+    export monitor_interval  # Available to subclasses
 
     if [ -z "$agent_dir" ] || [ -z "$project_dir" ]; then
         log_error "agent_runner_init: agent_dir and project_dir are required"

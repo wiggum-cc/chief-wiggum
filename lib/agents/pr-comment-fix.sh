@@ -7,6 +7,7 @@
 # Required paths: task-comments.md, workspace
 
 AGENT_TYPE="pr-comment-fix"
+export AGENT_TYPE
 
 # Source dependencies
 source "$WIGGUM_HOME/lib/claude/run-claude-ralph-loop.sh"
@@ -31,7 +32,7 @@ agent_required_paths() {
 # Main entry point
 agent_run() {
     local worker_dir="$1"
-    local project_dir="$2"
+    local _project_dir="$2"  # Reserved for future use
     local max_iterations="${WIGGUM_COMMENT_FIX_MAX_ITERATIONS:-10}"
     local max_turns="${WIGGUM_COMMENT_FIX_MAX_TURNS:-30}"
 
@@ -53,7 +54,8 @@ agent_run() {
     fi
 
     # Check if there are any comments to fix
-    local comment_count=$(grep -c '^### ' "$comments_file" 2>/dev/null || echo "0")
+    local comment_count
+    comment_count=$(grep -c '^### ' "$comments_file" 2>/dev/null || echo "0")
     if [ "$comment_count" -eq 0 ]; then
         log "No comments found in $comments_file - nothing to fix"
         return 0
@@ -222,7 +224,8 @@ _init_comment_status() {
     if ! grep -q '^\- \[ \]' "$status_file" 2>/dev/null; then
         log_warn "No comment IDs found in standard format, creating generic checklist"
         # Count the number of ### headers that represent comments
-        local count=$(grep -c '^### ' "$comments_file" 2>/dev/null || echo "0")
+        local count
+        count=$(grep -c '^### ' "$comments_file" 2>/dev/null || echo "0")
         for i in $(seq 1 $count); do
             echo "- [ ] Comment item $i" >> "$status_file"
         done
@@ -248,7 +251,8 @@ _commit_and_push_fixes() {
     fi
 
     # Get the current branch
-    local current_branch=$(git rev-parse --abbrev-ref HEAD)
+    local current_branch
+    current_branch=$(git rev-parse --abbrev-ref HEAD)
 
     log "Committing fixes on branch: $current_branch"
 
@@ -268,7 +272,8 @@ Co-Authored-By: Chief Wiggum Worker <noreply@chief-wiggum.local>"
         return 1
     fi
 
-    local commit_hash=$(git rev-parse HEAD)
+    local commit_hash
+    commit_hash=$(git rev-parse HEAD)
     log "Created commit: $commit_hash"
 
     # Push to remote

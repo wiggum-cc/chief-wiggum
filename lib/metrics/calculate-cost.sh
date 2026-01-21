@@ -32,7 +32,8 @@ format_model_name() {
 
 calculate_worker_cost() {
     local log_file="$1"
-    local log_dir="$(dirname "$log_file")/logs"
+    local log_dir
+    log_dir="$(dirname "$log_file")/logs"
 
     # Check if logs directory exists
     if [ ! -d "$log_dir" ]; then
@@ -65,28 +66,32 @@ calculate_worker_cost() {
             }) | from_entries)
         }')
 
-    local duration_ms=$(echo "$totals" | jq -r '.duration_ms')
-    local duration_api_ms=$(echo "$totals" | jq -r '.duration_api_ms')
-    local total_cost=$(echo "$totals" | jq -r '.total_cost')
-    local num_turns=$(echo "$totals" | jq -r '.num_turns')
-    local web_search_requests=$(echo "$totals" | jq -r '.web_search_requests')
-    local input_tokens=$(echo "$totals" | jq -r '.input_tokens')
-    local output_tokens=$(echo "$totals" | jq -r '.output_tokens')
-    local cache_creation_tokens=$(echo "$totals" | jq -r '.cache_creation_tokens')
-    local cache_read_tokens=$(echo "$totals" | jq -r '.cache_read_tokens')
+    local duration_ms duration_api_ms total_cost num_turns web_search_requests
+    local input_tokens output_tokens cache_creation_tokens cache_read_tokens
+    duration_ms=$(echo "$totals" | jq -r '.duration_ms')
+    duration_api_ms=$(echo "$totals" | jq -r '.duration_api_ms')
+    total_cost=$(echo "$totals" | jq -r '.total_cost')
+    num_turns=$(echo "$totals" | jq -r '.num_turns')
+    web_search_requests=$(echo "$totals" | jq -r '.web_search_requests')
+    input_tokens=$(echo "$totals" | jq -r '.input_tokens')
+    output_tokens=$(echo "$totals" | jq -r '.output_tokens')
+    cache_creation_tokens=$(echo "$totals" | jq -r '.cache_creation_tokens')
+    cache_read_tokens=$(echo "$totals" | jq -r '.cache_read_tokens')
 
     # Format time
     local time_spent=$((duration_ms / 1000))
     local hours=$((time_spent / 3600))
     local minutes=$(((time_spent % 3600) / 60))
     local seconds=$((time_spent % 60))
-    local time_formatted=$(printf "%02d:%02d:%02d" $hours $minutes $seconds)
+    local time_formatted
+    time_formatted=$(printf "%02d:%02d:%02d" $hours $minutes $seconds)
 
     local api_time_spent=$((duration_api_ms / 1000))
     local api_hours=$((api_time_spent / 3600))
     local api_minutes=$(((api_time_spent % 3600) / 60))
     local api_seconds=$((api_time_spent % 60))
-    local api_time_formatted=$(printf "%02d:%02d:%02d" $api_hours $api_minutes $api_seconds)
+    local api_time_formatted
+    api_time_formatted=$(printf "%02d:%02d:%02d" $api_hours $api_minutes $api_seconds)
 
     # Output results
     echo "=== Worker Time and Cost Report ==="
@@ -110,17 +115,21 @@ calculate_worker_cost() {
     echo "Context Usage:"
     local model_context_json=""
     while IFS= read -r model_line; do
-        local model_name=$(echo "$model_line" | jq -r '.key')
-        local model_input=$(echo "$model_line" | jq -r '.value.inputTokens // 0')
-        local model_cache_read=$(echo "$model_line" | jq -r '.value.cacheReadInputTokens // 0')
-        local model_cache_create=$(echo "$model_line" | jq -r '.value.cacheCreationInputTokens // 0')
+        local model_name model_input model_cache_read model_cache_create
+        model_name=$(echo "$model_line" | jq -r '.key')
+        model_input=$(echo "$model_line" | jq -r '.value.inputTokens // 0')
+        model_cache_read=$(echo "$model_line" | jq -r '.value.cacheReadInputTokens // 0')
+        model_cache_create=$(echo "$model_line" | jq -r '.value.cacheCreationInputTokens // 0')
 
         # Calculate context tokens (input + cache_read + cache_creation)
         local context_tokens=$((model_input + model_cache_read + model_cache_create))
-        local context_size=$(get_context_size "$model_name")
-        local context_percent=$(echo "scale=1; $context_tokens * 100 / $context_size" | bc 2>/dev/null || echo "0")
+        local context_size
+        context_size=$(get_context_size "$model_name")
+        local context_percent
+        context_percent=$(echo "scale=1; $context_tokens * 100 / $context_size" | bc 2>/dev/null || echo "0")
 
-        local display_name=$(format_model_name "$model_name")
+        local display_name
+        display_name=$(format_model_name "$model_name")
         echo "  [$display_name] Context: ${context_percent}% (${context_tokens}/${context_size} tokens)"
 
         # Build JSON for export
@@ -137,11 +146,13 @@ calculate_worker_cost() {
     # Calculate total context usage for primary model (use the one with highest usage)
     local primary_context_tokens=$((input_tokens + cache_read_tokens + cache_creation_tokens))
     local primary_context_size="${MODEL_CONTEXT_SIZES[default]}"
-    local primary_context_percent=$(echo "scale=1; $primary_context_tokens * 100 / $primary_context_size" | bc 2>/dev/null || echo "0")
+    local primary_context_percent
+    primary_context_percent=$(echo "scale=1; $primary_context_tokens * 100 / $primary_context_size" | bc 2>/dev/null || echo "0")
 
     # Export for use in PR summary
     export WORKER_TIME_SPENT="$time_formatted"
-    export WORKER_TOTAL_COST=$(printf "%.2f" $total_cost)
+    WORKER_TOTAL_COST=$(printf "%.2f" $total_cost)
+    export WORKER_TOTAL_COST
     export WORKER_INPUT_TOKENS=$input_tokens
     export WORKER_OUTPUT_TOKENS=$output_tokens
     export WORKER_CACHE_CREATION_TOKENS=$cache_creation_tokens
@@ -162,33 +173,38 @@ calculate_latest_context_usage() {
     fi
 
     # Find the latest iteration log file with result entries
-    local latest_log=$(find "$log_dir" -type f -name "iteration-*.log" -exec grep -l '"type":"result"' {} \; 2>/dev/null | sort -V | tail -1)
+    local latest_log
+    latest_log=$(find "$log_dir" -type f -name "iteration-*.log" -exec grep -l '"type":"result"' {} \; 2>/dev/null | sort -V | tail -1)
 
     if [ -z "$latest_log" ]; then
         return 1
     fi
 
     # Get the latest result entry
-    local result=$(grep '"type":"result"' "$latest_log" | tail -1)
+    local result
+    result=$(grep '"type":"result"' "$latest_log" | tail -1)
 
     if [ -z "$result" ]; then
         return 1
     fi
 
     # Extract model usage from the result
-    local model_usage=$(echo "$result" | jq -r '.modelUsage | to_entries | sort_by(.value.inputTokens) | reverse | .[0] // empty')
+    local model_usage
+    model_usage=$(echo "$result" | jq -r '.modelUsage | to_entries | sort_by(.value.inputTokens) | reverse | .[0] // empty')
 
     if [ -z "$model_usage" ] || [ "$model_usage" = "null" ]; then
         return 1
     fi
 
-    local model_name=$(echo "$model_usage" | jq -r '.key')
-    local input_tokens=$(echo "$model_usage" | jq -r '.value.inputTokens // 0')
-    local cache_read=$(echo "$model_usage" | jq -r '.value.cacheReadInputTokens // 0')
-    local cache_create=$(echo "$model_usage" | jq -r '.value.cacheCreationInputTokens // 0')
+    local model_name input_tokens cache_read cache_create
+    model_name=$(echo "$model_usage" | jq -r '.key')
+    input_tokens=$(echo "$model_usage" | jq -r '.value.inputTokens // 0')
+    cache_read=$(echo "$model_usage" | jq -r '.value.cacheReadInputTokens // 0')
+    cache_create=$(echo "$model_usage" | jq -r '.value.cacheCreationInputTokens // 0')
 
     local context_tokens=$((input_tokens + cache_read + cache_create))
-    local context_size=$(get_context_size "$model_name")
+    local context_size
+    context_size=$(get_context_size "$model_name")
     local context_percent
     if [ "$context_size" -gt 0 ] 2>/dev/null; then
         context_percent=$(echo "scale=1; $context_tokens * 100 / $context_size" | bc 2>/dev/null || echo "0")
@@ -196,7 +212,8 @@ calculate_latest_context_usage() {
         context_percent="0"
     fi
 
-    local display_name=$(format_model_name "$model_name")
+    local display_name
+    display_name=$(format_model_name "$model_name")
 
     echo "$display_name $context_tokens $context_size $context_percent"
 }

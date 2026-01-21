@@ -7,6 +7,7 @@
 # Required paths: prd.md, workspace
 
 AGENT_TYPE="validation-review"
+export AGENT_TYPE
 
 # Source dependencies
 source "$WIGGUM_HOME/lib/claude/run-claude-once.sh"
@@ -21,7 +22,7 @@ agent_required_paths() {
 # Main entry point
 agent_run() {
     local worker_dir="$1"
-    local project_dir="$2"
+    local _project_dir="$2"  # Reserved for future use
     local max_turns="${3:-5}"
 
     local workspace="$worker_dir/workspace"

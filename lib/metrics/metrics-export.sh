@@ -33,7 +33,8 @@ export_metrics() {
     for worker_dir in "$workers_dir"/worker-*; do
         [ -d "$worker_dir" ] || continue
 
-        local worker_id=$(basename "$worker_dir")
+        local worker_id
+        worker_id=$(basename "$worker_dir")
         local prd_file="$worker_dir/prd.md"
         local log_dir="$worker_dir/logs"
 
@@ -78,7 +79,8 @@ export_metrics() {
                 }' 2>/dev/null)
 
             if [ -n "$totals" ]; then
-                local duration_ms=$(echo "$totals" | jq -r '.duration_ms // 0')
+                local duration_ms
+                duration_ms=$(echo "$totals" | jq -r '.duration_ms // 0')
                 worker_time_seconds=$((duration_ms / 1000))
                 worker_cost=$(echo "$totals" | jq -r '.total_cost // 0')
                 worker_input=$(echo "$totals" | jq -r '.input_tokens // 0')
@@ -169,7 +171,8 @@ export_metrics() {
     local total_hours=$((total_time_seconds / 3600))
     local total_minutes=$(((total_time_seconds % 3600) / 60))
     local total_seconds=$((total_time_seconds % 60))
-    local total_time_formatted=$(printf "%02d:%02d:%02d" $total_hours $total_minutes $total_seconds)
+    local total_time_formatted
+    total_time_formatted=$(printf "%02d:%02d:%02d" $total_hours $total_minutes $total_seconds)
 
     # Build final JSON
     local metrics_json

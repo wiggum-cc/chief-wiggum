@@ -64,7 +64,8 @@ run_ralph_loop() {
     trap _ralph_loop_signal_handler INT TERM
 
     # Record start time
-    local start_time=$(date +%s)
+    local start_time
+    start_time=$(date +%s)
     log "Ralph loop starting (max $max_iterations iterations, $max_turns turns/session)"
 
     # Change to workspace
@@ -92,7 +93,8 @@ run_ralph_loop() {
         fi
 
         # Generate unique session ID for this iteration
-        local session_id=$(uuidgen)
+        local session_id
+        session_id=$(uuidgen)
         last_session_id="$session_id"
 
         # Get user prompt from callback (pass iteration and output_dir for context)
@@ -183,7 +185,8 @@ Please provide your summary based on the conversation so far, following this str
         log "Requesting summary for session $session_id"
 
         # Capture full output to iteration summary file
-        local summary_full=$("$CLAUDE" --resume "$session_id" --max-turns 2 \
+        local summary_full
+        summary_full=$("$CLAUDE" --resume "$session_id" --max-turns 2 \
             --dangerously-skip-permissions -p "$summary_prompt" 2>&1 | \
             tee "$output_dir/summaries/${session_prefix}-$iteration-summary.txt")
 
@@ -191,7 +194,8 @@ Please provide your summary based on the conversation so far, following this str
         log "Summary generation completed (exit code: $summary_exit_code)"
 
         # Extract clean text from JSON stream
-        local summary=$(extract_summary_text "$summary_full")
+        local summary
+        summary=$(extract_summary_text "$summary_full")
 
         # Check if summary is empty
         if [ -z "$summary" ]; then
@@ -228,7 +232,8 @@ Please provide your summary based on the conversation so far, following this str
     done
 
     # Record end time
-    local end_time=$(date +%s)
+    local end_time
+    end_time=$(date +%s)
     local duration=$((end_time - start_time))
 
     if [ $iteration -ge $max_iterations ]; then
