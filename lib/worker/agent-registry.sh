@@ -4,6 +4,7 @@
 # Provides functions to load and run agents from lib/agents/.
 # Each agent is a self-contained script that defines:
 #   - agent_required_paths()  - List of paths that must exist before running
+#   - agent_output_files()    - List of files that must exist (non-empty) after running
 #   - agent_run()             - Main entry point
 #   - agent_cleanup()         - Optional cleanup after completion
 #
@@ -58,6 +59,13 @@ load_agent() {
         return 1
     fi
 
+    # Check for optional agent_output_files function
+    if type agent_output_files &>/dev/null; then
+        log_debug "Agent $agent_type defines output files"
+    else
+        log_debug "Agent $agent_type has no agent_output_files (outputs not validated)"
+    fi
+
     log_debug "Loaded agent: $agent_type"
     return 0
 }
@@ -87,6 +95,43 @@ validate_agent_prerequisites() {
             missing=1
         fi
     done
+
+    return $missing
+}
+
+# Validate agent output files after running
+#
+# Args:
+#   worker_dir - The worker directory containing output files
+#
+# Returns: 0 if all output files exist and are non-empty, 1 otherwise
+validate_agent_outputs() {
+    local worker_dir="$1"
+
+    # If agent doesn't define output files, skip validation
+    if ! type agent_output_files &>/dev/null; then
+        log_debug "No agent_output_files defined - skipping output validation"
+        return 0
+    fi
+
+    local files
+    files=$(agent_output_files)
+
+    local missing=0
+    for file in $files; do
+        local full_path="$worker_dir/$file"
+        if [ ! -f "$full_path" ]; then
+            log_error "Agent output file missing: $full_path"
+            missing=1
+        elif [ ! -s "$full_path" ]; then
+            log_error "Agent output file is empty: $full_path"
+            missing=1
+        fi
+    done
+
+    if [ $missing -eq 0 ]; then
+        log_debug "All agent output files validated successfully"
+    fi
 
     return $missing
 }
@@ -143,6 +188,14 @@ run_agent() {
     # Run the agent
     agent_run "$worker_dir" "$project_dir" "$@"
     local exit_code=$?
+
+    # Validate output files exist and are non-empty
+    if ! validate_agent_outputs "$worker_dir"; then
+        log_error "Agent output validation failed"
+        if [ $exit_code -eq 0 ]; then
+            exit_code=1  # Override success if outputs are missing/empty
+        fi
+    fi
 
     # Call agent-specific cleanup if defined
     if type agent_cleanup &>/dev/null; then
@@ -208,6 +261,14 @@ run_sub_agent() {
     agent_run "$worker_dir" "$project_dir" "$@"
     local exit_code=$?
 
+    # Validate output files exist and are non-empty
+    if ! validate_agent_outputs "$worker_dir"; then
+        log_error "Sub-agent output validation failed"
+        if [ $exit_code -eq 0 ]; then
+            exit_code=1  # Override success if outputs are missing/empty
+        fi
+    fi
+
     # Call agent-specific cleanup if defined
     if type agent_cleanup &>/dev/null; then
         log_debug "Running agent cleanup"
@@ -240,7 +301,7 @@ list_agents() {
 # Args:
 #   agent_type - The agent type
 #
-# Returns: Agent info (type, required paths)
+# Returns: Agent info (type, required paths, output files)
 get_agent_info() {
     local agent_type="$1"
 
@@ -253,6 +314,15 @@ get_agent_info() {
     agent_required_paths | while read -r path; do
         echo "  - $path"
     done
+
+    echo "Output files:"
+    if type agent_output_files &>/dev/null; then
+        agent_output_files | while read -r file; do
+            echo "  - $file"
+        done
+    else
+        echo "  (none defined)"
+    fi
 
     if type agent_cleanup &>/dev/null; then
         echo "Has cleanup: yes"

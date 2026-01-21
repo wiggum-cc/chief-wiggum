@@ -11,6 +11,8 @@
 # REQUIRED_PATHS:
 #   - prd.md : Product Requirements Document containing tasks to execute
 # NOTE: workspace is created by this agent, not required in advance
+# OUTPUT_FILES:
+#   - worker.log : Main worker log with agent lifecycle events
 # =============================================================================
 
 AGENT_TYPE="task-worker"
@@ -22,6 +24,14 @@ export AGENT_DESCRIPTION
 agent_required_paths() {
     echo "prd.md"
     # Note: workspace is created by this agent, not required in advance
+}
+
+# Output files that must exist (non-empty) after agent completes
+agent_output_files() {
+    echo "worker.log"
+    # Note: logs/*.log files are created per iteration
+    # Note: summaries/summary.txt is optional (only on success)
+    # Note: validation-result.txt is created by validation-review sub-agent
 }
 
 # Source dependencies

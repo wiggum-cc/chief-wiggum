@@ -10,6 +10,8 @@
 # REQUIRED_PATHS:
 #   - prd.md      : Product Requirements Document to validate against
 #   - workspace   : Directory containing the completed work to review
+# OUTPUT_FILES:
+#   - validation-result.txt : Contains PASS, FAIL, or UNKNOWN
 # =============================================================================
 
 AGENT_TYPE="validation-review"
@@ -21,6 +23,11 @@ export AGENT_DESCRIPTION
 agent_required_paths() {
     echo "prd.md"
     echo "workspace"
+}
+
+# Output files that must exist (non-empty) after agent completes
+agent_output_files() {
+    echo "validation-result.txt"
 }
 
 # Source dependencies

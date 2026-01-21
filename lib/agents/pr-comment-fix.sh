@@ -10,6 +10,8 @@
 # REQUIRED_PATHS:
 #   - task-comments.md : File containing PR review comments to address
 #   - workspace        : Directory containing the code to modify
+# OUTPUT_FILES:
+#   - comment-status.md : Status tracking file for addressed comments
 # =============================================================================
 
 AGENT_TYPE="pr-comment-fix"
@@ -21,6 +23,11 @@ export AGENT_DESCRIPTION
 agent_required_paths() {
     echo "task-comments.md"
     echo "workspace"
+}
+
+# Output files that must exist (non-empty) after agent completes
+agent_output_files() {
+    echo "comment-status.md"
 }
 
 # Source dependencies
