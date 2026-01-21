@@ -43,6 +43,314 @@ get_failed_tasks() {
         }' "$kanban"
 }
 
+# Get all tasks (any status) with their metadata
+# Output format: task_id|status|priority|dependencies
+get_all_tasks_with_metadata() {
+    local kanban="$1"
+    awk '
+        /^- \[.\] \*\*\[[A-Za-z]{2,8}-[0-9]+\]\*\*/ {
+            # Extract status
+            match($0, /\[.\]/)
+            status = substr($0, RSTART+1, 1)
+
+            # Extract task ID
+            match($0, /\*\*\[[A-Za-z]{2,8}-[0-9]+\]\*\*/)
+            task_id = substr($0, RSTART+3, RLENGTH-6)
+
+            current_task = task_id
+            tasks[task_id] = status
+            priority[task_id] = "MEDIUM"  # default
+            deps[task_id] = ""
+            next
+        }
+        current_task && /^  - Priority:/ {
+            sub(/^  - Priority: */, "")
+            gsub(/[[:space:]]+$/, "")
+            priority[current_task] = $0
+            next
+        }
+        current_task && /^  - Dependencies:/ {
+            sub(/^  - Dependencies: */, "")
+            gsub(/[[:space:]]+$/, "")
+            if ($0 != "none" && $0 != "None" && $0 != "") {
+                deps[current_task] = $0
+            }
+            next
+        }
+        current_task && /^- \[/ {
+            current_task = ""
+        }
+        current_task && /^## / {
+            current_task = ""
+        }
+        END {
+            for (t in tasks) {
+                print t "|" tasks[t] "|" priority[t] "|" deps[t]
+            }
+        }
+    ' "$kanban"
+}
+
+# Get task dependencies as "task_id:dep1,dep2,dep3" lines
+get_task_dependencies() {
+    local kanban="$1"
+    local task_id="$2"
+
+    get_all_tasks_with_metadata "$kanban" | awk -F'|' -v task="$task_id" '
+        $1 == task { print $4 }
+    '
+}
+
+# Get task priority (HIGH, MEDIUM, LOW)
+get_task_priority() {
+    local kanban="$1"
+    local task_id="$2"
+
+    get_all_tasks_with_metadata "$kanban" | awk -F'|' -v task="$task_id" '
+        $1 == task { print $3 }
+    '
+}
+
+# Get task status character (space, =, x, *)
+get_task_status() {
+    local kanban="$1"
+    local task_id="$2"
+
+    get_all_tasks_with_metadata "$kanban" | awk -F'|' -v task="$task_id" '
+        $1 == task { print $2 }
+    '
+}
+
+# Check if a task's dependencies are satisfied (all deps completed)
+# Returns 0 if satisfied, 1 if not
+are_dependencies_satisfied() {
+    local kanban="$1"
+    local task_id="$2"
+
+    local deps
+    deps=$(get_task_dependencies "$kanban" "$task_id")
+
+    # No dependencies = satisfied
+    if [ -z "$deps" ]; then
+        return 0
+    fi
+
+    # Parse comma-separated dependencies
+    local all_metadata
+    all_metadata=$(get_all_tasks_with_metadata "$kanban")
+
+    # Check each dependency using parameter expansion to avoid IFS issues
+    local dep
+    local dep_status
+    local remaining="$deps"
+    while [ -n "$remaining" ]; do
+        # Extract first dependency (before comma)
+        dep="${remaining%%,*}"
+        # Remove processed dependency from remaining
+        if [ "$dep" = "$remaining" ]; then
+            remaining=""
+        else
+            remaining="${remaining#*,}"
+        fi
+        # Trim whitespace
+        dep=$(echo "$dep" | xargs)
+        [ -z "$dep" ] && continue
+
+        # Get status of dependency
+        dep_status=$(echo "$all_metadata" | awk -F'|' -v d="$dep" '$1 == d { print $2 }')
+
+        # If dependency is not complete (x), then not satisfied
+        if [ "$dep_status" != "x" ]; then
+            return 1
+        fi
+    done
+
+    return 0
+}
+
+# Get tasks that are ready to run (pending, with satisfied dependencies)
+# Sorted by priority: HIGH > MEDIUM > LOW
+get_ready_tasks() {
+    local kanban="$1"
+
+    local all_metadata
+    all_metadata=$(get_all_tasks_with_metadata "$kanban")
+
+    # Get all pending tasks (status = space)
+    local pending_tasks
+    pending_tasks=$(echo "$all_metadata" | awk -F'|' '$2 == " " { print $1 }')
+
+    # Filter to tasks with satisfied dependencies and sort by priority
+    for task_id in $pending_tasks; do
+        if are_dependencies_satisfied "$kanban" "$task_id"; then
+            local priority
+            priority=$(echo "$all_metadata" | awk -F'|' -v t="$task_id" '$1 == t { print $3 }')
+            # Output format: priority_num|task_id (for sorting)
+            case "$priority" in
+                HIGH)   echo "1|$task_id" ;;
+                MEDIUM) echo "2|$task_id" ;;
+                LOW)    echo "3|$task_id" ;;
+                *)      echo "2|$task_id" ;;  # default to medium
+            esac
+        fi
+    done | sort -t'|' -k1,1n | cut -d'|' -f2
+}
+
+# Get blocked tasks (pending but dependencies not satisfied)
+get_blocked_tasks() {
+    local kanban="$1"
+
+    local all_metadata
+    all_metadata=$(get_all_tasks_with_metadata "$kanban")
+
+    # Get all pending tasks
+    local pending_tasks
+    pending_tasks=$(echo "$all_metadata" | awk -F'|' '$2 == " " { print $1 }')
+
+    for task_id in $pending_tasks; do
+        if ! are_dependencies_satisfied "$kanban" "$task_id"; then
+            echo "$task_id"
+        fi
+    done
+}
+
+# Get unsatisfied dependencies for a task
+get_unsatisfied_dependencies() {
+    local kanban="$1"
+    local task_id="$2"
+
+    local deps
+    deps=$(get_task_dependencies "$kanban" "$task_id")
+
+    if [ -z "$deps" ]; then
+        return
+    fi
+
+    local all_metadata
+    all_metadata=$(get_all_tasks_with_metadata "$kanban")
+
+    # Parse using parameter expansion to avoid IFS issues
+    local dep
+    local dep_status
+    local remaining="$deps"
+    while [ -n "$remaining" ]; do
+        dep="${remaining%%,*}"
+        if [ "$dep" = "$remaining" ]; then
+            remaining=""
+        else
+            remaining="${remaining#*,}"
+        fi
+        dep=$(echo "$dep" | xargs)
+        [ -z "$dep" ] && continue
+
+        dep_status=$(echo "$all_metadata" | awk -F'|' -v d="$dep" '$1 == d { print $2 }')
+
+        if [ "$dep_status" != "x" ]; then
+            echo "$dep"
+        fi
+    done
+}
+
+# Detect circular dependencies
+# Returns 0 if no cycles, 1 if cycles detected (prints cycle path)
+detect_circular_dependencies() {
+    local kanban="$1"
+
+    local all_metadata
+    all_metadata=$(get_all_tasks_with_metadata "$kanban")
+
+    local tasks
+    tasks=$(echo "$all_metadata" | cut -d'|' -f1)
+
+    # Create temp files for cycle detection
+    local visited_file=$(mktemp)
+    local stack_file=$(mktemp)
+    local cycle_file=$(mktemp)
+
+    # Cleanup function
+    _cleanup_cycle_files() {
+        rm -f "$visited_file" "$stack_file" "$cycle_file"
+    }
+
+    # DFS using iterative approach with explicit stack to avoid subshell issues
+    # We use a simple Kahn's algorithm approach instead
+    local -A in_degree
+    local -A adj_list
+
+    # Initialize
+    for task_id in $tasks; do
+        in_degree[$task_id]=0
+        adj_list[$task_id]=""
+    done
+
+    # Build graph
+    for task_id in $tasks; do
+        local deps
+        deps=$(echo "$all_metadata" | awk -F'|' -v t="$task_id" '$1 == t { print $4 }')
+        if [ -n "$deps" ]; then
+            # Parse using parameter expansion to avoid IFS issues
+            local dep
+            local remaining="$deps"
+            while [ -n "$remaining" ]; do
+                dep="${remaining%%,*}"
+                if [ "$dep" = "$remaining" ]; then
+                    remaining=""
+                else
+                    remaining="${remaining#*,}"
+                fi
+                dep=$(echo "$dep" | xargs)
+                [ -z "$dep" ] && continue
+                # task_id depends on dep, so edge is dep -> task_id
+                if [ -n "${in_degree[$dep]+x}" ]; then
+                    adj_list[$dep]="${adj_list[$dep]} $task_id"
+                    ((in_degree[$task_id]++))
+                fi
+            done
+        fi
+    done
+
+    # Kahn's algorithm - if we can't visit all nodes, there's a cycle
+    local queue=()
+    local visited_count=0
+    local total_count=0
+
+    for task_id in $tasks; do
+        ((total_count++))
+        if [ "${in_degree[$task_id]}" -eq 0 ]; then
+            queue+=("$task_id")
+        fi
+    done
+
+    while [ ${#queue[@]} -gt 0 ]; do
+        local node="${queue[0]}"
+        queue=("${queue[@]:1}")
+        ((visited_count++))
+
+        for neighbor in ${adj_list[$node]}; do
+            ((in_degree[$neighbor]--))
+            if [ "${in_degree[$neighbor]}" -eq 0 ]; then
+                queue+=("$neighbor")
+            fi
+        done
+    done
+
+    _cleanup_cycle_files
+
+    if [ "$visited_count" -ne "$total_count" ]; then
+        # Find tasks that are part of the cycle
+        local cycle_tasks=""
+        for task_id in $tasks; do
+            if [ "${in_degree[$task_id]}" -gt 0 ]; then
+                cycle_tasks="$cycle_tasks $task_id"
+            fi
+        done
+        echo "Circular dependency involving:$cycle_tasks"
+        return 1
+    fi
+
+    return 0
+}
+
 extract_task() {
     local task_id="$1"
     local kanban="$2"

@@ -36,11 +36,14 @@ Examples:
   wiggum run --max-iters 100 --max-turns 30  # Customize iteration/turn limits
 
 Behavior:
-  - Chief assigns pending tasks [ ] to workers
+  - Chief assigns pending tasks [ ] to workers based on dependency graph
+  - Tasks are scheduled by priority: HIGH > MEDIUM > LOW
+  - Tasks with unsatisfied dependencies are blocked until deps complete
   - Tasks are marked in-progress [=] when assigned
   - Workers mark tasks complete [x] when done
   - Chief waits until all tasks are complete
   - New workers spawn as old ones finish (up to max)
+  - Circular dependencies are detected and reported at startup
 
 EOF
 }
@@ -238,6 +241,16 @@ main() {
     fi
     log "Kanban validation passed"
 
+    # Check for circular dependencies
+    log "Checking for circular dependencies..."
+    local cycle_path
+    if cycle_path=$(detect_circular_dependencies "$RALPH_DIR/kanban.md"); then
+        log "No circular dependencies detected"
+    else
+        log_error "Circular dependency detected: $cycle_path"
+        exit $EXIT_RUN_VALIDATION_FAILED
+    fi
+
     # Check for clean git status
     if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
         log_error "Git working directory is not clean. Please commit or stash your changes before running."
@@ -330,8 +343,10 @@ main() {
     # Main orchestration loop
     while true; do
         ((iteration++))
-        # Get incomplete tasks ([ ] status)
-        local pending_tasks=$(get_todo_tasks "$RALPH_DIR/kanban.md")
+        # Get tasks ready to run (pending with satisfied dependencies, sorted by priority)
+        local ready_tasks=$(get_ready_tasks "$RALPH_DIR/kanban.md")
+        local blocked_tasks=$(get_blocked_tasks "$RALPH_DIR/kanban.md")
+        local all_pending=$(get_todo_tasks "$RALPH_DIR/kanban.md")
 
         # Clean up finished workers
         for pid in "${!active_workers[@]}"; do
@@ -342,20 +357,23 @@ main() {
         done
 
         # Check if we're done (no pending tasks and no active workers)
-        if [ -z "$pending_tasks" ] && [ ${#active_workers[@]} -eq 0 ]; then
+        if [ -z "$all_pending" ] && [ ${#active_workers[@]} -eq 0 ]; then
             log "All tasks completed!"
             break
         fi
 
-        # Spawn workers for pending tasks (up to MAX_WORKERS limit)
-        for task_id in $pending_tasks; do
+        # Spawn workers for ready tasks (up to MAX_WORKERS limit)
+        for task_id in $ready_tasks; do
             # Check if we're at max capacity
             if [ ${#active_workers[@]} -ge $MAX_WORKERS ]; then
                 break
             fi
 
+            # Get task priority for logging
+            local task_priority=$(get_task_priority "$RALPH_DIR/kanban.md" "$task_id")
+
             # Mark task as in-progress in kanban
-            log "Assigning $task_id to new worker"
+            log "Assigning $task_id (Priority: ${task_priority:-MEDIUM}) to new worker"
             if ! update_kanban_status "$RALPH_DIR/kanban.md" "$task_id" "="; then
                 log_error "Failed to mark $task_id as in-progress"
                 continue
@@ -378,25 +396,40 @@ main() {
         done
 
         # Show status and recent activity
-        if [ ${#active_workers[@]} -gt 0 ]; then
-            echo ""
-            echo "=== Status Update (iteration $iteration) ==="
-            echo "Active workers: ${#active_workers[@]}/$MAX_WORKERS"
+        echo ""
+        echo "=== Status Update (iteration $iteration) ==="
+        echo "Active workers: ${#active_workers[@]}/$MAX_WORKERS"
 
-            # Show which tasks are being worked on
+        # Show which tasks are being worked on
+        if [ ${#active_workers[@]} -gt 0 ]; then
             echo "In Progress:"
             for pid in "${!active_workers[@]}"; do
                 echo "  - ${active_workers[$pid]} (PID: $pid)"
             done
-
-            # Show recent log activity (last 10 lines)
-            if [ -f "$RALPH_DIR/logs/workers.log" ]; then
-                echo ""
-                echo "Recent activity:"
-                tail -n 10 "$RALPH_DIR/logs/workers.log" 2>/dev/null | sed 's/^/  /'
-            fi
-            echo "=========================================="
         fi
+
+        # Show blocked tasks waiting on dependencies
+        if [ -n "$blocked_tasks" ]; then
+            echo "Blocked (waiting on dependencies):"
+            for task_id in $blocked_tasks; do
+                local waiting_on=$(get_unsatisfied_dependencies "$RALPH_DIR/kanban.md" "$task_id" | tr '\n' ',' | sed 's/,$//')
+                echo "  - $task_id (waiting on: $waiting_on)"
+            done
+        fi
+
+        # Show ready tasks waiting for worker slots
+        local ready_count=$(echo "$ready_tasks" | grep -c . 2>/dev/null || echo 0)
+        if [ "$ready_count" -gt 0 ] && [ ${#active_workers[@]} -ge $MAX_WORKERS ]; then
+            echo "Ready (waiting for worker slots): $ready_count tasks"
+        fi
+
+        # Show recent log activity (last 10 lines)
+        if [ -f "$RALPH_DIR/logs/workers.log" ]; then
+            echo ""
+            echo "Recent activity:"
+            tail -n 10 "$RALPH_DIR/logs/workers.log" 2>/dev/null | sed 's/^/  /'
+        fi
+        echo "=========================================="
 
         # Wait a bit before checking again
         sleep 5
