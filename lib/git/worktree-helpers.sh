@@ -34,6 +34,15 @@ setup_worktree() {
 
     local workspace="$worker_dir/workspace"
 
+    # Check if workspace already exists (resume case)
+    if [ -d "$workspace" ]; then
+        log_debug "Worktree already exists at $workspace, reusing"
+        WORKTREE_PATH="$workspace"
+        export WORKER_WORKSPACE="$workspace"
+        export CLAUDE_HOOKS_CONFIG="$WIGGUM_HOME/hooks/worker-hooks.json"
+        return 0
+    fi
+
     log_debug "Creating git worktree at $workspace"
     git worktree add "$workspace" HEAD 2>&1 | tee -a "$worker_dir/worker.log"
 

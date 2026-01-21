@@ -137,7 +137,7 @@ agent_run() {
     # Run validation-review as a nested sub-agent
     if [ -d "$workspace" ]; then
         log "Running validation review on completed work"
-        run_sub_agent "validation-review" "$worker_dir" "$project_dir" 5
+        run_sub_agent "validation-review" "$worker_dir" "$project_dir" 10
     fi
 
     # === FINALIZATION PHASE ===

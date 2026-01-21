@@ -126,7 +126,7 @@ resume_from_validation() {
 
     # Run validation-review as top-level agent (handles PID internally)
     # Note: using 0 for monitor_interval since validation is quick and read-only
-    run_agent "validation-review" "$worker_dir" "$PROJECT_DIR" 0 5
+    run_agent "validation-review" "$worker_dir" "$PROJECT_DIR" 0 10
 
     # Check validation result
     if ! check_validation_result "$worker_dir"; then
