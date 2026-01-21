@@ -6,6 +6,7 @@ export interface Task {
   status: "pending" | "in_progress" | "complete" | "failed";
   description: string;
   priority: "CRITICAL" | "HIGH" | "MEDIUM" | "LOW";
+  complexity?: "HIGH" | "MEDIUM" | "LOW";
   dependencies: string[];
   scope: string[];
   outOfScope: string[];
@@ -77,6 +78,12 @@ export async function parseKanban(filePath: string): Promise<Task[]> {
         const priority = fieldLine.slice(9).trim().toUpperCase();
         if (["CRITICAL", "HIGH", "MEDIUM", "LOW"].includes(priority)) {
           currentTask.priority = priority as Task["priority"];
+        }
+        currentField = null;
+      } else if (fieldLine.startsWith("Complexity:")) {
+        const complexity = fieldLine.slice(11).trim().toUpperCase();
+        if (["HIGH", "MEDIUM", "LOW"].includes(complexity)) {
+          currentTask.complexity = complexity as Task["complexity"];
         }
         currentField = null;
       } else if (fieldLine.startsWith("Dependencies:")) {

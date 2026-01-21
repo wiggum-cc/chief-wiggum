@@ -41,6 +41,7 @@ class Task:
     status: TaskStatus
     description: str = ""
     priority: str = "MEDIUM"  # CRITICAL, HIGH, MEDIUM, LOW
+    complexity: str | None = None  # HIGH, MEDIUM, LOW (optional)
     dependencies: list[str] = field(default_factory=list)
     scope: list[str] = field(default_factory=list)
     out_of_scope: list[str] = field(default_factory=list)

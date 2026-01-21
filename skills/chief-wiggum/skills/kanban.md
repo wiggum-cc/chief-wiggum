@@ -22,6 +22,7 @@ Each task must follow this structure:
 - [ ] **[TASK-ID]** Brief task description
   - Description: Detailed description of what needs to be done
   - Priority: HIGH|MEDIUM|LOW
+  - Complexity: HIGH|MEDIUM|LOW (optional)
   - Dependencies: TASK-ID-1, TASK-ID-2 | none
 ```
 
@@ -53,6 +54,12 @@ Each task must follow this structure:
 - **HIGH**: Blocking other work, critical bugs, foundational features
 - **MEDIUM**: Important features, non-critical bugs, enhancements
 - **LOW**: Nice-to-haves, optimizations, documentation
+
+## Complexity Levels (Optional)
+
+- **HIGH**: Large scope, many files, architectural changes, significant risk
+- **MEDIUM**: Moderate scope, several files, standard implementation
+- **LOW**: Small scope, few files, straightforward changes
 
 ## Instructions
 
@@ -149,6 +156,7 @@ Would you like me to add this to your `.ralph/kanban.md` file?
 - [ ] **[FEATURE-042]** Implement user dashboard
   - Description: Create user dashboard with profile info, activity feed, and settings
   - Priority: HIGH
+  - Complexity: HIGH
   - Dependencies: TASK-001, TASK-003
   - Scope:
     - Create dashboard layout component

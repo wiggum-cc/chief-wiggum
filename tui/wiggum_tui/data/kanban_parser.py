@@ -71,6 +71,11 @@ def parse_kanban(file_path: Path) -> list[Task]:
                 if priority in ("CRITICAL", "HIGH", "MEDIUM", "LOW"):
                     current_task.priority = priority
                 current_field = None
+            elif field_line.startswith("Complexity:"):
+                complexity = field_line[11:].strip().upper()
+                if complexity in ("HIGH", "MEDIUM", "LOW"):
+                    current_task.complexity = complexity
+                current_field = None
             elif field_line.startswith("Dependencies:"):
                 deps = field_line[13:].strip()
                 if deps and deps.lower() != "none":

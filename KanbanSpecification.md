@@ -34,6 +34,7 @@ Each task entry follows this exact structure:
 - [ ] **[TASK-ID]** Brief task description
   - Description: Detailed description of what needs to be done
   - Priority: CRITICAL|HIGH|MEDIUM|LOW
+  - Complexity: HIGH|MEDIUM|LOW (optional)
   - Dependencies: TASK-ID-1, TASK-ID-2 | none
 ```
 
@@ -45,6 +46,7 @@ Tasks can include additional optional fields for more detailed specifications:
 - [ ] **[TASK-ID]** Brief task description
   - Description: Detailed description of what needs to be done
   - Priority: CRITICAL|HIGH|MEDIUM|LOW
+  - Complexity: HIGH|MEDIUM|LOW
   - Dependencies: TASK-ID-1, TASK-ID-2 | none
   - Scope:
     - Specific item to implement or deliver
@@ -109,6 +111,17 @@ Tasks use markdown checkboxes to indicate their status:
 - Valid values: `CRITICAL`, `HIGH`, `MEDIUM`, `LOW`
 - Used for task ordering and commit metadata
 - Case-sensitive (must be uppercase)
+
+### Complexity (Optional)
+
+- Indented with 2 spaces: `  - Complexity:`
+- Valid values: `HIGH`, `MEDIUM`, `LOW`
+- Indicates the estimated effort and scope of the task
+- Case-sensitive (must be uppercase)
+- Guidelines:
+  - **HIGH**: Large scope, many files, architectural changes, significant risk
+  - **MEDIUM**: Moderate scope, several files, standard implementation
+  - **LOW**: Small scope, few files, straightforward changes
 
 ### Dependencies (Required)
 
@@ -213,6 +226,7 @@ If no Scope is provided, default checklist items are generated:
 - [ ] **[FEATURE-042]** Implement user authentication system
   - Description: Add JWT-based authentication with login, logout, and token refresh endpoints
   - Priority: HIGH
+  - Complexity: HIGH
   - Dependencies: TASK-001, TASK-002
   - Scope:
     - Create authentication middleware
@@ -390,7 +404,8 @@ Workers should never manually edit the kanban file while Chief Wiggum is running
 ## Version History
 
 - **v1.0** (Initial): Basic task structure with Description, Priority, Dependencies
-- **v1.1** (Current): Added Scope, Out of Scope, and Acceptance Criteria fields
+- **v1.1**: Added Scope, Out of Scope, and Acceptance Criteria fields
+- **v1.2** (Current): Added optional Complexity field (HIGH/MEDIUM/LOW)
 
 ## See Also
 
