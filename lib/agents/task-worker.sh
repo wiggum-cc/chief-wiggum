@@ -50,6 +50,7 @@ source "$WIGGUM_HOME/lib/core/exit-codes.sh"
 # Save references to sourced kanban functions before defining wrappers
 eval "_kanban_mark_done() $(declare -f update_kanban | sed '1d')"
 eval "_kanban_mark_failed() $(declare -f update_kanban_failed | sed '1d')"
+eval "_kanban_mark_pending_approval() $(declare -f update_kanban_pending_approval | sed '1d')"
 
 # Track plan file path for user prompt callback
 _TASK_PLAN_FILE=""
@@ -382,18 +383,28 @@ _update_kanban_status() {
     local worker_id
     worker_id=$(basename "$worker_dir")
 
+    # Get PR URL from file if not passed
+    if [ -f "$worker_dir/pr_url.txt" ]; then
+        pr_url=$(cat "$worker_dir/pr_url.txt")
+    fi
+
     if [ "$final_status" = "COMPLETE" ]; then
-        log "Marking task $task_id as complete in kanban"
-        if ! _kanban_mark_done "$project_dir/.ralph/kanban.md" "$task_id"; then
-            log_error "Failed to update kanban.md after retries"
+        # If PR was created, mark as Pending Approval [P] - wiggum review sync will mark [x] when merged
+        # If no PR (gh CLI unavailable), mark as complete [x] directly
+        if [ -n "$pr_url" ] && [ "$pr_url" != "N/A" ]; then
+            log "Marking task $task_id as pending approval [P] in kanban (PR: $pr_url)"
+            if ! _kanban_mark_pending_approval "$project_dir/.ralph/kanban.md" "$task_id"; then
+                log_error "Failed to update kanban.md after retries"
+            fi
+        else
+            log "Marking task $task_id as complete [x] in kanban (no PR created)"
+            if ! _kanban_mark_done "$project_dir/.ralph/kanban.md" "$task_id"; then
+                log_error "Failed to update kanban.md after retries"
+            fi
         fi
 
-        # Append to changelog only on success
+        # Append to changelog
         log "Appending to changelog"
-        # Get PR URL if it exists
-        if [ -f "$worker_dir/pr_url.txt" ]; then
-            pr_url=$(cat "$worker_dir/pr_url.txt")
-        fi
 
         # Get detailed summary if it exists
         local summary=""
@@ -408,7 +419,7 @@ _update_kanban_status() {
 
         log "Task worker $worker_id completed task $task_id"
     else
-        log_error "Marking task $task_id as FAILED in kanban"
+        log_error "Marking task $task_id as FAILED [*] in kanban"
         if ! _kanban_mark_failed "$project_dir/.ralph/kanban.md" "$task_id"; then
             log_error "Failed to update kanban.md after retries"
         fi

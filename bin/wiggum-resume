@@ -144,9 +144,16 @@ resume_from_validation() {
     if git_finalize_worker "$worker_dir" "$task_id" "$PROJECT_DIR"; then
         echo "PR URL: $GIT_PR_URL"
 
-        # Update kanban to done
-        if update_kanban "$PROJECT_DIR/.ralph/kanban.md" "$task_id"; then
-            echo "Task $task_id marked as complete in kanban"
+        # If PR was created, mark as Pending Approval [P] - wiggum review sync will mark [x] when merged
+        # If no PR (gh CLI unavailable), mark as complete [x] directly
+        if [ -n "$GIT_PR_URL" ] && [ "$GIT_PR_URL" != "N/A" ]; then
+            if update_kanban_pending_approval "$PROJECT_DIR/.ralph/kanban.md" "$task_id"; then
+                echo "Task $task_id marked as pending approval [P] in kanban"
+            fi
+        else
+            if update_kanban "$PROJECT_DIR/.ralph/kanban.md" "$task_id"; then
+                echo "Task $task_id marked as complete [x] in kanban (no PR)"
+            fi
         fi
 
         return 0

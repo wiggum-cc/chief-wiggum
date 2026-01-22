@@ -48,8 +48,9 @@ Behavior:
   - Tasks are scheduled by priority: HIGH > MEDIUM > LOW
   - Tasks with unsatisfied dependencies are blocked until deps complete
   - Tasks are marked in-progress [=] when assigned
-  - Workers mark tasks complete [x] when done
-  - Chief waits until all tasks are complete
+  - Workers mark tasks pending approval [P] when PR is created
+  - Periodic sync updates [P] -> [x] when PRs are merged
+  - Chief waits until all tasks are complete [x]
   - New workers spawn as old ones finish (up to max)
   - Circular dependencies are detected and reported at startup
 
