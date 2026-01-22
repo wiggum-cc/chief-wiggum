@@ -107,10 +107,12 @@ do_start() {
     export WIGGUM_MAX_ITERATIONS="$MAX_ITERATIONS"
     export WIGGUM_MAX_TURNS="$MAX_TURNS"
 
-    (
-        # Run agent in subshell to isolate it
-        run_agent "task-worker" "$worker_dir" "$PROJECT_DIR"
-    ) >> "$RALPH_DIR/logs/workers.log" 2>&1 &
+    # Use setsid to create a new session/process group for the worker
+    # This prevents SIGINT from the orchestrator from killing workers
+    setsid bash -c '
+        source "$WIGGUM_HOME/lib/worker/agent-registry.sh"
+        run_agent "task-worker" "'"$worker_dir"'" "'"$PROJECT_DIR"'"
+    ' >> "$RALPH_DIR/logs/workers.log" 2>&1 &
 
     # Wait briefly for agent.pid to be created
     local wait_count=0
