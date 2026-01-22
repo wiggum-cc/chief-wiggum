@@ -6,6 +6,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TARGET="${HOME}/.claude/chief-wiggum"
+SKILLS_TARGET="${HOME}/.claude/skills"
 
 echo "Installing Chief Wiggum to $TARGET (symlink mode)"
 
@@ -21,8 +22,34 @@ mkdir -p "$(dirname "$TARGET")"
 # Create symlink to source directory
 ln -s "$SCRIPT_DIR" "$TARGET"
 
-echo ""
 echo "Symlinked $SCRIPT_DIR -> $TARGET"
+
+# Install skills to ~/.claude/skills
+echo ""
+echo "Installing skills to $SKILLS_TARGET"
+
+mkdir -p "$SKILLS_TARGET"
+
+# Link each skill directory
+for skill_dir in "$SCRIPT_DIR/skills"/*/; do
+    if [[ -d "$skill_dir" ]]; then
+        skill_name=$(basename "$skill_dir")
+        # Skip the old chief-wiggum nested structure if it exists
+        if [[ "$skill_name" == "chief-wiggum" ]]; then
+            continue
+        fi
+        skill_link="$SKILLS_TARGET/$skill_name"
+        if [[ -e "$skill_link" ]]; then
+            echo "  Removing existing $skill_link"
+            rm -rf "$skill_link"
+        fi
+        ln -s "$skill_dir" "$skill_link"
+        echo "  Linked $skill_name -> $skill_link"
+    fi
+done
+
+echo ""
+echo "Installation complete!"
 echo ""
 echo "Next steps:"
 echo "  1. Add $TARGET/bin to your PATH:"

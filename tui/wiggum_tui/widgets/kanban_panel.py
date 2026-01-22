@@ -125,6 +125,7 @@ class TaskDetailModal(ModalScreen[None]):
     BINDINGS = [
         Binding("escape", "close", "Close"),
         Binding("enter", "close", "Close"),
+        Binding("q", "close", "Close"),
     ]
 
     def __init__(self, task: Task) -> None:
@@ -390,6 +391,13 @@ class KanbanPanel(Widget):
         self.kanban_path = ralph_dir / "kanban.md"
         self._tasks_list: list[Task] = []
         self._timer = None
+        self._last_data_hash: str = ""
+
+    def _compute_data_hash(self, tasks: list[Task]) -> str:
+        """Compute a hash of task data for change detection."""
+        # Include fields that affect display (excluding start_time which changes constantly)
+        data = [(t.id, t.title, t.status.value, t.priority, t.is_running) for t in tasks]
+        return str(data)
 
     def on_mount(self) -> None:
         """Start the timer for updating running task durations."""
@@ -445,8 +453,15 @@ class KanbanPanel(Widget):
         self._tasks_list = parse_kanban_with_status(self.kanban_path, self.ralph_dir)
 
     def refresh_data(self) -> None:
-        """Refresh task data and re-render."""
+        """Refresh task data and re-render only if data changed."""
         self._load_tasks()
+
+        # Check if data actually changed
+        new_hash = self._compute_data_hash(self._tasks_list)
+        if new_hash == self._last_data_hash:
+            return  # No change, skip refresh
+        self._last_data_hash = new_hash
+
         grouped = group_tasks_by_status(self._tasks_list)
 
         # Update header

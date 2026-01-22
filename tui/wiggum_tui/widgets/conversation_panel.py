@@ -131,6 +131,20 @@ class ConversationPanel(Widget):
         self._workers_list: list[tuple[str, str]] = []  # (id, label)
         self.current_worker: str | None = None
         self.conversation: Conversation | None = None
+        self._last_data_hash: str = ""
+
+    def _compute_data_hash(self, conversation: Conversation | None) -> str:
+        """Compute a hash of conversation data for change detection."""
+        if not conversation:
+            return ""
+        # Include turn count and tool call count for quick change detection
+        data = (
+            len(conversation.turns),
+            sum(len(t.tool_calls) for t in conversation.turns),
+            len(conversation.results),
+            sum(r.total_cost_usd for r in conversation.results),
+        )
+        return str(data)
 
     def compose(self) -> ComposeResult:
         self._load_workers()
@@ -183,12 +197,38 @@ class ConversationPanel(Widget):
         self.current_worker = worker_id
         worker_dir = self.ralph_dir / "workers" / worker_id
         self.conversation = parse_iteration_logs(worker_dir)
+        self._last_data_hash = self._compute_data_hash(self.conversation)
         self._populate_tree()
+
+    def _get_expanded_paths(self, node: TreeNode, path: str = "") -> set[str]:
+        """Get set of paths for all expanded nodes."""
+        expanded = set()
+        if node.is_expanded:
+            expanded.add(path)
+        for i, child in enumerate(node.children):
+            child_path = f"{path}/{i}"
+            expanded.update(self._get_expanded_paths(child, child_path))
+        return expanded
+
+    def _restore_expanded_paths(self, node: TreeNode, expanded_paths: set[str], path: str = "") -> None:
+        """Restore expanded state from saved paths."""
+        if path in expanded_paths:
+            node.expand()
+        else:
+            node.collapse()
+        for i, child in enumerate(node.children):
+            child_path = f"{path}/{i}"
+            self._restore_expanded_paths(child, expanded_paths, child_path)
 
     def _populate_tree(self) -> None:
         """Populate the tree with conversation turns."""
         try:
             tree = self.query_one("#conv-tree", Tree)
+
+            # Save expanded state before clearing
+            expanded_paths = self._get_expanded_paths(tree.root)
+            had_content = bool(tree.root.children)
+
             tree.clear()
 
             if not self.conversation or not self.conversation.turns:
@@ -235,7 +275,11 @@ class ConversationPanel(Widget):
                 if log_node:
                     self._add_turn_to_tree(log_node, turn, i)
 
-            tree.root.expand()
+            # Restore expanded state if we had content before, otherwise use defaults
+            if had_content and expanded_paths:
+                self._restore_expanded_paths(tree.root, expanded_paths)
+            else:
+                tree.root.expand()
 
         except Exception:
             pass
@@ -463,9 +507,21 @@ class ConversationPanel(Widget):
             self._load_conversation(str(event.value))
 
     def refresh_data(self) -> None:
-        """Refresh conversation data."""
-        if self.current_worker:
-            self._load_conversation(self.current_worker)
+        """Refresh conversation data only if data changed."""
+        if not self.current_worker:
+            return
+
+        worker_dir = self.ralph_dir / "workers" / self.current_worker
+        new_conversation = parse_iteration_logs(worker_dir)
+
+        # Check if data actually changed
+        new_hash = self._compute_data_hash(new_conversation)
+        if new_hash == self._last_data_hash:
+            return  # No change, skip refresh
+        self._last_data_hash = new_hash
+
+        self.conversation = new_conversation
+        self._populate_tree()
 
     def select_worker(self, worker_id: str) -> None:
         """Select a specific worker programmatically."""

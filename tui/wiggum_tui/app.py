@@ -102,6 +102,9 @@ class WiggumApp(App):
         # Set up header update timer
         self.set_interval(1, self._update_header)
 
+        # Set up 1-second auto-refresh timer for all panels
+        self.set_interval(1, self._auto_refresh_all)
+
     def on_unmount(self) -> None:
         """Stop file watcher on unmount."""
         self.watcher.stop()
@@ -143,6 +146,29 @@ class WiggumApp(App):
         try:
             header = self.query_one(WiggumHeader)
             header.update_header()
+        except Exception:
+            pass
+
+    def _auto_refresh_all(self) -> None:
+        """Auto-refresh all panels every second."""
+        try:
+            self.query_one(KanbanPanel).refresh_data()
+        except Exception:
+            pass
+        try:
+            self.query_one(WorkersPanel).refresh_data()
+        except Exception:
+            pass
+        try:
+            self.query_one(LogsPanel).refresh_data()
+        except Exception:
+            pass
+        try:
+            self.query_one(MetricsPanel).refresh_data()
+        except Exception:
+            pass
+        try:
+            self.query_one(ConversationPanel).refresh_data()
         except Exception:
             pass
 
@@ -201,6 +227,10 @@ class WiggumApp(App):
             pass
         try:
             self.query_one(MetricsPanel).refresh_data()
+        except Exception:
+            pass
+        try:
+            self.query_one(ConversationPanel).refresh_data()
         except Exception:
             pass
 

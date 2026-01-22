@@ -105,6 +105,18 @@ class MetricsPanel(Widget):
         self.ralph_dir = ralph_dir
         self.metrics_path = ralph_dir / "metrics.json"
         self.metrics: Metrics = Metrics()
+        self._last_data_hash: str = ""
+
+    def _compute_data_hash(self, metrics: Metrics) -> str:
+        """Compute a hash of metrics data for change detection."""
+        data = (
+            metrics.total_workers,
+            metrics.successful_workers,
+            metrics.failed_workers,
+            metrics.total_cost,
+            metrics.total_time_seconds,
+        )
+        return str(data)
 
     def compose(self) -> ComposeResult:
         self._load_metrics()
@@ -180,8 +192,16 @@ class MetricsPanel(Widget):
         self.metrics = read_metrics(self.metrics_path)
 
     def refresh_data(self) -> None:
-        """Refresh metrics data and re-render."""
+        """Refresh metrics data and re-render only if data changed."""
+        old_metrics = self.metrics
         self._load_metrics()
+
+        # Check if data actually changed
+        new_hash = self._compute_data_hash(self.metrics)
+        if new_hash == self._last_data_hash:
+            return  # No change, skip refresh
+        self._last_data_hash = new_hash
+
         self.remove_children()
         for widget in self.compose():
             self.mount(widget)

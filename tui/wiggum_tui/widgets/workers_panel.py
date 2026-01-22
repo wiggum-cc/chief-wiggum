@@ -66,6 +66,12 @@ class WorkersPanel(Widget):
         self.ralph_dir = ralph_dir
         self._workers_list: list[Worker] = []
         self._selected_worker: Worker | None = None
+        self._last_data_hash: str = ""
+
+    def _compute_data_hash(self, workers: list[Worker]) -> str:
+        """Compute a hash of worker data for change detection."""
+        data = [(w.id, w.task_id, w.status.value, w.pid, w.pr_url) for w in workers]
+        return str(data)
 
     def compose(self) -> ComposeResult:
         self._load_workers()
@@ -267,8 +273,14 @@ class WorkersPanel(Widget):
             pass
 
     def refresh_data(self) -> None:
-        """Refresh worker data and re-render."""
+        """Refresh worker data and re-render only if data changed."""
         self._load_workers()
+
+        # Check if data actually changed
+        new_hash = self._compute_data_hash(self._workers_list)
+        if new_hash == self._last_data_hash:
+            return  # No change, skip refresh
+        self._last_data_hash = new_hash
 
         # Update header
         try:
