@@ -261,10 +261,10 @@ agent_run() {
         esac
     fi
 
+    # === VALIDATION PHASE ===
     # Stop violation monitor before validation
     stop_violation_monitor "$VIOLATION_MONITOR_PID"
 
-    # === VALIDATION PHASE ===
     # Run validation-review as a nested sub-agent
     if [ -d "$workspace" ]; then
         log "Running validation review on completed work"

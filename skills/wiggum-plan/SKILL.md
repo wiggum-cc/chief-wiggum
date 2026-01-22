@@ -1,32 +1,34 @@
 ---
 name: wiggum-plan
-description: Interactively plan task implementation
+description: Interactively plan task implementation (planning only, no implementation)
 ---
 
 # Wiggum Plan
 
-Create implementation plans by exploring the codebase and designing an approach before coding.
+Create implementation plans by exploring the codebase and designing an approach. This skill is for **planning only** - it never implements.
 
-## When to Use
+## Input
 
-- Before implementing a new feature or complex change
-- When you need to understand existing patterns first
-- To document architectural decisions before coding
-- When breaking down a large task into steps
+A task ID from `.ralph/kanban.md` (e.g., `TASK-015`, `FEATURE-042`).
+
+## Critical Rules
+
+1. **NEVER implement** - This skill produces plans, not code
+2. **ALWAYS write the plan file** - Every session must end with writing `.ralph/plans/TASK-ID.md`
+3. **Multiple iterations allowed** - Explore, ask questions, explore more as needed
+4. **READ-ONLY exploration** - Only modify the plan file itself
 
 ## Process
 
-### 1. Understand Requirements
+### 1. Explore and Understand (iterative)
 
-Ask clarifying questions:
-- What is the specific goal or outcome?
-- What constraints or requirements exist?
-- Are there existing patterns to follow?
-- What is out of scope?
+This phase may repeat multiple times until you have a complete picture.
 
-### 2. Explore the Codebase (READ-ONLY)
+**Read the task requirements:**
+- Read `.ralph/kanban.md` and find the task entry for the given ID
+- Extract Description, Scope, Acceptance Criteria, Dependencies
 
-Use these tools to understand the existing architecture:
+**Explore the codebase (READ-ONLY):**
 - **Glob**: Find files by pattern (`**/*.ts`, `src/components/**`)
 - **Grep**: Search for code patterns, function names, imports
 - **Read**: Examine specific files in detail
@@ -38,17 +40,27 @@ Look for:
 - Related code that will be affected
 - Test patterns used in the project
 
-### 3. Design the Solution
+**Ask clarifying questions:**
+- What constraints or requirements aren't clear?
+- Are there ambiguities in the task description?
+- What trade-offs should be considered?
+
+**Iterate:** After getting answers, explore more if needed. Repeat until you have a complete understanding.
+
+### 2. Design the Solution
 
 Consider:
 - How does this fit the existing architecture?
 - What are the trade-offs of different approaches?
 - What dependencies exist between components?
 - What could go wrong? Edge cases?
+- How does the solution impact other in progress and new tasks?
 
-### 4. Document the Plan
+### 3. Write the Plan (REQUIRED)
 
-Write a plan to `.ralph/plans/TASK-xxx.md` (or present to user) with this structure:
+**You MUST write the plan to `.ralph/plans/TASK-ID.md`** - this is not optional.
+
+Use this structure:
 
 ```markdown
 # Implementation Plan: [TASK-ID]
@@ -89,90 +101,74 @@ Write a plan to `.ralph/plans/TASK-xxx.md` (or present to user) with this struct
 | CREATE | path/file.ext | [Purpose] |
 | MODIFY | path/file.ext | [What changes] |
 | REFERENCE | path/file.ext | [Pattern to follow] |
+
+### Incompatible With (only if applicable)
+TASK-029
 ```
-
-## Key Rules
-
-1. **READ-ONLY during planning**: Do not create, modify, or delete files (except the plan itself)
-2. **Be specific**: Reference actual file paths, function names, line numbers
-3. **Follow existing patterns**: Find and document how similar things are done
-4. **Critical Files required**: Always list 3-5 files most important to the implementation
-5. **Consider edge cases**: Document potential challenges upfront
 
 ## Example Interaction
 
-**User**: `/wiggum-plan Add user authentication`
+**User**: `/wiggum-plan TASK-015`
 
-**Assistant**: I'll help you plan the authentication implementation. Let me explore the codebase first.
+**Assistant**: I'll create an implementation plan for TASK-015. Let me read the task requirements first.
 
-*[Explores with Glob, Grep, Read]*
+*[Reads .ralph/kanban.md]*
 
-Based on my exploration, I found:
-- The project uses Express.js with TypeScript
-- There's an existing middleware pattern in `src/middleware/`
-- User model exists at `src/models/user.ts`
-- Routes follow RESTful patterns in `src/routes/`
-
-Let me ask a few questions:
-1. What authentication method? (JWT, session-based, OAuth?)
-2. Should it include registration, or just login?
-3. Are there specific security requirements?
-
-**User**: JWT with login and registration. Standard security.
-
-**Assistant**: Here's the implementation plan:
-
-```markdown
-# Implementation Plan: AUTH-001
-
-## Overview
-Add JWT-based authentication with login and registration endpoints, following existing Express middleware patterns.
-
-## Requirements Analysis
-| Requirement | Acceptance Criteria | Complexity |
-|-------------|---------------------|------------|
-| User registration | POST /auth/register creates user, returns JWT | Medium |
-| User login | POST /auth/login validates credentials, returns JWT | Medium |
-| Protected routes | Middleware validates JWT, rejects invalid tokens | Medium |
-| Password security | Passwords hashed with bcrypt, min 8 chars | Low |
-
-## Existing Patterns
-- `src/middleware/error-handler.ts`: Middleware pattern to follow
-- `src/models/user.ts`: Existing user model structure
-- `src/routes/users.ts`: Route organization pattern
-- `src/utils/response.ts`: Standard response format
-
-## Implementation Approach
-1. **Add dependencies**: jsonwebtoken, bcrypt
-2. **Extend User model**: Add password field, hash on save
-3. **Create auth middleware**: Validate JWT, attach user to request
-4. **Create auth routes**: /register, /login endpoints
-5. **Add tests**: Unit tests for auth logic, integration for endpoints
-
-## Dependencies and Sequencing
-1. User model changes (no dependencies)
-2. Auth middleware (depends on JWT secret config)
-3. Auth routes (depends on model + middleware)
-4. Tests (depends on all above)
-
-## Potential Challenges
-- JWT secret management (use environment variable)
-- Token expiration handling
-- Password validation rules consistency
-
-### Critical Files
-| Action | File | Reason |
-|--------|------|--------|
-| MODIFY | src/models/user.ts | Add password field and hashing |
-| CREATE | src/middleware/auth.ts | JWT validation middleware |
-| CREATE | src/routes/auth.ts | Login/register endpoints |
-| MODIFY | src/app.ts | Register auth routes |
-| REFERENCE | src/middleware/error-handler.ts | Middleware pattern |
+Found TASK-015:
+```
+- [ ] **[TASK-015]** Create auth routes (login/register)
+  - Description: Create POST /auth/login and POST /auth/register endpoints
+  - Priority: HIGH
+  - Dependencies: TASK-013, TASK-014, TASK-010
+  - Scope:
+    - Create src/routes/auth.ts
+    - Implement login with password validation
+    - Implement registration with input validation
+    - Hash passwords with bcrypt
+  - Out of Scope:
+    - Password reset
+    - OAuth integration
 ```
 
-Shall I save this to `.ralph/plans/AUTH-001.md` or proceed with implementation?
+Now let me explore the codebase to understand existing patterns...
 
-## Output Location
+*[Uses Glob to find route files]*
+
+*[Uses Read to examine src/routes/users.ts]*
+
+I see the route pattern. Let me check the dependencies...
+
+*[Reads TASK-013 and TASK-014 entries to understand what they provide]*
+
+I have some questions:
+1. Should registration require email verification, or is immediate access OK?
+2. What validation rules for passwords? (min length, complexity?)
+3. Should failed login attempts be rate-limited?
+
+**User**: No email verification. Min 8 chars for password. Yes, rate limit to 5 attempts per minute.
+
+**Assistant**: Good to know about rate limiting - let me check if there's an existing rate limiter...
+
+*[Uses Grep to search for rate limiting patterns]*
+
+Found `src/middleware/rate-limit.ts`. I'll reference that pattern.
+
+Now I have a complete picture. Writing the plan. Note that this design is incompatible with TASK-029.
+
+*[Writes to .ralph/plans/TASK-015.md]*
+
+I've saved the implementation plan to `.ralph/plans/TASK-015.md`. The plan covers:
+
+- Route structure following existing patterns in `src/routes/users.ts`
+- Integration with JWT utils from TASK-013
+- Integration with auth middleware from TASK-014
+- Rate limiting using existing `src/middleware/rate-limit.ts` pattern
+- Password validation (min 8 chars)
+- Bcrypt hashing
+
+The plan is ready for a Chief Wiggum worker to execute. Shall I mark TASK-029 as [N] Not planned?
+
+## Output
 
 Plans are saved to: `.ralph/plans/[TASK-ID].md`
 

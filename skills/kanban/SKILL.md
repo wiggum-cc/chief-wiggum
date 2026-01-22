@@ -1,11 +1,52 @@
 ---
 name: kanban
-description: Generate Kanban task entries for Chief Wiggum
+description: Generate Kanban task entries with dependency analysis
 ---
 
 # Kanban Task Generator
 
-Generate properly formatted task entries for Chief Wiggum's `.ralph/kanban.md` file.
+Generate properly formatted task entries for Chief Wiggum's `.ralph/kanban.md` file. This skill analyzes existing tasks and dependencies to create well-structured, interlinked task sets.
+
+## Critical Rules
+
+1. **ALWAYS read the entire kanban first** - Analyze existing tasks and dependencies before generating new ones
+2. **Output multiple tasks when appropriate** - Break large features into reasonably-sized, interlinked tasks
+3. **Dependencies are critical** - Carefully analyze and set dependencies based on execution order
+4. **Reasonable task size** - Each task should be completable by a single worker in one session
+
+## Process
+
+### 1. Analyze Existing Kanban
+
+First, read `.ralph/kanban.md` and analyze:
+- What tasks already exist?
+- What's the highest task number? (for ID assignment)
+- What dependencies exist between tasks?
+- Are there incomplete tasks the new work depends on?
+- What prefix pattern is used? (TASK-, FEATURE-, etc.)
+
+### 2. Understand the Request
+
+Ask clarifying questions if needed:
+- What is the specific goal or outcome?
+- Should this be one task or multiple?
+- What existing tasks does this depend on?
+- What priority level is appropriate?
+
+### 3. Design Task Structure
+
+For complex features, break into multiple tasks:
+- Each task should be **reasonably sized** (1 worker, 1 session)
+- Set **dependencies** so tasks execute in correct order
+- Tasks without dependencies can run in parallel
+- Use Scope to break down individual tasks further
+
+### 4. Generate and Add Tasks
+
+- Present all tasks to the user
+- Confirm before adding to kanban
+- Add to the `## TASKS` section
+- Verify all IDs are unique
 
 ## Task Entry Format
 
@@ -15,262 +56,160 @@ Generate properly formatted task entries for Chief Wiggum's `.ralph/kanban.md` f
   - Priority: CRITICAL|HIGH|MEDIUM|LOW
   - Complexity: HIGH|MEDIUM|LOW (optional)
   - Dependencies: TASK-ID-1, TASK-ID-2 | none
-```
-
-### Optional Extended Fields
-
-```markdown
   - Scope:
-    - Specific item to implement or deliver
-    - Another item in scope
+    - Specific deliverable item
+    - Another deliverable
   - Out of Scope:
     - Thing NOT to implement
-    - Another exclusion
   - Acceptance Criteria:
-    - Validation point 1
-    - Validation point 2
+    - Validation point
 ```
 
 ## Field Specifications
 
 ### Task ID
-
-- **Format**: `[PREFIX-NUMBER]`
 - **Pattern**: `[A-Za-z]{2,8}-[0-9]+`
 - **Examples**: `[TASK-001]`, `[FEATURE-042]`, `[BUG-123]`
-- Prefix: 2-8 uppercase letters
-- Number: One or more digits
 - Must be unique across the kanban file
-- Wrapped in square brackets and bold: `**[TASK-ID]**`
 
 ### Status Checkbox
-
 | Marker | Status | Description |
 |--------|--------|-------------|
 | `- [ ]` | Pending | Not started |
 | `- [=]` | In-progress | Worker actively processing |
-| `- [P]` | Pending Approval | PR created, awaiting review/merge |
-| `- [x]` | Complete | PR merged, task finished |
-| `- [N]` | Not Planned | Task won't be done |
+| `- [P]` | Pending Approval | PR created, awaiting merge |
+| `- [x]` | Complete | PR merged |
+| `- [N]` | Not Planned | Won't be done |
 | `- [*]` | Failed | Worker encountered errors |
 
-**Dependency Resolution**: Tasks only satisfy dependencies when they reach `[x]` (Complete/Merged) status. Tasks in `[P]` (Pending Approval) do NOT satisfy dependencies.
+**Dependency Resolution**: Only `[x]` (Complete) satisfies dependencies. `[P]` (Pending Approval) does NOT.
 
-### Brief Description
+### Priority
+- **CRITICAL**: Security vulnerabilities, data loss risks, system-breaking bugs
+- **HIGH**: Blocking other work, critical bugs, foundational features
+- **MEDIUM**: Important features, non-critical bugs, enhancements
+- **LOW**: Nice-to-haves, optimizations, documentation
 
-- Appears immediately after the task ID on the same line
-- Should be concise (under 80 characters)
-- Used in commit messages, PR titles, and changelogs
-- Written as an imperative statement (e.g., "Create README file" not "Creating README")
+### Dependencies
+- Format: Comma-separated task IDs or `none`
+- Only reference tasks that exist in the kanban
+- Consider both technical and logical dependencies
 
-### Description (Required)
+## Example Interaction
 
-- Indented with 2 spaces: `  - Description:`
-- Provides detailed context about what needs to be implemented
-- Should be specific enough for a worker to understand requirements
+**User**: `/kanban Add user authentication with JWT`
 
-### Priority (Required)
+**Assistant**: I'll help create kanban tasks for JWT authentication. Let me first analyze the existing kanban.
 
-- Indented with 2 spaces: `  - Priority:`
-- Valid values (case-sensitive, uppercase):
-  - **CRITICAL**: Security vulnerabilities, data loss risks, system-breaking bugs
-  - **HIGH**: Blocking other work, critical bugs, foundational features
-  - **MEDIUM**: Important features, non-critical bugs, enhancements
-  - **LOW**: Nice-to-haves, optimizations, documentation
+*[Reads .ralph/kanban.md]*
 
-### Complexity (Optional)
+I found:
+- 12 existing tasks (TASK-001 through TASK-012)
+- TASK-008 (User model) is complete `[x]`
+- TASK-010 (API routing setup) is pending approval `[P]`
+- TASK-011 (Error handling middleware) is in progress `[=]`
 
-- Indented with 2 spaces: `  - Complexity:`
-- Valid values: `HIGH`, `MEDIUM`, `LOW`
-- Guidelines:
-  - **HIGH**: Large scope, many files, architectural changes, significant risk
-  - **MEDIUM**: Moderate scope, several files, standard implementation
-  - **LOW**: Small scope, few files, straightforward changes
+A few questions:
+1. Should this include registration, or just login?
+2. Do you need password reset functionality?
+3. What priority - is this blocking other work?
 
-### Dependencies (Required)
+**User**: Login and registration, no password reset. High priority, it's blocking the dashboard work.
 
-- Indented with 2 spaces: `  - Dependencies:`
-- Format: Comma-separated task IDs or the word `none`
-- Examples:
-  - `none` - No dependencies
-  - `TASK-001` - Single dependency
-  - `TASK-001, TASK-002` - Multiple dependencies
+**Assistant**: Based on the existing kanban, I'll create 3 interlinked tasks. Note that TASK-010 (API routing) is still pending approval, so I'll set that as a dependency since auth routes need the router setup.
 
-### Scope (Optional)
-
-- Indented with 2 spaces: `  - Scope:`
-- Each item indented with 4 spaces: `    - Item description`
-- Items become checklist items in the worker's PRD
-- Use for breaking down larger tasks into specific deliverables
-
-### Out of Scope (Optional)
-
-- Indented with 2 spaces: `  - Out of Scope:`
-- Each item indented with 4 spaces: `    - Item description`
-- Helps prevent scope creep and clarify boundaries
-
-### Acceptance Criteria (Optional)
-
-- Indented with 2 spaces: `  - Acceptance Criteria:`
-- Each item indented with 4 spaces: `    - Criterion description`
-- Defines success criteria and validation points
-
-## Instructions
-
-When generating kanban tasks:
-
-1. **Ask clarifying questions** if the user's description is vague:
-   - What is the specific goal or outcome?
-   - Are there any dependencies on other tasks?
-   - What should be included/excluded from scope?
-   - What priority level is appropriate?
-
-2. **Determine the next task ID**:
-   - Read the existing `.ralph/kanban.md` file
-   - Find the highest task number
-   - Increment by 1 for the new task
-   - Use the same prefix pattern (typically `TASK-`)
-
-3. **Generate task structure**:
-   - Write a clear, imperative brief description
-   - Provide detailed context in the Description field
-   - Set appropriate priority (CRITICAL/HIGH/MEDIUM/LOW)
-   - List dependencies or use "none"
-   - Break complex tasks into Scope items
-   - Define what's Out of Scope to prevent scope creep
-   - Add Acceptance Criteria for validation
-
-4. **Output the formatted task**:
-   - Present the complete task entry
-   - Ensure proper indentation (2 spaces for fields, 4 spaces for sub-items)
-   - Verify all required fields are present
-   - Ask if the user wants to add it to their kanban.md
-
-## Examples
-
-### Minimal Task
+Here are the tasks:
 
 ```markdown
-- [ ] **[TASK-001]** Create README file
-  - Description: Create a README.md with project description, installation instructions, and usage guide
+- [ ] **[TASK-013]** Create JWT authentication utilities
+  - Description: Create JWT token generation, validation, and refresh utilities following existing patterns in src/utils/
   - Priority: HIGH
-  - Dependencies: none
-```
-
-### Full-Featured Task
-
-```markdown
-- [ ] **[FEATURE-042]** Implement user authentication system
-  - Description: Add JWT-based authentication with login, logout, and token refresh endpoints
-  - Priority: HIGH
-  - Complexity: HIGH
-  - Dependencies: TASK-001, TASK-002
+  - Complexity: MEDIUM
+  - Dependencies: TASK-008
   - Scope:
-    - Create authentication middleware
-    - Implement login endpoint with JWT generation
-    - Implement logout endpoint with token invalidation
-    - Add token refresh mechanism
-    - Create user session management
+    - Create src/utils/jwt.ts with sign/verify functions
+    - Add JWT secret to environment config
+    - Create token refresh logic
+  - Acceptance Criteria:
+    - Tokens expire after configured timeout
+    - Invalid tokens throw appropriate errors
+
+- [ ] **[TASK-014]** Create authentication middleware
+  - Description: Create Express middleware to validate JWT tokens on protected routes
+  - Priority: HIGH
+  - Complexity: LOW
+  - Dependencies: TASK-013, TASK-011
+  - Scope:
+    - Create src/middleware/auth.ts
+    - Extract and validate JWT from Authorization header
+    - Attach user to request object
+  - Acceptance Criteria:
+    - Invalid tokens return 401
+    - Missing tokens return 401
+    - Valid tokens attach user to req.user
+
+- [ ] **[TASK-015]** Create auth routes (login/register)
+  - Description: Create POST /auth/login and POST /auth/register endpoints
+  - Priority: HIGH
+  - Complexity: MEDIUM
+  - Dependencies: TASK-013, TASK-014, TASK-010
+  - Scope:
+    - Create src/routes/auth.ts
+    - Implement login with password validation
+    - Implement registration with input validation
+    - Hash passwords with bcrypt
   - Out of Scope:
-    - OAuth integration (future enhancement)
-    - Two-factor authentication
-    - Password reset functionality
+    - Password reset
+    - OAuth integration
   - Acceptance Criteria:
-    - All endpoints return appropriate HTTP status codes
-    - JWTs expire after configured timeout
-    - Invalid tokens are rejected
-    - Unit tests achieve 80% coverage
+    - Registration creates user and returns JWT
+    - Login validates credentials and returns JWT
+    - Invalid credentials return 401
 ```
 
-### Bug Fix Task
+**Dependency graph:**
+```
+TASK-008 (User model) [x]
+    └── TASK-013 (JWT utils)
+            └── TASK-014 (Auth middleware)
+            │       └── TASK-015 (Auth routes)
+            └───────────┘
+TASK-011 (Error handling) [=]
+    └── TASK-014
 
-```markdown
-- [ ] **[BUG-123]** Fix login form validation
-  - Description: Login form allows empty passwords and doesn't show error messages properly
-  - Priority: HIGH
-  - Dependencies: none
-  - Scope:
-    - Add client-side validation for email and password
-    - Display error messages below form fields
-    - Prevent form submission when invalid
-  - Acceptance Criteria:
-    - Empty fields show validation errors
-    - Invalid email format is rejected
-    - Error messages are user-friendly
+TASK-010 (API routing) [P]
+    └── TASK-015
 ```
 
-## Common Pitfalls
+Note: TASK-015 won't start until TASK-010's PR is merged (dependencies require `[x]` status).
 
-### Incorrect Indentation
+Shall I add these to `.ralph/kanban.md`?
 
-**Wrong**:
-```markdown
-- [ ] **[TASK-001]** Do something
-- Description: Details here
-```
+**User**: Yes, add them.
 
-**Correct**:
-```markdown
-- [ ] **[TASK-001]** Do something
-  - Description: Details here
-```
+**Assistant**: *[Adds tasks to .ralph/kanban.md]*
 
-### Missing Required Fields
+Added 3 tasks to the kanban:
+- TASK-013: JWT utilities (can start immediately, depends on completed TASK-008)
+- TASK-014: Auth middleware (waits for TASK-013 and TASK-011)
+- TASK-015: Auth routes (waits for TASK-013, TASK-014, and TASK-010 to be merged)
 
-**Wrong**:
-```markdown
-- [ ] **[TASK-001]** Do something
-  - Description: Details here
-```
+The dependency chain ensures correct execution order. TASK-013 can be picked up by a worker now.
 
-**Correct**:
-```markdown
-- [ ] **[TASK-001]** Do something
-  - Description: Details here
-  - Priority: MEDIUM
-  - Dependencies: none
-```
+## Task Sizing Guidelines
 
-### Invalid Task ID Format
+**Too large** (split into multiple tasks):
+- "Implement entire authentication system"
+- "Build user dashboard with all features"
+- "Refactor the entire codebase"
 
-**Wrong**:
-```markdown
-- [ ] **TASK-001** Do something        (missing brackets)
-- [ ] **[T-1]** Do something           (prefix too short)
-- [ ] **[VERYLONGPREFIX-001]** Do something  (prefix too long)
-```
+**Right size** (single task):
+- "Create JWT token utilities"
+- "Add login endpoint"
+- "Create auth middleware"
+- "Add password validation to user model"
 
-**Correct**:
-```markdown
-- [ ] **[TASK-001]** Do something
-- [ ] **[FEAT-1]** Do something
-- [ ] **[BUG-001]** Do something
-```
-
-### Incorrect Scope Indentation
-
-**Wrong**:
-```markdown
-  - Scope:
-  - First item
-  - Second item
-```
-
-**Correct**:
-```markdown
-  - Scope:
-    - First item
-    - Second item
-```
-
-## Adding Tasks to Kanban
-
-After generating a task:
-
-1. Read the current `.ralph/kanban.md`
-2. Find the `## TASKS` section
-3. Add the new task entry at the end of the pending tasks
-4. Maintain proper formatting and spacing
-5. Save the file
-
-Always verify the task ID is unique before adding.
+**Too small** (combine or use Scope items):
+- "Add import statement"
+- "Create empty file"
+- "Add single function parameter"
