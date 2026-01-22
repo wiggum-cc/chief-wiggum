@@ -96,6 +96,7 @@ class ConversationPanel(Widget):
 
     ConversationPanel Tree {
         height: 1fr;
+        width: 100%;
         background: #1e1e2e;
         border: solid #45475a;
     }
@@ -124,6 +125,9 @@ class ConversationPanel(Widget):
         color: #a6adc8;
     }
     """
+
+    # Max tools to show individually before summarizing
+    MAX_TOOLS_BEFORE_SUMMARY = 5
 
     def __init__(self, ralph_dir: Path) -> None:
         super().__init__()
@@ -288,7 +292,13 @@ class ConversationPanel(Widget):
         """Add a conversation turn to the tree."""
         # Create assistant node that groups text and tool calls
         tool_count = len(turn.tool_calls)
-        tool_info = f" │ {tool_count} tool{'s' if tool_count != 1 else ''}" if tool_count else ""
+
+        # Build tool info with tool names
+        if tool_count > 0:
+            tool_names = sorted(set(tc.name for tc in turn.tool_calls))
+            tool_info = f" │ {tool_count} tools ({','.join(tool_names)})"
+        else:
+            tool_info = ""
 
         text_preview = ""
         if turn.assistant_text:
@@ -327,6 +337,31 @@ class ConversationPanel(Widget):
             # Add result if present
             if tool_call.result is not None:
                 self._add_tool_result(tool_node, tool_call)
+
+    def _get_two_line_preview(self, text: str, first_line_width: int = 100, second_line_width: int = 100) -> tuple[str, str]:
+        """Get a 2-line preview of text, wrapping as needed.
+
+        Returns tuple of (line1, line2) where line2 may be empty.
+        """
+        text = text.strip().replace('\n', ' ').replace('  ', ' ')
+
+        if len(text) <= first_line_width:
+            return (text, "")
+
+        # First line
+        line1 = text[:first_line_width]
+        remaining = text[first_line_width:].lstrip()
+
+        # Second line (truncated with ...)
+        if not remaining:
+            return (line1, "")
+
+        if len(remaining) > second_line_width - 3:
+            line2 = remaining[:second_line_width - 3] + "..."
+        else:
+            line2 = remaining
+
+        return (line1, line2)
 
     def _format_tool_input(self, tool_call: ToolCall) -> str:
         """Format tool input for display."""

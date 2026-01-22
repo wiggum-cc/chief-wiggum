@@ -1,15 +1,29 @@
 """Metrics panel widget showing aggregate dashboard from worker logs."""
 
+import json
 from pathlib import Path
 from dataclasses import dataclass, field
 from textual.app import ComposeResult
-from textual.containers import Horizontal, Vertical, Grid
 from textual.widgets import Static
 from textual.widget import Widget
 
-from ..data.conversation_parser import parse_iteration_logs, get_conversation_summary
 from ..data.worker_scanner import scan_workers
 from ..data.models import WorkerStatus
+
+
+@dataclass
+class WorkerLogMetrics:
+    """Metrics parsed from a single worker's log file."""
+    worker_id: str = ""
+    task_id: str = ""
+    status: str = ""
+    num_turns: int = 0
+    total_cost_usd: float = 0.0
+    duration_ms: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_creation_tokens: int = 0
+    cache_read_tokens: int = 0
 
 
 @dataclass
@@ -20,30 +34,39 @@ class AggregateMetrics:
     completed_workers: int = 0
     failed_workers: int = 0
     total_turns: int = 0
-    total_tool_calls: int = 0
     total_cost_usd: float = 0.0
     total_duration_ms: int = 0
-    total_tokens: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
     cache_creation_tokens: int = 0
     cache_read_tokens: int = 0
-    # Per-worker summaries for display
-    worker_summaries: list[dict] = field(default_factory=list)
+    worker_summaries: list[WorkerLogMetrics] = field(default_factory=list)
+
+
+def parse_log_metrics(log_file: Path) -> list[dict]:
+    """Parse a log file to find all JSON result entries."""
+    results = []
+    try:
+        content = log_file.read_text()
+        for line in content.split('\n'):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                data = json.loads(line)
+                if data.get("type") == "result":
+                    results.append(data)
+            except json.JSONDecodeError:
+                continue
+    except (OSError, FileNotFoundError):
+        pass
+    return results
 
 
 def aggregate_worker_metrics(ralph_dir: Path) -> AggregateMetrics:
-    """Aggregate metrics from all worker logs.
-
-    Args:
-        ralph_dir: Path to .ralph directory.
-
-    Returns:
-        AggregateMetrics with totals from all workers.
-    """
+    """Aggregate metrics from all worker logs."""
     metrics = AggregateMetrics()
     workers = scan_workers(ralph_dir)
-
     metrics.total_workers = len(workers)
 
     for worker in workers:
@@ -54,114 +77,61 @@ def aggregate_worker_metrics(ralph_dir: Path) -> AggregateMetrics:
         elif worker.status == WorkerStatus.FAILED:
             metrics.failed_workers += 1
 
-        # Parse conversation logs for this worker
         worker_dir = ralph_dir / "workers" / worker.id
-        conversation = parse_iteration_logs(worker_dir)
-        summary = get_conversation_summary(conversation)
+        logs_dir = worker_dir / "logs"
 
-        metrics.total_turns += summary["turns"]
-        metrics.total_tool_calls += summary["tool_calls"]
-        metrics.total_cost_usd += summary["cost_usd"]
-        metrics.total_duration_ms += summary["duration_ms"]
-        metrics.total_tokens += summary["tokens"]
+        worker_metrics = WorkerLogMetrics(
+            worker_id=worker.id,
+            task_id=worker.task_id,
+            status=worker.status.value,
+        )
 
-        # Aggregate token breakdown from results
-        for result in conversation.results:
-            metrics.input_tokens += result.usage.input
-            metrics.output_tokens += result.usage.output
-            metrics.cache_creation_tokens += result.usage.cache_creation
-            metrics.cache_read_tokens += result.usage.cache_read
+        if logs_dir.is_dir():
+            for log_file in logs_dir.glob("*.log"):
+                for result in parse_log_metrics(log_file):
+                    worker_metrics.num_turns += result.get("num_turns", 0)
+                    worker_metrics.total_cost_usd += result.get("total_cost_usd", 0.0)
+                    worker_metrics.duration_ms += result.get("duration_ms", 0)
+                    usage = result.get("usage", {})
+                    worker_metrics.input_tokens += usage.get("input_tokens", 0)
+                    worker_metrics.output_tokens += usage.get("output_tokens", 0)
+                    worker_metrics.cache_creation_tokens += usage.get("cache_creation_input_tokens", 0)
+                    worker_metrics.cache_read_tokens += usage.get("cache_read_input_tokens", 0)
 
-        # Store worker summary for display
-        if summary["turns"] > 0 or summary["cost_usd"] > 0:
-            metrics.worker_summaries.append({
-                "worker_id": worker.id,
-                "task_id": worker.task_id,
-                "status": worker.status.value,
-                "turns": summary["turns"],
-                "tool_calls": summary["tool_calls"],
-                "cost_usd": summary["cost_usd"],
-                "duration_ms": summary["duration_ms"],
-                "tokens": summary["tokens"],
-            })
+        metrics.total_turns += worker_metrics.num_turns
+        metrics.total_cost_usd += worker_metrics.total_cost_usd
+        metrics.total_duration_ms += worker_metrics.duration_ms
+        metrics.input_tokens += worker_metrics.input_tokens
+        metrics.output_tokens += worker_metrics.output_tokens
+        metrics.cache_creation_tokens += worker_metrics.cache_creation_tokens
+        metrics.cache_read_tokens += worker_metrics.cache_read_tokens
 
-    # Sort by cost descending
-    metrics.worker_summaries.sort(key=lambda x: x["cost_usd"], reverse=True)
+        if worker_metrics.num_turns > 0 or worker_metrics.total_cost_usd > 0:
+            metrics.worker_summaries.append(worker_metrics)
 
+    metrics.worker_summaries.sort(key=lambda x: x.total_cost_usd, reverse=True)
     return metrics
 
 
-def format_tokens(count: int) -> str:
-    """Format token count for display."""
+def fmt_tokens(count: int) -> str:
     if count >= 1_000_000:
         return f"{count / 1_000_000:.1f}M"
     elif count >= 1_000:
         return f"{count / 1_000:.1f}K"
-    else:
-        return str(count)
+    return str(count)
 
 
-def format_cost(cost: float) -> str:
-    """Format cost in USD."""
+def fmt_cost(cost: float) -> str:
     return f"${cost:.2f}"
 
 
-def format_duration(ms: int) -> str:
-    """Format duration from milliseconds."""
+def fmt_duration(ms: int) -> str:
     seconds = ms // 1000
     if seconds >= 3600:
-        hours = seconds // 3600
-        minutes = (seconds % 3600) // 60
-        return f"{hours}h {minutes}m"
+        return f"{seconds // 3600}h {(seconds % 3600) // 60}m"
     elif seconds >= 60:
-        minutes = seconds // 60
-        secs = seconds % 60
-        return f"{minutes}m {secs}s"
-    else:
-        return f"{seconds}s"
-
-
-class MetricCard(Static):
-    """A single metric card."""
-
-    DEFAULT_CSS = """
-    MetricCard {
-        background: #181825;
-        border: solid #45475a;
-        padding: 1;
-        height: auto;
-        min-height: 5;
-    }
-
-    MetricCard .metric-title {
-        color: #7f849c;
-        text-style: bold;
-    }
-
-    MetricCard .metric-value {
-        color: #a6e3a1;
-        text-style: bold;
-    }
-
-    MetricCard .metric-secondary {
-        color: #a6adc8;
-    }
-    """
-
-    def __init__(self, title: str, value: str, secondary: str = "") -> None:
-        super().__init__()
-        self.title = title
-        self.value = value
-        self.secondary = secondary
-
-    def render(self) -> str:
-        lines = [
-            f"[#7f849c]{self.title}[/]",
-            f"[bold #a6e3a1]{self.value}[/]",
-        ]
-        if self.secondary:
-            lines.append(f"[#a6adc8]{self.secondary}[/]")
-        return "\n".join(lines)
+        return f"{seconds // 60}m {seconds % 60}s"
+    return f"{seconds}s"
 
 
 class MetricsPanel(Widget):
@@ -172,37 +142,6 @@ class MetricsPanel(Widget):
         height: 1fr;
         width: 100%;
         padding: 1;
-        layout: vertical;
-        overflow-y: auto;
-    }
-
-    MetricsPanel .metrics-grid {
-        grid-size: 4;
-        grid-gutter: 1;
-        height: auto;
-    }
-
-    MetricsPanel .section-title {
-        color: #cba6f7;
-        text-style: bold;
-        padding: 1 0;
-    }
-
-    MetricsPanel .empty-message {
-        text-align: center;
-        color: #7f849c;
-        padding: 2;
-    }
-
-    MetricsPanel .workers-list {
-        height: 1fr;
-        border: solid #45475a;
-        background: #1e1e2e;
-        padding: 1;
-    }
-
-    MetricsPanel .worker-row {
-        height: 1;
     }
     """
 
@@ -213,136 +152,80 @@ class MetricsPanel(Widget):
         self._last_data_hash: str = ""
 
     def _compute_data_hash(self, metrics: AggregateMetrics) -> str:
-        """Compute a hash of metrics data for change detection."""
-        data = (
-            metrics.total_workers,
-            metrics.completed_workers,
-            metrics.failed_workers,
-            metrics.total_cost_usd,
-            metrics.total_turns,
-            metrics.total_tool_calls,
-        )
-        return str(data)
+        return str((
+            metrics.total_workers, metrics.completed_workers, metrics.failed_workers,
+            metrics.total_cost_usd, metrics.total_turns, metrics.input_tokens,
+        ))
 
     def compose(self) -> ComposeResult:
         self._load_metrics()
+        m = self.metrics
 
-        if self.metrics.total_workers == 0:
-            yield Static(
-                "No workers found. Run workers to see metrics.",
-                classes="empty-message",
-            )
-            return
+        total_tokens = m.input_tokens + m.output_tokens + m.cache_creation_tokens + m.cache_read_tokens
 
-        yield Static("SUMMARY", classes="section-title")
-        with Grid(classes="metrics-grid"):
-            success_rate = 0.0
-            if self.metrics.completed_workers + self.metrics.failed_workers > 0:
-                success_rate = self.metrics.completed_workers / (self.metrics.completed_workers + self.metrics.failed_workers) * 100
+        success_rate = 0.0
+        if m.completed_workers + m.failed_workers > 0:
+            success_rate = m.completed_workers / (m.completed_workers + m.failed_workers) * 100
 
-            yield MetricCard(
-                "Workers",
-                str(self.metrics.total_workers),
-                f"{self.metrics.running_workers} running / {self.metrics.completed_workers} done / {self.metrics.failed_workers} failed",
-            )
-            yield MetricCard(
-                "Success Rate",
-                f"{success_rate:.1f}%",
-                f"{self.metrics.completed_workers} of {self.metrics.completed_workers + self.metrics.failed_workers}",
-            )
-            yield MetricCard(
-                "Total Time",
-                format_duration(self.metrics.total_duration_ms),
-                "",
-            )
-            yield MetricCard(
-                "Total Cost",
-                format_cost(self.metrics.total_cost_usd),
-                "",
-            )
+        # Build dashboard as rich text
+        lines = []
+        lines.append("[bold #cba6f7]═══ SUMMARY ═══[/]")
+        lines.append(
+            f"[#7f849c]Workers:[/] [#a6e3a1]{m.total_workers}[/] "
+            f"([#a6e3a1]{m.running_workers}[/] run / [#89b4fa]{m.completed_workers}[/] done / [#f38ba8]{m.failed_workers}[/] fail) │ "
+            f"[#7f849c]Success:[/] [#a6e3a1]{success_rate:.0f}%[/] │ "
+            f"[#7f849c]Time:[/] [#a6e3a1]{fmt_duration(m.total_duration_ms)}[/] │ "
+            f"[#7f849c]Cost:[/] [#a6e3a1]{fmt_cost(m.total_cost_usd)}[/]"
+        )
+        lines.append("")
+        lines.append("[bold #cba6f7]═══ TOKENS ═══[/]")
+        lines.append(
+            f"[#7f849c]Input:[/] [#a6e3a1]{fmt_tokens(m.input_tokens)}[/] │ "
+            f"[#7f849c]Output:[/] [#a6e3a1]{fmt_tokens(m.output_tokens)}[/] │ "
+            f"[#7f849c]Cache Create:[/] [#a6e3a1]{fmt_tokens(m.cache_creation_tokens)}[/] │ "
+            f"[#7f849c]Cache Read:[/] [#a6e3a1]{fmt_tokens(m.cache_read_tokens)}[/] │ "
+            f"[#7f849c]Total:[/] [#a6e3a1]{fmt_tokens(total_tokens)}[/]"
+        )
+        lines.append("")
+        lines.append("[bold #cba6f7]═══ CONVERSATION ═══[/]")
+        avg_turns = m.total_turns / max(1, m.total_workers)
+        avg_cost = m.total_cost_usd / max(1, m.total_workers)
+        tokens_per_turn = total_tokens // max(1, m.total_turns) if m.total_turns > 0 else 0
+        lines.append(
+            f"[#7f849c]Turns:[/] [#a6e3a1]{m.total_turns}[/] ({avg_turns:.1f} avg) │ "
+            f"[#7f849c]Cost/Worker:[/] [#a6e3a1]{fmt_cost(avg_cost)}[/] │ "
+            f"[#7f849c]Tokens/Turn:[/] [#a6e3a1]{fmt_tokens(tokens_per_turn)}[/]"
+        )
 
-        yield Static("CONVERSATION STATS", classes="section-title")
-        with Grid(classes="metrics-grid"):
-            yield MetricCard(
-                "Total Turns",
-                str(self.metrics.total_turns),
-                f"{self.metrics.total_turns / max(1, self.metrics.total_workers):.1f} avg/worker",
-            )
-            yield MetricCard(
-                "Tool Calls",
-                str(self.metrics.total_tool_calls),
-                f"{self.metrics.total_tool_calls / max(1, self.metrics.total_turns):.1f} avg/turn",
-            )
-            yield MetricCard(
-                "Total Tokens",
-                format_tokens(self.metrics.total_tokens),
-                "",
-            )
-            yield MetricCard(
-                "Cost/Worker",
-                format_cost(self.metrics.total_cost_usd / max(1, self.metrics.total_workers)),
-                "average",
-            )
+        if m.worker_summaries:
+            lines.append("")
+            lines.append("[bold #cba6f7]═══ WORKERS BY COST ═══[/]")
+            for wm in m.worker_summaries[:15]:
+                status_color = {
+                    "running": "#a6e3a1",
+                    "completed": "#89b4fa",
+                    "failed": "#f38ba8",
+                    "stopped": "#7f849c",
+                }.get(wm.status, "#7f849c")
+                lines.append(
+                    f"[{status_color}]{wm.status:10}[/] │ "
+                    f"[#cba6f7]{wm.task_id[:30]:30}[/] │ "
+                    f"[#7f849c]{wm.num_turns:3} turns[/] │ "
+                    f"[#7f849c]{fmt_tokens(wm.input_tokens + wm.output_tokens):>8}[/] │ "
+                    f"[#a6e3a1]{fmt_cost(wm.total_cost_usd)}[/]"
+                )
 
-        yield Static("TOKEN BREAKDOWN", classes="section-title")
-        with Grid(classes="metrics-grid"):
-            yield MetricCard(
-                "Input",
-                format_tokens(self.metrics.input_tokens),
-                "",
-            )
-            yield MetricCard(
-                "Output",
-                format_tokens(self.metrics.output_tokens),
-                "",
-            )
-            yield MetricCard(
-                "Cache Creation",
-                format_tokens(self.metrics.cache_creation_tokens),
-                "",
-            )
-            yield MetricCard(
-                "Cache Read",
-                format_tokens(self.metrics.cache_read_tokens),
-                "",
-            )
-
-        if self.metrics.worker_summaries:
-            yield Static("WORKERS BY COST", classes="section-title")
-            with Vertical(classes="workers-list"):
-                # Show top 10 workers by cost
-                for worker in self.metrics.worker_summaries[:10]:
-                    status_color = {
-                        "running": "#a6e3a1",
-                        "completed": "#89b4fa",
-                        "failed": "#f38ba8",
-                        "stopped": "#7f849c",
-                    }.get(worker["status"], "#7f849c")
-
-                    yield Static(
-                        f"[{status_color}]{worker['status']:10}[/] │ "
-                        f"[#cba6f7]{worker['task_id'][:25]:25}[/] │ "
-                        f"[#7f849c]{worker['turns']:3} turns[/] │ "
-                        f"[#7f849c]{worker['tool_calls']:4} tools[/] │ "
-                        f"[#a6e3a1]{format_cost(worker['cost_usd'])}[/]",
-                        classes="worker-row",
-                    )
+        yield Static("\n".join(lines), markup=True)
 
     def _load_metrics(self) -> None:
-        """Load and aggregate metrics from all worker logs."""
         self.metrics = aggregate_worker_metrics(self.ralph_dir)
 
     def refresh_data(self) -> None:
-        """Refresh metrics data and re-render only if data changed."""
-        old_metrics = self.metrics
         self._load_metrics()
-
-        # Check if data actually changed
         new_hash = self._compute_data_hash(self.metrics)
         if new_hash == self._last_data_hash:
-            return  # No change, skip refresh
+            return
         self._last_data_hash = new_hash
-
         self.remove_children()
         for widget in self.compose():
             self.mount(widget)
