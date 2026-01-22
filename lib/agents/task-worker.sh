@@ -35,7 +35,7 @@ agent_output_files() {
 
 # Source dependencies using base library helpers
 agent_source_core
-agent_source_ralph
+agent_source_ralph_supervised
 agent_source_resume
 agent_source_violations
 agent_source_tasks
@@ -118,12 +118,16 @@ agent_run() {
     _TASK_RESUME_ITERATION="$resume_iteration"
     _TASK_RESUME_CONTEXT="$resume_context"
 
-    # Run main work loop
-    run_ralph_loop "$workspace" \
+    # Supervisor interval (run supervisor every N iterations)
+    local supervisor_interval="${WIGGUM_SUPERVISOR_INTERVAL:-3}"
+
+    # Run main work loop with supervision
+    run_ralph_loop_supervised "$workspace" \
         "$(_get_system_prompt "$workspace")" \
         "_task_user_prompt" \
         "_task_completion_check" \
-        "$max_iterations" "$max_turns" "$worker_dir" "iteration"
+        "$max_iterations" "$max_turns" "$worker_dir" "iteration" \
+        "$supervisor_interval"
 
     local loop_result=$?
 
@@ -413,11 +417,26 @@ For subagent prompts, prepend:
 EOF
 }
 
-# User prompt callback for ralph loop
+# User prompt callback for supervised ralph loop
+# Args: iteration, output_dir, supervisor_dir, supervisor_feedback
 _task_user_prompt() {
     local iteration="$1"
     local output_dir="$2"
+    local supervisor_dir="$3"
+    local supervisor_feedback="$4"
     local prd_relative="../prd.md"
+
+    # Include supervisor feedback if provided
+    if [ -n "$supervisor_feedback" ]; then
+        cat << SUPERVISOR_EOF
+SUPERVISOR GUIDANCE:
+
+$supervisor_feedback
+
+---
+
+SUPERVISOR_EOF
+    fi
 
     cat << 'PROMPT_EOF'
 TASK EXECUTION PROTOCOL:

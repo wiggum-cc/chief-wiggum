@@ -33,7 +33,7 @@ agent_output_files() {
 
 # Source dependencies using base library helpers
 agent_source_core
-agent_source_ralph
+agent_source_ralph_supervised
 agent_source_resume
 agent_source_violations
 agent_source_tasks
@@ -112,22 +112,24 @@ agent_run() {
     # Create standard directories
     agent_create_directories "$worker_dir"
 
-    # === PLANNING PHASE (NEW) ===
-    log "Running implementation planning phase"
-    run_sub_agent "plan-mode" "$worker_dir" "$project_dir"
-    local plan_result=$?
+    # === PLANNING PHASE ===
+    _TASK_PLAN_FILE="$project_dir/.ralph/plans/${task_id}.md"
 
-    if [ $plan_result -eq 0 ]; then
-        _TASK_PLAN_FILE="$project_dir/.ralph/plans/${task_id}.md"
-        if [ -f "$_TASK_PLAN_FILE" ]; then
-            log "Plan available at $_TASK_PLAN_FILE"
+    if [ -f "$_TASK_PLAN_FILE" ] && [ -s "$_TASK_PLAN_FILE" ]; then
+        # Plan already exists - skip planning phase
+        log "Plan already exists at $_TASK_PLAN_FILE - skipping planning phase"
+    else
+        # No existing plan - run planning phase
+        log "Running implementation planning phase"
+        run_sub_agent "plan-mode" "$worker_dir" "$project_dir"
+        local plan_result=$?
+
+        if [ $plan_result -eq 0 ] && [ -f "$_TASK_PLAN_FILE" ]; then
+            log "Plan created at $_TASK_PLAN_FILE"
         else
-            log_warn "Plan file not found at expected location"
+            log_warn "Planning did not complete (exit: ${plan_result:-0}) - continuing without plan"
             _TASK_PLAN_FILE=""
         fi
-    else
-        log_warn "Planning did not complete (exit: $plan_result) - continuing without plan"
-        _TASK_PLAN_FILE=""
     fi
 
     # === EXECUTION PHASE ===
@@ -137,12 +139,16 @@ agent_run() {
     _TASK_RESUME_ITERATION="$resume_iteration"
     _TASK_RESUME_CONTEXT="$resume_context"
 
-    # Run main work loop
-    run_ralph_loop "$workspace" \
+    # Supervisor interval (run supervisor every N iterations)
+    local supervisor_interval="${WIGGUM_SUPERVISOR_INTERVAL:-3}"
+
+    # Run main work loop with supervision
+    run_ralph_loop_supervised "$workspace" \
         "$(_get_system_prompt "$workspace")" \
         "_task_user_prompt" \
         "_task_completion_check" \
-        "$max_iterations" "$max_turns" "$worker_dir" "iteration"
+        "$max_iterations" "$max_turns" "$worker_dir" "iteration" \
+        "$supervisor_interval"
 
     local loop_result=$?
 
@@ -434,11 +440,26 @@ For subagent prompts, prepend:
 EOF
 }
 
-# User prompt callback for ralph loop
+# User prompt callback for supervised ralph loop
+# Args: iteration, output_dir, supervisor_dir, supervisor_feedback
 _task_user_prompt() {
     local iteration="$1"
     local output_dir="$2"
+    local supervisor_dir="$3"
+    local supervisor_feedback="$4"
     local prd_relative="../prd.md"
+
+    # Include supervisor feedback if provided
+    if [ -n "$supervisor_feedback" ]; then
+        cat << SUPERVISOR_EOF
+SUPERVISOR GUIDANCE:
+
+$supervisor_feedback
+
+---
+
+SUPERVISOR_EOF
+    fi
 
     cat << 'PROMPT_EOF'
 TASK EXECUTION PROTOCOL:

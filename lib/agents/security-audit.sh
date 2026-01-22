@@ -6,12 +6,12 @@
 # AGENT_DESCRIPTION: Security vulnerability scanner agent that audits codebase
 #   for security issues. Uses ralph loop pattern with summaries. Scans for
 #   secrets, OWASP Top 10, injection patterns, and insecure coding practices.
-#   Returns PASS/WARN/FAIL result based on finding severity.
+#   Returns PASS/FIX/STOP result based on whether issues are fixable or architectural.
 # REQUIRED_PATHS:
 #   - workspace : Directory containing the code to audit
 # OUTPUT_FILES:
 #   - security-report.md  : Detailed security findings
-#   - security-result.txt : Contains PASS, WARN, or FAIL
+#   - security-result.txt : Contains PASS, FIX, or STOP
 # =============================================================================
 
 # Source base library and initialize metadata
@@ -107,7 +107,7 @@ Please continue your audit:
 2. If you found issues that need deeper investigation, investigate them now
 3. When your audit is complete, provide the final <report> and <result> tags
 
-Remember: The <result> tag must contain exactly PASS, WARN, or FAIL.
+Remember: The <result> tag must contain exactly PASS, FIX, or STOP.
 CONTINUE_EOF
     fi
 }
@@ -121,7 +121,7 @@ _audit_completion_check() {
     latest_log=$(find "$worker_dir/logs" -maxdepth 1 -name "audit-*.log" ! -name "*summary*" -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
 
     if [ -n "$latest_log" ] && [ -f "$latest_log" ]; then
-        if grep -qP '<result>(PASS|WARN|FAIL)</result>' "$latest_log" 2>/dev/null; then
+        if grep -qP '<result>(PASS|FIX|STOP)</result>' "$latest_log" 2>/dev/null; then
             return 0  # Complete
         fi
     fi
@@ -211,9 +211,9 @@ Scan the codebase for security vulnerabilities.
 
 ## Result Criteria
 
-* **FAIL**: Any CRITICAL or HIGH findings
-* **WARN**: MEDIUM findings only
-* **PASS**: Only LOW/INFO or no findings
+* **PASS**: No significant issues found - continue workflow without fixing
+* **FIX**: Fixable issues found - security bugs that can be remediated in current task
+* **STOP**: Fundamental/architectural problems - issues too deep to fix in current task scope (e.g., insecure auth design, missing encryption architecture, fundamentally broken trust model)
 
 ## Output Format
 
@@ -248,11 +248,11 @@ Files scanned: N | Limitations: [any areas not fully assessed]
 
 <result>PASS</result>
 OR
-<result>WARN</result>
+<result>FIX</result>
 OR
-<result>FAIL</result>
+<result>STOP</result>
 
-The <result> tag MUST be exactly: PASS, WARN, or FAIL.
+The <result> tag MUST be exactly: PASS, FIX, or STOP.
 EOF
 }
 
@@ -274,8 +274,8 @@ _extract_audit_result() {
             log "Security report saved to security-report.md"
         fi
 
-        # Extract result tag (PASS, WARN, or FAIL)
-        SECURITY_RESULT=$(grep -oP '(?<=<result>)(PASS|WARN|FAIL)(?=</result>)' "$log_file" | head -1)
+        # Extract result tag (PASS, FIX, or STOP)
+        SECURITY_RESULT=$(grep -oP '(?<=<result>)(PASS|FIX|STOP)(?=</result>)' "$log_file" | head -1)
         if [ -z "$SECURITY_RESULT" ]; then
             SECURITY_RESULT="UNKNOWN"
         fi
@@ -286,7 +286,7 @@ _extract_audit_result() {
 }
 
 # Check security result from a worker directory (utility for callers)
-# Returns: 0 if PASS, 1 if WARN, 2 if FAIL/UNKNOWN
+# Returns: 0 if PASS, 1 if FIX, 2 if STOP/UNKNOWN
 check_security_result() {
     local worker_dir="$1"
     local result_file="$worker_dir/security-result.txt"
@@ -298,10 +298,10 @@ check_security_result() {
             PASS)
                 return 0
                 ;;
-            WARN)
+            FIX)
                 return 1
                 ;;
-            FAIL|UNKNOWN|*)
+            STOP|UNKNOWN|*)
                 return 2
                 ;;
         esac

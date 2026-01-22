@@ -20,6 +20,7 @@ source "$WIGGUM_HOME/lib/worker/agent-registry.sh"
 # Default configuration (can be overridden by env vars)
 MAX_ITERATIONS="${WIGGUM_MAX_ITERATIONS:-20}"
 MAX_TURNS="${WIGGUM_MAX_TURNS:-50}"
+AGENT_TYPE="${WIGGUM_AGENT_TYPE:-task-worker}"
 
 show_help() {
     cat << EOF
@@ -109,9 +110,10 @@ do_start() {
 
     # Use setsid to create a new session/process group for the worker
     # This prevents SIGINT from the orchestrator from killing workers
+    export WIGGUM_AGENT_TYPE="$AGENT_TYPE"
     setsid bash -c '
         source "$WIGGUM_HOME/lib/worker/agent-registry.sh"
-        run_agent "task-worker" "'"$worker_dir"'" "'"$PROJECT_DIR"'"
+        run_agent "$WIGGUM_AGENT_TYPE" "'"$worker_dir"'" "'"$PROJECT_DIR"'"
     ' >> "$RALPH_DIR/logs/workers.log" 2>&1 &
 
     # Wait briefly for agent.pid to be created
