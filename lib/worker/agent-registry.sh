@@ -173,6 +173,10 @@ run_agent() {
     _AGENT_REGISTRY_PROJECT_DIR="$project_dir"
     _AGENT_REGISTRY_WORKER_DIR="$worker_dir"
 
+    # Export agent type for violation monitor
+    # Task-worker is exempt from destructive git command restrictions
+    export WIGGUM_CURRENT_AGENT_TYPE="$agent_type"
+
     # Load agent first (needed for hooks)
     if ! load_agent "$agent_type"; then
         return 1
@@ -260,6 +264,7 @@ _agent_registry_cleanup() {
         _AGENT_REGISTRY_IS_TOP_LEVEL=false
         _AGENT_REGISTRY_PROJECT_DIR=""
         _AGENT_REGISTRY_WORKER_DIR=""
+        unset WIGGUM_CURRENT_AGENT_TYPE
     fi
 }
 
@@ -302,9 +307,18 @@ run_sub_agent() {
 
     log "Running sub-agent: $agent_type"
 
+    # Save parent agent type to restore after sub-agent completes
+    local parent_agent_type="${WIGGUM_CURRENT_AGENT_TYPE:-}"
+
+    # Export agent type for violation monitor to detect destructive git commands
+    # Sub-agents are blocked from destructive git operations; task-worker is exempt
+    export WIGGUM_CURRENT_AGENT_TYPE="$agent_type"
+
     # Validate we have required directories
     if [ -z "$worker_dir" ] || [ -z "$project_dir" ]; then
         log_error "run_sub_agent: worker_dir and project_dir required (not inherited from parent)"
+        # Restore parent agent type before returning
+        export WIGGUM_CURRENT_AGENT_TYPE="$parent_agent_type"
         return 1
     fi
 
@@ -369,6 +383,9 @@ run_sub_agent() {
         log_debug "Running agent cleanup"
         agent_cleanup "$worker_dir" "$exit_code"
     fi
+
+    # Restore parent agent type for violation monitor
+    export WIGGUM_CURRENT_AGENT_TYPE="$parent_agent_type"
 
     log "Sub-agent $agent_type completed with exit code: $exit_code"
     return $exit_code

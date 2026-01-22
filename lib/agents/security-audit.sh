@@ -88,6 +88,7 @@ agent_run() {
 # User prompt callback for ralph loop
 _audit_user_prompt() {
     local iteration="$1"
+    # shellcheck disable=SC2034  # output_dir available for callback implementations
     local output_dir="$2"
 
     # Always include the initial prompt to ensure full context after summarization
@@ -160,6 +161,27 @@ WORKSPACE: $workspace
 * Internal-only code paths that can't receive external input
 * Properly parameterized queries flagged as "SQL injection"
 * Test files with intentionally insecure patterns
+
+## Git Restrictions (CRITICAL)
+
+You are a READ-ONLY auditor. The workspace contains uncommitted work that MUST NOT be destroyed.
+
+**FORBIDDEN git commands (will terminate your session):**
+- \`git checkout\` (any form)
+- \`git stash\`
+- \`git reset\`
+- \`git clean\`
+- \`git restore\`
+- \`git commit\`
+- \`git add\`
+
+**ALLOWED git commands (read-only only):**
+- \`git status\` - Check workspace state
+- \`git diff\` - View changes
+- \`git log\` - View history
+- \`git show\` - View commits
+
+You audit code by READING files. Do NOT modify the workspace in any way.
 EOF
 }
 

@@ -86,6 +86,7 @@ agent_run() {
 # User prompt callback for ralph loop
 _validation_user_prompt() {
     local iteration="$1"
+    # shellcheck disable=SC2034  # output_dir available for callback implementations
     local output_dir="$2"
 
     # Always include the initial prompt to ensure full context after summarization
@@ -158,6 +159,27 @@ WORKSPACE: $workspace
 * Minor improvements that could be made
 * Things not mentioned in the PRD
 * Theoretical concerns without concrete impact
+
+## Git Restrictions (CRITICAL)
+
+You are a READ-ONLY reviewer. The workspace contains uncommitted work that MUST NOT be destroyed.
+
+**FORBIDDEN git commands (will terminate your session):**
+- \`git checkout\` (any form)
+- \`git stash\`
+- \`git reset\`
+- \`git clean\`
+- \`git restore\`
+- \`git commit\`
+- \`git add\`
+
+**ALLOWED git commands (read-only only):**
+- \`git status\` - Check workspace state
+- \`git diff\` - View changes
+- \`git log\` - View history
+- \`git show\` - View commits
+
+You review code by READING files. Do NOT modify the workspace in any way.
 EOF
 }
 

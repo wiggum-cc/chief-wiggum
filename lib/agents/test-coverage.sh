@@ -163,6 +163,26 @@ WORKSPACE: $workspace
 * Create test infrastructure that doesn't exist
 * Write tests for code you didn't modify
 * Change existing tests unless they test modified code
+
+## Git Restrictions (CRITICAL)
+
+The workspace contains uncommitted work from other agents. You MUST NOT destroy it.
+
+**FORBIDDEN git commands (will terminate your session):**
+- \`git checkout -- <file>\` - DESTROYS uncommitted file changes
+- \`git checkout .\` - DESTROYS all uncommitted changes
+- \`git stash\` - Hides uncommitted changes
+- \`git reset --hard\` - DESTROYS uncommitted changes
+- \`git clean\` - DELETES untracked files
+- \`git restore\` - DESTROYS uncommitted changes
+
+**ALLOWED git commands:**
+- \`git status\`, \`git diff\`, \`git log\`, \`git show\` (read-only)
+- \`git add <your-test-files>\` (stage your test changes)
+- \`git commit -m "..."\` (commit your work)
+
+**IMPORTANT:** Commit your test changes before completing. Use a descriptive commit message.
+Do NOT revert, stash, or reset files - the workspace contains other agents' work.
 EOF
 }
 

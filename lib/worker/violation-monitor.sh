@@ -12,6 +12,89 @@ source "$WIGGUM_HOME/lib/core/logger.sh"
 # Global variable for violation monitor PID (needed for cleanup from signal handler)
 VIOLATION_MONITOR_PID=""
 
+# Check if a command is a destructive git command that sub-agents should not run
+# These commands can destroy uncommitted work in the workspace
+#
+# Args:
+#   command - The bash command to check
+#
+# Returns: 0 if destructive, 1 if safe
+_is_destructive_git_command() {
+    local command="$1"
+
+    # Only check git commands
+    if ! echo "$command" | grep -qE '\bgit\b'; then
+        return 1  # Not a git command - safe
+    fi
+
+    # Safe git commands (read-only operations)
+    # git status, git diff, git log, git show, git branch (without -d/-D)
+    # git checkout <branch> (switching branches, no --)
+    # git add, git commit (allowed for sub-agents that commit)
+    if echo "$command" | grep -qE '\bgit\s+(status|diff|log|show|rev-parse|ls-files|describe|tag|remote|fetch)\b'; then
+        return 1  # Safe read-only commands
+    fi
+
+    # Allow git branch without delete flags
+    if echo "$command" | grep -qE '\bgit\s+branch\b' && ! echo "$command" | grep -qE '\bgit\s+branch\s+.*-[dD]'; then
+        return 1  # Safe branch listing
+    fi
+
+    # Allow git add and git commit (sub-agents need to commit their work)
+    if echo "$command" | grep -qE '\bgit\s+(add|commit)\b'; then
+        return 1  # Safe - sub-agents can stage and commit their own work
+    fi
+
+    # DESTRUCTIVE: git checkout -- <file> (reverts file changes)
+    # Note: "git checkout -- ." or "git checkout -- file.txt" destroys uncommitted changes
+    if echo "$command" | grep -qE '\bgit\s+checkout\s+.*--'; then
+        return 0  # Destructive - reverts file changes
+    fi
+
+    # DESTRUCTIVE: git checkout . (reverts all changes in current directory)
+    if echo "$command" | grep -qE '\bgit\s+checkout\s+\.$'; then
+        return 0  # Destructive - reverts all changes
+    fi
+
+    # DESTRUCTIVE: git stash (hides uncommitted changes)
+    if echo "$command" | grep -qE '\bgit\s+stash\b'; then
+        return 0  # Destructive - hides changes
+    fi
+
+    # DESTRUCTIVE: git reset --hard (destroys uncommitted changes)
+    if echo "$command" | grep -qE '\bgit\s+reset\s+--hard'; then
+        return 0  # Destructive - hard reset
+    fi
+
+    # DESTRUCTIVE: git reset HEAD~ or similar (can lose commits)
+    if echo "$command" | grep -qE '\bgit\s+reset\s+(HEAD|[a-f0-9]+)'; then
+        return 0  # Destructive - can lose commits
+    fi
+
+    # DESTRUCTIVE: git clean (deletes untracked files)
+    if echo "$command" | grep -qE '\bgit\s+clean\b'; then
+        return 0  # Destructive - deletes files
+    fi
+
+    # DESTRUCTIVE: git restore (reverts changes - modern replacement for checkout --)
+    if echo "$command" | grep -qE '\bgit\s+restore\b'; then
+        return 0  # Destructive - reverts changes
+    fi
+
+    # DESTRUCTIVE: git revert (creates revert commits - can be confusing in shared workspace)
+    if echo "$command" | grep -qE '\bgit\s+revert\b'; then
+        return 0  # Destructive - modifies history
+    fi
+
+    # Allow safe git checkout <branch> (switching branches without --)
+    if echo "$command" | grep -qE '\bgit\s+checkout\s+[a-zA-Z0-9_/-]+$'; then
+        return 1  # Safe branch switching
+    fi
+
+    # Default: allow other git commands
+    return 1
+}
+
 # Start real-time violation monitor
 #
 # Args:
@@ -115,6 +198,19 @@ start_violation_monitor() {
                     if [[ -n "$command" ]]; then
                         # Decode JSON escape sequences
                         command=$(echo -e "$command")
+
+                        # Check for destructive git commands (for sub-agents only)
+                        # Task-worker is exempt as it owns the workspace
+                        if [[ "${WIGGUM_CURRENT_AGENT_TYPE:-}" != "task-worker" ]] && \
+                           [[ "${WIGGUM_CURRENT_AGENT_TYPE:-}" != "task-worker-plan-mode" ]]; then
+                            if _is_destructive_git_command "$command"; then
+                                # VIOLATION: Destructive git command from sub-agent
+                                _log_violation "$monitor_log" "Bash/DestructiveGit" "$command" "$workspace"
+                                _create_violation_flag "$worker_dir" "DESTRUCTIVE_GIT_COMMAND" "$command"
+                                _terminate_agent "$agent_pid" "$worker_dir"
+                                exit 1
+                            fi
+                        fi
 
                         # Check for git commands in project_dir (not workspace)
                         if echo "$command" | grep -qE "cd\s+['\"]?$project_dir" || \

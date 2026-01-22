@@ -55,6 +55,51 @@ eval "_kanban_mark_pending_approval() $(declare -f update_kanban_pending_approva
 # Track plan file path for user prompt callback
 _TASK_PLAN_FILE=""
 
+# Commit sub-agent changes to isolate work between phases
+# This prevents one sub-agent from accidentally destroying another's work
+#
+# Args:
+#   workspace   - The workspace directory
+#   agent_name  - Name of the sub-agent (for commit message)
+#   file_pattern - Optional glob pattern to add (defaults to ".")
+#
+# Returns: 0 on success or if nothing to commit, 1 on error
+_commit_subagent_changes() {
+    local workspace="$1"
+    local agent_name="$2"
+    local file_pattern="${3:-.}"
+
+    cd "$workspace" || return 1
+
+    # Check if there are any changes to commit
+    if git diff --quiet && git diff --staged --quiet; then
+        log_debug "No changes to commit for $agent_name"
+        return 0
+    fi
+
+    # Stage changes
+    git add "$file_pattern" 2>/dev/null || true
+
+    # Check if there are staged changes
+    if git diff --staged --quiet; then
+        log_debug "No staged changes to commit for $agent_name"
+        return 0
+    fi
+
+    # Create commit
+    local commit_msg="chore($agent_name): automated changes
+
+Co-Authored-By: Wiggum <noreply@wiggum.ai>"
+
+    if git commit -m "$commit_msg" >/dev/null 2>&1; then
+        log "Committed $agent_name changes"
+        return 0
+    else
+        log_warn "Failed to commit $agent_name changes"
+        return 1
+    fi
+}
+
 # Main entry point - manages complete task lifecycle
 agent_run() {
     local worker_dir="$1"
@@ -184,6 +229,9 @@ agent_run() {
                 fix_result=$(cat "$worker_dir/fix-result.txt" 2>/dev/null || echo "UNKNOWN")
                 log "Security fix result: $fix_result"
 
+                # Commit security fix changes to isolate work
+                _commit_subagent_changes "$workspace" "security-fix"
+
                 if [ "$fix_result" != "FIXED" ]; then
                     log_warn "Security fix incomplete (result: $fix_result) - continuing with validation"
                 fi
@@ -213,6 +261,8 @@ agent_run() {
         case "$test_result" in
             PASS)
                 log "Tests generated and all passed"
+                # Commit test changes to isolate work
+                _commit_subagent_changes "$workspace" "test-coverage"
                 ;;
             FAIL)
                 log_error "Tests failed - marking task as failed"
@@ -224,6 +274,8 @@ agent_run() {
                 ;;
             *)
                 log_warn "Test result unknown ($test_result) - continuing with caution"
+                # Still try to commit any test changes made
+                _commit_subagent_changes "$workspace" "test-coverage"
                 ;;
         esac
     fi
@@ -242,12 +294,16 @@ agent_run() {
         case "$docs_result" in
             PASS)
                 log "Documentation updated successfully"
+                # Commit documentation changes to isolate work
+                _commit_subagent_changes "$workspace" "documentation"
                 ;;
             SKIP)
                 log "Documentation update skipped (no updates needed)"
                 ;;
             *)
                 log "Documentation completed with result: $docs_result"
+                # Still try to commit any doc changes made
+                _commit_subagent_changes "$workspace" "documentation"
                 ;;
         esac
     fi
