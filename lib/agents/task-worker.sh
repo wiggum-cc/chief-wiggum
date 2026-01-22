@@ -51,6 +51,9 @@ source "$WIGGUM_HOME/lib/core/exit-codes.sh"
 eval "_kanban_mark_done() $(declare -f update_kanban | sed '1d')"
 eval "_kanban_mark_failed() $(declare -f update_kanban_failed | sed '1d')"
 
+# Track plan file path for user prompt callback
+_TASK_PLAN_FILE=""
+
 # Main entry point - manages complete task lifecycle
 agent_run() {
     local worker_dir="$1"
@@ -110,6 +113,15 @@ agent_run() {
 
     # Create standard directories
     agent_create_directories "$worker_dir"
+
+    # === CHECK FOR EXISTING PLAN ===
+    _TASK_PLAN_FILE="$project_dir/.ralph/plans/${task_id}.md"
+    if [ -f "$_TASK_PLAN_FILE" ] && [ -s "$_TASK_PLAN_FILE" ]; then
+        log "Plan found at $_TASK_PLAN_FILE - will include in execution context"
+    else
+        log_debug "No existing plan at $_TASK_PLAN_FILE"
+        _TASK_PLAN_FILE=""
+    fi
 
     # === EXECUTION PHASE ===
     # Set up callback context using base library
@@ -560,6 +572,26 @@ Before marking complete, verify:
 - Don't over-engineer or add unrequested features
 - Stay within the workspace directory
 PROMPT_EOF
+
+    # Add plan guidance if plan file exists
+    if [ -n "$_TASK_PLAN_FILE" ] && [ -f "$_TASK_PLAN_FILE" ]; then
+        cat << PLAN_EOF
+
+IMPLEMENTATION PLAN AVAILABLE:
+
+An implementation plan has been created for this task. Before starting:
+1. Read the plan at: @$_TASK_PLAN_FILE
+2. Follow the implementation approach described in the plan
+3. Pay attention to the Critical Files section
+4. Consider the potential challenges identified
+
+The plan provides guidance on:
+- Existing patterns in the codebase to follow
+- Recommended implementation approach
+- Dependencies and sequencing
+- Potential challenges to watch for
+PLAN_EOF
+    fi
 
     # Add context from previous iterations if available
     if [ "$iteration" -gt 0 ]; then
