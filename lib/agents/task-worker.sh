@@ -200,6 +200,58 @@ agent_run() {
         esac
     fi
 
+    # === TEST COVERAGE PHASE ===
+    if [ -d "$workspace" ] && [ $loop_result -eq 0 ]; then
+        log "Running test generation and execution on completed work"
+        run_sub_agent "test-coverage" "$worker_dir" "$project_dir"
+
+        # Check test result
+        local test_result
+        test_result=$(cat "$worker_dir/test-result.txt" 2>/dev/null || echo "UNKNOWN")
+        log "Test coverage result: $test_result"
+
+        case "$test_result" in
+            PASS)
+                log "Tests generated and all passed"
+                ;;
+            FAIL)
+                log_error "Tests failed - marking task as failed"
+                log_error "Review test-report.md for details"
+                loop_result=1
+                ;;
+            SKIP)
+                log "Test generation skipped (no testable changes or no test infrastructure)"
+                ;;
+            *)
+                log_warn "Test result unknown ($test_result) - continuing with caution"
+                ;;
+        esac
+    fi
+
+    # === DOCUMENTATION WRITER PHASE ===
+    # Note: documentation-writer is non-blocking and never fails
+    if [ -d "$workspace" ] && [ $loop_result -eq 0 ]; then
+        log "Running documentation update on completed work"
+        run_sub_agent "documentation-writer" "$worker_dir" "$project_dir"
+
+        # Check docs result (informational only - never blocks)
+        local docs_result
+        docs_result=$(cat "$worker_dir/docs-result.txt" 2>/dev/null || echo "SKIP")
+        log "Documentation writer result: $docs_result"
+
+        case "$docs_result" in
+            PASS)
+                log "Documentation updated successfully"
+                ;;
+            SKIP)
+                log "Documentation update skipped (no updates needed)"
+                ;;
+            *)
+                log "Documentation completed with result: $docs_result"
+                ;;
+        esac
+    fi
+
     # Stop violation monitor before validation
     stop_violation_monitor "$VIOLATION_MONITOR_PID"
 

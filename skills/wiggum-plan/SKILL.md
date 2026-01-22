@@ -1,9 +1,9 @@
 ---
-name: plan-task
+name: wiggum-plan
 description: Interactively plan task implementation
 ---
 
-# Plan Task
+# Wiggum Plan
 
 Create implementation plans by exploring the codebase and designing an approach before coding.
 
@@ -101,7 +101,7 @@ Write a plan to `.ralph/plans/TASK-xxx.md` (or present to user) with this struct
 
 ## Example Interaction
 
-**User**: `/plan-task Add user authentication`
+**User**: `/wiggum-plan Add user authentication`
 
 **Assistant**: I'll help you plan the authentication implementation. Let me explore the codebase first.
 

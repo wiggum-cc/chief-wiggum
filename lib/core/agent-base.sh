@@ -89,6 +89,11 @@ agent_source_ralph_supervised() {
     source "$WIGGUM_HOME/lib/claude/run-claude-ralph-loop-supervised.sh"
 }
 
+# Source one-shot agent execution (no iteration loop)
+agent_source_once() {
+    source "$WIGGUM_HOME/lib/claude/run-claude-once.sh"
+}
+
 # Source git operations
 agent_source_git() {
     source "$WIGGUM_HOME/lib/git/worktree-helpers.sh"
