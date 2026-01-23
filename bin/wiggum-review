@@ -412,7 +412,7 @@ cmd_task_sync() {
     sync_pr_comments "$patterns" "$output_dir"
 }
 
-# Fix PR comments for a task
+# Fix PR comments for a task (async launch)
 cmd_task_fix() {
     local pattern="$1"
 
@@ -445,8 +445,48 @@ cmd_task_fix() {
         return 1
     fi
 
-    log "Starting comment fix loop for $(basename "$worker_dir")"
-    run_agent "pr-comment-fix" "$worker_dir" "$(pwd)"
+    # Guard: check if agent is already running
+    if [ -f "$worker_dir/agent.pid" ]; then
+        local existing_pid
+        existing_pid=$(cat "$worker_dir/agent.pid")
+        if kill -0 "$existing_pid" 2>/dev/null; then
+            log "Fix agent already running for $(basename "$worker_dir") (PID: $existing_pid)"
+            return 0
+        fi
+        # Stale PID file - remove it
+        rm -f "$worker_dir/agent.pid"
+    fi
+
+    # Remove stale result file before launching
+    rm -f "$worker_dir/agent-result.json"
+
+    # Ensure log directory exists
+    mkdir -p "$RALPH_DIR/logs"
+
+    log "Launching fix agent for $(basename "$worker_dir")"
+
+    # Launch agent in background via setsid (new session, won't receive parent signals)
+    # shellcheck disable=SC2016
+    setsid bash -c '
+        export WIGGUM_HOME="'"$WIGGUM_HOME"'"
+        source "$WIGGUM_HOME/lib/worker/agent-registry.sh"
+        run_agent "pr-comment-fix" "'"$worker_dir"'" "'"$PROJECT_DIR"'"
+    ' >> "$RALPH_DIR/logs/fix-workers.log" 2>&1 &
+
+    # Poll for agent.pid creation (10 × 0.1s)
+    local wait_count=0
+    while [ ! -f "$worker_dir/agent.pid" ] && [ $wait_count -lt 10 ]; do
+        sleep 0.1
+        ((wait_count++)) || true
+    done
+
+    if [ -f "$worker_dir/agent.pid" ]; then
+        local agent_pid
+        agent_pid=$(cat "$worker_dir/agent.pid")
+        log "Fix agent running (PID: $agent_pid)"
+    else
+        log "Fix agent started (PID file pending)"
+    fi
 }
 
 # Resolve git merge conflicts in worker workspace

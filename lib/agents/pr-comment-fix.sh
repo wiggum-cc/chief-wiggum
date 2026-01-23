@@ -49,9 +49,16 @@ agent_run() {
     local comments_file="$worker_dir/task-comments.md"
     local status_file="$worker_dir/comment-status.md"
 
+    # Record start time and log agent start
+    local start_time
+    start_time=$(date +%s)
+    agent_log_start "$worker_dir" "$(basename "$worker_dir")"
+
     # Verify workspace exists
     if [ ! -d "$workspace" ]; then
         log_error "Workspace not found: $workspace"
+        agent_log_complete "$worker_dir" 1 "$start_time"
+        agent_write_result "$worker_dir" "failure" 1 '{}' '["Workspace not found"]'
         return 1
     fi
 
@@ -59,6 +66,8 @@ agent_run() {
     if [ ! -f "$comments_file" ]; then
         log_error "Comments file not found: $comments_file"
         log_error "Run 'wiggum review task <pattern> sync' first"
+        agent_log_complete "$worker_dir" 1 "$start_time"
+        agent_write_result "$worker_dir" "failure" 1 '{}' '["Comments file not found"]'
         return 1
     fi
 
@@ -67,6 +76,9 @@ agent_run() {
     comment_count=$(grep -c '^### ' "$comments_file" 2>/dev/null || echo "0")
     if [ "$comment_count" -eq 0 ]; then
         log "No comments found in $comments_file - nothing to fix"
+        agent_log_complete "$worker_dir" 0 "$start_time"
+        agent_write_result "$worker_dir" "success" 0 '{"comments_fixed":0,"comments_pending":0,"comments_skipped":0}'
+        rm -f "$worker_dir/.needs-fix"
         return 0
     fi
 
@@ -96,12 +108,47 @@ agent_run() {
     local loop_result=$?
 
     # Auto commit and push if configured and loop succeeded
+    local push_succeeded="false"
+    local commit_sha=""
     local auto_commit="${WIGGUM_AUTO_COMMIT_AFTER_FIX:-${AGENT_CONFIG_AUTO_COMMIT:-true}}"
     if [ "$loop_result" -eq 0 ] && [ "$auto_commit" = "true" ]; then
         log "Auto-committing and pushing fixes..."
-        _commit_and_push_fixes "$workspace" "$worker_dir"
+        if _commit_and_push_fixes "$workspace" "$worker_dir"; then
+            push_succeeded="true"
+            commit_sha=$(cd "$workspace" && git rev-parse HEAD 2>/dev/null || echo "")
+        fi
     elif [ "$loop_result" -ne 0 ]; then
         log_warn "Fix loop did not complete successfully (exit code: $loop_result)"
+    fi
+
+    # Count comment statuses from status file
+    local comments_fixed=0 comments_pending=0 comments_skipped=0
+    if [ -f "$status_file" ]; then
+        comments_fixed=$(grep -c '^\- \[x\]' "$status_file" 2>/dev/null || echo "0")
+        comments_pending=$(grep -c '^\- \[ \]' "$status_file" 2>/dev/null || echo "0")
+        comments_skipped=$(grep -c '^\- \[\*\]' "$status_file" 2>/dev/null || echo "0")
+    fi
+
+    # Determine result status
+    local result_status="failure"
+    if [ "$loop_result" -eq 0 ] && [ "$comments_pending" -eq 0 ]; then
+        result_status="success"
+    elif [ "$comments_fixed" -gt 0 ]; then
+        result_status="partial"
+    fi
+
+    # Log completion and write structured result
+    agent_log_complete "$worker_dir" "$loop_result" "$start_time"
+
+    local outputs_json
+    outputs_json=$(printf '{"commit_sha":"%s","push_succeeded":%s,"comments_fixed":%d,"comments_pending":%d,"comments_skipped":%d}' \
+        "$commit_sha" "$push_succeeded" "$comments_fixed" "$comments_pending" "$comments_skipped")
+
+    agent_write_result "$worker_dir" "$result_status" "$loop_result" "$outputs_json"
+
+    # Remove .needs-fix marker on success
+    if [ "$result_status" = "success" ]; then
+        rm -f "$worker_dir/.needs-fix"
     fi
 
     return $loop_result

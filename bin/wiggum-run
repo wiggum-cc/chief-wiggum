@@ -238,21 +238,34 @@ check_and_spawn_fixes() {
 
         # Check for .needs-fix marker
         if [ -f "$worker_dir/.needs-fix" ]; then
+            # Guard: skip if agent is already running for this worker
+            if [ -f "$worker_dir/agent.pid" ]; then
+                local existing_pid
+                existing_pid=$(cat "$worker_dir/agent.pid")
+                if kill -0 "$existing_pid" 2>/dev/null; then
+                    log "Fix agent already running for $task_id (PID: $existing_pid) - skipping"
+                    continue
+                fi
+            fi
+
             log "Spawning fix worker for $task_id..."
 
-            # Run fix in background
+            # Call wiggum-review task fix synchronously (it returns immediately after async launch)
             (
                 cd "$PROJECT_DIR" || exit 1
                 "$WIGGUM_HOME/bin/wiggum-review" task "$task_id" fix 2>&1 | \
                     sed "s/^/  [fix-$task_id] /"
+            )
 
-                # Remove marker on completion
-                rm -f "$worker_dir/.needs-fix"
-            ) &
-
-            local fix_pid=$!
-            active_fix_workers[$fix_pid]="$task_id|$(date +%s)"
-            log "Fix worker spawned for $task_id (PID: $fix_pid)"
+            # Read the agent PID from the worker directory
+            if [ -f "$worker_dir/agent.pid" ]; then
+                local agent_pid
+                agent_pid=$(cat "$worker_dir/agent.pid")
+                active_fix_workers[$agent_pid]="$task_id|$(date +%s)"
+                log "Fix worker spawned for $task_id (PID: $agent_pid)"
+            else
+                log "Warning: Fix agent for $task_id did not produce agent.pid"
+            fi
         fi
     done < "$tasks_needing_fix"
 
@@ -589,7 +602,16 @@ main() {
             local fix_start="${fix_info##*|}"
 
             if ! kill -0 "$fix_pid" 2>/dev/null; then
-                log "Fix worker for $fix_task_id finished (PID: $fix_pid)"
+                # Check agent-result.json for structured status
+                local fix_worker_dir
+                fix_worker_dir=$(find_worker_by_task_id "$RALPH_DIR" "$fix_task_id" 2>/dev/null)
+                if [ -n "$fix_worker_dir" ] && [ -f "$fix_worker_dir/agent-result.json" ]; then
+                    local fix_status
+                    fix_status=$(grep -oP '"status"\s*:\s*"\K[^"]+' "$fix_worker_dir/agent-result.json" 2>/dev/null || echo "unknown")
+                    log "Fix worker for $fix_task_id finished (PID: $fix_pid) - result: $fix_status"
+                else
+                    log "Fix worker for $fix_task_id finished (PID: $fix_pid)"
+                fi
                 unset "active_fix_workers[$fix_pid]"
             elif [ $(( now - fix_start )) -ge "$FIX_WORKER_TIMEOUT" ]; then
                 log "WARNING: Fix worker for $fix_task_id timed out after ${FIX_WORKER_TIMEOUT}s - killing (PID: $fix_pid)"
