@@ -354,8 +354,8 @@ agent_log_complete() {
 agent_get_result_path() {
     local worker_dir="$1"
     local epoch="${_AGENT_START_EPOCH:-$(date +%s)}"
-    local agent_type="${AGENT_TYPE:-unknown}"
-    echo "$worker_dir/results/${epoch}-${agent_type}-result.json"
+    local name="${WIGGUM_STEP_ID:-${AGENT_TYPE:-unknown}}"
+    echo "$worker_dir/results/${epoch}-${name}-result.json"
 }
 
 # Find the latest result file for a given agent type
@@ -397,8 +397,8 @@ agent_write_report() {
     local worker_dir="$1"
     local content="$2"
     local epoch="${_AGENT_START_EPOCH:-$(date +%s)}"
-    local agent_type="${AGENT_TYPE:-unknown}"
-    local report_path="$worker_dir/reports/${epoch}-${agent_type}-report.md"
+    local name="${WIGGUM_STEP_ID:-${AGENT_TYPE:-unknown}}"
+    local report_path="$worker_dir/reports/${epoch}-${name}-report.md"
 
     mkdir -p "$worker_dir/reports"
     echo "$content" > "$report_path"
@@ -813,4 +813,47 @@ agent_read_subagent_result() {
     fi
 
     echo "$result"
+}
+
+# Read a pipeline step's gate_result from its step-ID-named result file
+#
+# Args:
+#   worker_dir - Worker directory path
+#   step_id    - Pipeline step ID (e.g., "audit", "execution")
+#
+# Returns: gate_result value (PASS/FAIL/FIX/SKIP/STOP) or "UNKNOWN"
+agent_read_step_result() {
+    local worker_dir="$1"
+    local step_id="$2"
+
+    local result=""
+    local result_file
+    result_file=$(agent_find_latest_result "$worker_dir" "$step_id")
+
+    if [ -n "$result_file" ] && [ -f "$result_file" ]; then
+        result=$(jq -r '.outputs.gate_result // empty' "$result_file" 2>/dev/null)
+    fi
+
+    if [ -z "$result" ]; then
+        result="UNKNOWN"
+    fi
+
+    echo "$result"
+}
+
+# Read step-config.json from the worker directory
+#
+# Args:
+#   worker_dir - Worker directory path
+#
+# Returns: JSON content of step-config.json, or "{}" if not found
+agent_read_step_config() {
+    local worker_dir="$1"
+    local config_file="$worker_dir/step-config.json"
+
+    if [ -f "$config_file" ]; then
+        cat "$config_file"
+    else
+        echo "{}"
+    fi
 }

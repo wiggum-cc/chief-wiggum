@@ -39,10 +39,11 @@ Task ID Resolution:
   - TASK-030           (full task ID)
 
 Options:
-  --max-iters N  Maximum iterations per worker (default: 20)
-  --max-turns N  Maximum turns per Claude session (default: 50)
-  --agent-type T Agent type to use (default: task-worker)
-  -h, --help     Show this help message
+  --max-iters N   Maximum iterations per worker (default: 20)
+  --max-turns N   Maximum turns per Claude session (default: 50)
+  --agent-type T  Agent type to use (default: task-worker)
+  --pipeline NAME Pipeline config to use (from config/pipelines/ or .ralph/pipelines/)
+  -h, --help      Show this help message
 
 Examples:
   wiggum start TASK-030          # Start worker for TASK-030
@@ -177,6 +178,15 @@ main() {
                 AGENT_TYPE="$2"
                 shift 2
                 ;;
+            --pipeline)
+                if [[ -z "${2:-}" ]] || [[ "${2:-}" =~ ^- ]]; then
+                    echo "Error: --pipeline requires a name argument"
+                    exit $EXIT_USAGE
+                fi
+                export WIGGUM_PIPELINE="$2"
+                echo "Using pipeline: $2"
+                shift 2
+                ;;
             plan)
                 export WIGGUM_PLAN_MODE=true
                 echo "Using plan mode"
@@ -201,7 +211,7 @@ main() {
 
     if [ -z "$task_id_arg" ]; then
         echo "Error: Task ID required"
-        echo "Usage: wiggum start <TASK-ID> [plan] [--max-iters N] [--max-turns N]"
+        echo "Usage: wiggum start <TASK-ID> [plan] [--max-iters N] [--max-turns N] [--pipeline NAME]"
         exit $EXIT_USAGE
     fi
 

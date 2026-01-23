@@ -47,28 +47,9 @@ agent_source_registry
 # Source exit codes for standardized returns
 source "$WIGGUM_HOME/lib/core/exit-codes.sh"
 
-# Ordered pipeline phases
-TASK_PIPELINE=(execution audit test docs validation finalization)
-
-_index_of() {
-    local target="$1"
-    shift
-    local i=0
-    for item in "$@"; do
-        [ "$item" = "$target" ] && { echo $i; return 0; }
-        ((i++))
-    done
-    echo 0  # default to first
-}
-
-_should_run_step() {
-    local current="$1"
-    local start="$2"
-    local current_idx start_idx
-    current_idx=$(_index_of "$current" "${TASK_PIPELINE[@]}")
-    start_idx=$(_index_of "$start" "${TASK_PIPELINE[@]}")
-    [ "$current_idx" -ge "$start_idx" ]
-}
+# Source pipeline libraries
+source "$WIGGUM_HOME/lib/pipeline/pipeline-loader.sh"
+source "$WIGGUM_HOME/lib/pipeline/pipeline-runner.sh"
 
 # Phase timing tracking
 declare -A PHASE_TIMINGS
@@ -86,7 +67,7 @@ _phase_end() {
 _build_phase_timings_json() {
     local json="{"
     local first=true
-    for phase in "${TASK_PIPELINE[@]}"; do
+    for phase in "${PIPELINE_STEP_IDS[@]}" "finalization"; do
         local start="${PHASE_TIMINGS[${phase}_start]:-0}"
         local end="${PHASE_TIMINGS[${phase}_end]:-0}"
         if [ "$start" -gt 0 ]; then
@@ -98,38 +79,6 @@ _build_phase_timings_json() {
     done
     json+="}"
     echo "$json"
-}
-
-# Write executor configuration file for the task-executor sub-agent
-#
-# Args:
-#   worker_dir           - Worker directory
-#   max_iterations       - Max iterations for the ralph loop
-#   max_turns            - Max turns per Claude session
-#   supervisor_interval  - Run supervisor every N iterations
-#   plan_file            - Path to plan file (empty if none)
-#   resume_instructions  - Path to resume instructions file (empty if none)
-_write_executor_config() {
-    local worker_dir="$1"
-    local max_iterations="$2"
-    local max_turns="$3"
-    local supervisor_interval="$4"
-    local plan_file="${5:-}"
-    local resume_instructions="${6:-}"
-
-    jq -n \
-        --argjson max_iterations "$max_iterations" \
-        --argjson max_turns "$max_turns" \
-        --argjson supervisor_interval "$supervisor_interval" \
-        --arg plan_file "$plan_file" \
-        --arg resume_instructions "$resume_instructions" \
-        '{
-            max_iterations: $max_iterations,
-            max_turns: $max_turns,
-            supervisor_interval: $supervisor_interval,
-            plan_file: $plan_file,
-            resume_instructions: $resume_instructions
-        }' > "$worker_dir/executor-config.json"
 }
 
 # Commit sub-agent changes to isolate work between phases
@@ -180,61 +129,13 @@ Co-Authored-By: Ralph Wiggum <ralph@wiggum.local>"
     fi
 }
 
-# Run a quality gate sub-agent with standardized result handling
-#
-# Args:
-#   agent_name   - Sub-agent to run (e.g., "security-audit")
-#   blocking     - "true" if FAIL/STOP should fail the task (default: true)
-#   workspace    - Workspace directory for committing changes
-#
-# Sets:
-#   GATE_RESULT  - The result string (PASS/FAIL/STOP/SKIP/FIX)
-#
-# Returns: 0 if gate passed/skipped, 1 if gate blocked (only when blocking=true)
-_run_quality_gate() {
-    local agent_name="$1"
-    local blocking="${2:-true}"
-    local workspace="$3"
-
-    log "Running $agent_name on completed work"
-    run_sub_agent "$agent_name" "$worker_dir" "$project_dir"
-
-    GATE_RESULT=$(agent_read_subagent_result "$worker_dir" "$agent_name")
-    log "$agent_name result: $GATE_RESULT"
-
-    case "$GATE_RESULT" in
-        PASS)
-            log "$agent_name passed"
-            _commit_subagent_changes "$workspace" "$agent_name"
-            return 0
-            ;;
-        SKIP)
-            log "$agent_name skipped (not applicable)"
-            return 0
-            ;;
-        FAIL|STOP|FIX)
-            if [ "$blocking" = "true" ]; then
-                log_error "$agent_name failed - blocking task completion"
-                return 1
-            fi
-            _commit_subagent_changes "$workspace" "$agent_name"
-            return 0
-            ;;
-        *)
-            log_warn "$agent_name result unknown ($GATE_RESULT) - continuing"
-            _commit_subagent_changes "$workspace" "$agent_name"
-            return 0
-            ;;
-    esac
-}
-
 # Main entry point - manages complete task lifecycle
 agent_run() {
     local worker_dir="$1"
     local project_dir="$2"
     local max_iterations="${3:-${AGENT_CONFIG_MAX_ITERATIONS:-20}}"
     local max_turns="${4:-${AGENT_CONFIG_MAX_TURNS:-50}}"
-    local start_from_step="${5:-execution}"
+    local start_from_step="${5:-}"
     local resume_instructions="${6:-}"
 
     # Determine plan mode from config or environment
@@ -257,7 +158,7 @@ agent_run() {
     agent_log_start "$worker_dir" "$task_id"
 
     log "Task worker agent starting for $task_id (max $max_turns turns per session, plan_mode=$plan_mode)"
-    if [ "$start_from_step" != "execution" ]; then
+    if [ -n "$start_from_step" ]; then
         log "Resuming from step: $start_from_step (skipping earlier phases)"
     fi
 
@@ -288,140 +189,44 @@ agent_run() {
     # Create standard directories
     agent_create_directories "$worker_dir"
 
-    # === PLANNING PHASE (optional) ===
+    # === PIPELINE PHASE ===
+    # Load pipeline configuration
     local plan_file="$project_dir/.ralph/plans/${task_id}.md"
-
-    if _should_run_step "execution" "$start_from_step"; then
-        if [ "$plan_mode" = "true" ]; then
-            if [ -f "$plan_file" ] && [ -s "$plan_file" ]; then
-                log "Plan already exists at $plan_file - skipping planning phase"
-            else
-                log "Running implementation planning phase"
-                run_sub_agent "plan-mode" "$worker_dir" "$project_dir"
-                local plan_result=$?
-
-                if [ $plan_result -eq 0 ] && [ -f "$plan_file" ]; then
-                    log "Plan created at $plan_file"
-                else
-                    log_warn "Planning did not complete (exit: ${plan_result:-0}) - continuing without plan"
-                    plan_file=""
-                fi
-            fi
-        else
-            # Non-plan mode: check for existing plan
-            if [ -f "$plan_file" ] && [ -s "$plan_file" ]; then
-                log "Plan found at $plan_file - will include in execution context"
-            else
-                log_debug "No existing plan at $plan_file"
-                plan_file=""
-            fi
-        fi
-    else
-        # Resuming past execution - check for existing plan
-        if [ -f "$plan_file" ] && [ -s "$plan_file" ]; then
-            log "Plan found at $plan_file (resuming past planning phase)"
-        else
-            plan_file=""
-        fi
+    if [ ! -f "$plan_file" ] || [ ! -s "$plan_file" ]; then
+        plan_file=""
     fi
 
-    # === EXECUTION PHASE ===
+    local pipeline_file
+    pipeline_file=$(pipeline_resolve "$project_dir" "$task_id" "${WIGGUM_PIPELINE:-}")
+    if [ -n "$pipeline_file" ]; then
+        pipeline_load "$pipeline_file"
+    else
+        pipeline_load_builtin_defaults
+    fi
+
+    # Set context for pipeline steps
+    export PIPELINE_PLAN_FILE="${plan_file:-}"
+    export PIPELINE_RESUME_INSTRUCTIONS="$resume_instructions"
+
+    # Run pipeline (skip if resuming directly to finalization)
     local loop_result=0
-
-    if _should_run_step "execution" "$start_from_step"; then
-        _phase_start "execution"
-
-        # Supervisor interval (run supervisor every N iterations)
-        local supervisor_interval="${WIGGUM_SUPERVISOR_INTERVAL:-2}"
-
-        # Write executor config
-        _write_executor_config "$worker_dir" "$max_iterations" "$max_turns" \
-            "$supervisor_interval" "${plan_file:-}" "$resume_instructions"
-
-        # Run execution via sub-agent
-        run_sub_agent "task-executor" "$worker_dir" "$project_dir"
+    if [ "$start_from_step" != "finalization" ]; then
+        pipeline_run_all "$worker_dir" "$project_dir" "$workspace" "$start_from_step"
         loop_result=$?
-
-        _phase_end "execution"
     else
-        log "Skipping execution phase (resuming from $start_from_step)"
-    fi
-
-    # === SUMMARY PHASE ===
-    if [ $loop_result -eq 0 ]; then
-        run_sub_agent "task-summarizer" "$worker_dir" "$project_dir"
-    fi
-
-    # === SECURITY AUDIT PHASE ===
-    if [ -d "$workspace" ] && [ $loop_result -eq 0 ] && _should_run_step "audit" "$start_from_step"; then
-        _phase_start "audit"
-        if ! _run_quality_gate "security-audit" "true" "$workspace"; then
-            if [ "$GATE_RESULT" = "FIX" ]; then
-                log "Security audit found fixable issues - running security-fix agent"
-                run_sub_agent "security-fix" "$worker_dir" "$project_dir"
-
-                local fix_result
-                fix_result=$(agent_read_subagent_result "$worker_dir" "security-fix")
-                log "Security fix result: $fix_result"
-                _commit_subagent_changes "$workspace" "security-fix"
-
-                if [ "$fix_result" != "PASS" ]; then
-                    log_warn "Security fix incomplete (result: $fix_result) - continuing with validation"
-                fi
-            else
-                loop_result=1
-            fi
-        fi
-        _phase_end "audit"
-    fi
-
-    # === TEST COVERAGE PHASE ===
-    if [ -d "$workspace" ] && [ $loop_result -eq 0 ] && _should_run_step "test" "$start_from_step"; then
-        _phase_start "test"
-        if ! _run_quality_gate "test-coverage" "true" "$workspace"; then
-            loop_result=1
-        fi
-        _phase_end "test"
-    fi
-
-    # === DOCUMENTATION WRITER PHASE ===
-    if [ -d "$workspace" ] && [ $loop_result -eq 0 ] && _should_run_step "docs" "$start_from_step"; then
-        _phase_start "docs"
-        _run_quality_gate "documentation-writer" "false" "$workspace"
-        _phase_end "docs"
-    fi
-
-    # === VALIDATION PHASE ===
-    # Stop violation monitor before validation
-    stop_violation_monitor "$VIOLATION_MONITOR_PID"
-
-    if _should_run_step "validation" "$start_from_step"; then
-        _phase_start "validation"
-        # Run validation-review as a nested sub-agent
-        if [ -d "$workspace" ]; then
-            log "Running validation review on completed work"
-            run_sub_agent "validation-review" "$worker_dir" "$project_dir"
-        fi
-        _phase_end "validation"
-    else
-        log "Skipping validation phase (resuming from $start_from_step)"
+        log "Skipping pipeline (resuming directly to finalization)"
     fi
 
     # === FINALIZATION PHASE ===
-    if ! _should_run_step "finalization" "$start_from_step"; then
-        log "Skipping finalization phase (resuming from $start_from_step)"
-        agent_log_complete "$worker_dir" "$loop_result" "$start_time"
-        return $loop_result
-    fi
     _phase_start "finalization"
 
     _determine_finality "$worker_dir" "$workspace" "$project_dir" "$prd_file"
     local has_violations="$FINALITY_HAS_VIOLATIONS"
     local final_status="$FINALITY_STATUS"
 
-    # Check validation result from sub-agent
+    # Check validation result from pipeline step
     local validation_result
-    validation_result=$(agent_read_subagent_result "$worker_dir" "validation-review")
+    validation_result=$(agent_read_step_result "$worker_dir" "validation")
     if [ "$validation_result" = "FAIL" ]; then
         log_error "Validation review FAILED - marking task as failed"
         final_status="FAILED"

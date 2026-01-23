@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Pipeline Configuration",
+  "description": "Defines a linear pipeline of agent steps for task-worker execution",
+  "type": "object",
+  "required": ["name", "steps"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Pipeline name identifier"
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/step"
+      }
+    }
+  },
+  "$defs": {
+    "step": {
+      "type": "object",
+      "required": ["id", "agent"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]*$",
+          "description": "Unique step ID used for result files and start_from_step"
+        },
+        "agent": {
+          "type": "string",
+          "description": "Leaf agent name from lib/agents/"
+        },
+        "blocking": {
+          "type": "boolean",
+          "default": true,
+          "description": "If true, FAIL/STOP halts the pipeline"
+        },
+        "readonly": {
+          "type": "boolean",
+          "default": false,
+          "description": "If true, git stash before and pop after agent to discard workspace changes"
+        },
+        "enabled_by": {
+          "type": "string",
+          "description": "Environment variable name; step runs only if var is 'true'"
+        },
+        "depends_on": {
+          "type": "string",
+          "description": "Step ID; skip if that step's result is FAIL/UNKNOWN"
+        },
+        "commit_after": {
+          "type": "boolean",
+          "default": false,
+          "description": "Commit workspace changes after step completes"
+        },
+        "config": {
+          "type": "object",
+          "default": {},
+          "description": "Per-step config written to step-config.json for the agent to read"
+        },
+        "fix": {
+          "type": "object",
+          "properties": {
+            "agent": {
+              "type": "string",
+              "description": "Agent to run if result is FIX"
+            },
+            "max_attempts": {
+              "type": "integer",
+              "default": 2,
+              "minimum": 1,
+              "description": "Max fix+verify cycles"
+            },
+            "commit_after": {
+              "type": "boolean",
+              "default": true,
+              "description": "Commit after fix agent"
+            }
+          },
+          "required": ["agent"]
+        },
+        "hooks": {
+          "type": "object",
+          "properties": {
+            "pre": {
+              "type": "array",
+              "items": { "type": "string" },
+              "default": [],
+              "description": "Shell commands to run before agent"
+            },
+            "post": {
+              "type": "array",
+              "items": { "type": "string" },
+              "default": [],
+              "description": "Shell commands to run after agent"
+            }
+          }
+        }
+      }
+    }
+  }
+}
