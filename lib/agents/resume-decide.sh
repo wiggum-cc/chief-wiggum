@@ -139,9 +139,16 @@ Key paths to explore:
 ## Output Format
 
 You MUST output your decision in these exact XML tags.
-The step value MUST be exactly one of: execution, audit, test, docs, validation, finalization, ABORT
+The step value MUST be exactly one of these literal strings:
+  execution
+  audit
+  test
+  docs
+  validation
+  finalization
+  ABORT
 
-<step>execution|audit|test|docs|validation|finalization|ABORT</step>
+Example: <step>audit</step>
 
 <instructions>
 Detailed instructions for the resumed worker. Include:
@@ -197,11 +204,15 @@ _extract_decision() {
     local log_file="$worker_dir/logs/resume-decide.log"
 
     if [ ! -f "$log_file" ]; then
-        log_error "No resume-decide log found"
+        log_error "No resume-decide log file found at $log_file"
         echo "ABORT" > "$worker_dir/resume-step.txt"
         echo "No decision log produced." > "$worker_dir/resume-instructions.md"
         return 1
     fi
+
+    local log_size
+    log_size=$(wc -c < "$log_file" 2>/dev/null || echo 0)
+    log "Resume-decide log: $log_file ($log_size bytes)"
 
     # Extract assistant text from stream-JSON
     local full_text
@@ -210,10 +221,18 @@ _extract_decision() {
 
     if [ -z "$full_text" ]; then
         log_error "No assistant text found in resume-decide log"
+        # Log first few lines of the file for debugging
+        log_error "Log file head: $(head -5 "$log_file" 2>/dev/null | tr '\n' ' ')"
         echo "ABORT" > "$worker_dir/resume-step.txt"
         echo "Failed to extract decision from agent output." > "$worker_dir/resume-instructions.md"
         return 1
     fi
+
+    # Log the agent's response for debugging
+    local text_preview
+    text_preview=$(echo "$full_text" | head -20)
+    log "Resume-decide agent response (first 20 lines):"
+    log "$text_preview"
 
     # Extract step from <step>...</step> tags
     local step
@@ -221,6 +240,7 @@ _extract_decision() {
 
     if [ -z "$step" ]; then
         log_error "No <step> tag found in resume-decide output"
+        log_error "Full agent response: $full_text"
         echo "ABORT" > "$worker_dir/resume-step.txt"
         echo "Agent did not produce a step decision." > "$worker_dir/resume-instructions.md"
         return 1
