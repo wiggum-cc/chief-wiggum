@@ -12,8 +12,8 @@ set -euo pipefail
 # Read JSON input from stdin
 input=$(cat)
 
-# Get workspace directory from environment
-workspace="${WORKER_WORKSPACE:-}"
+# Get workspace directory (WORKER_WORKSPACE set by worker, CLAUDE_PROJECT_DIR set by Claude Code)
+workspace="${WORKER_WORKSPACE:-${CLAUDE_PROJECT_DIR:-}}"
 worker_dir="${WORKER_DIR:-}"
 
 # If no workspace is set, allow without modification

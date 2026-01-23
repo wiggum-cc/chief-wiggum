@@ -12,8 +12,8 @@ command=$(echo "$input" | jq -r '.tool_input.command // empty')
 # For Glob/Grep tools, extract the 'path' parameter
 search_path=$(echo "$input" | jq -r '.tool_input.path // empty')
 
-# Get workspace directory (passed as env var by worker)
-workspace="$WORKER_WORKSPACE"
+# Get workspace directory (WORKER_WORKSPACE set by worker, CLAUDE_PROJECT_DIR set by Claude Code)
+workspace="${WORKER_WORKSPACE:-${CLAUDE_PROJECT_DIR:-}}"
 worker_dir="${WORKER_DIR:-}"
 
 # Audit trail logging function

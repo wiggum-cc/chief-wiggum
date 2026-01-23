@@ -14,6 +14,7 @@ source "$WIGGUM_HOME/lib/core/logger.sh"
 source "$WIGGUM_HOME/lib/core/defaults.sh"
 source "$WIGGUM_HOME/lib/core/checkpoint.sh"
 source "$WIGGUM_HOME/lib/utils/work-log.sh"
+source "$WIGGUM_HOME/lib/claude/usage-tracker.sh"
 
 # Extract clean text from Claude CLI stream-JSON output
 # Filters out JSON and returns only assistant text responses
@@ -104,6 +105,17 @@ run_ralph_loop() {
         if [ "$shutdown_requested" = true ]; then
             log "Ralph loop shutting down due to signal"
             break
+        fi
+
+        # Check rate limit from shared usage data (written by orchestrator)
+        local _rl_ralph_dir="${RALPH_DIR:-}"
+        if [ -z "$_rl_ralph_dir" ] && [ -n "$output_dir" ]; then
+            _rl_ralph_dir=$(cd "$output_dir/../.." 2>/dev/null && pwd || echo "")
+        fi
+        if [ -n "$_rl_ralph_dir" ] && rate_limit_check "$_rl_ralph_dir"; then
+            log "Rate limit active - pausing before iteration $iteration"
+            rate_limit_wait_for_cycle_reset
+            log "Rate limit cleared - resuming iteration $iteration"
         fi
 
         # Check completion using callback

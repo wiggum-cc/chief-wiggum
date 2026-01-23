@@ -2,65 +2,20 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matchers": {
-          "tool": "Edit|Write|Bash|Read|Glob|Grep"
-        },
+        "matcher": "Edit|Write|Bash|Read|Glob|Grep",
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${WIGGUM_HOME}/hooks/callbacks/validate-workspace-path.sh",
-            "stdin": "tool_call"
+            "command": "bash ${WIGGUM_HOME}/hooks/callbacks/validate-workspace-path.sh"
           }
         ]
       },
       {
-        "matchers": {
-          "tool": "Task"
-        },
+        "matcher": "Task",
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${WIGGUM_HOME}/hooks/callbacks/inject-workspace-boundary.sh",
-            "stdin": "tool_call"
-          }
-        ]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "matchers": {
-          "tool": "Edit",
-          "file": "**/.ralph/workers/*/prd.md"
-        },
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ${WIGGUM_HOME}/hooks/callbacks/on-task-progress.sh"
-          }
-        ]
-      }
-    ],
-    "PermissionRequest": [
-      {
-        "matchers": {},
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ${WIGGUM_HOME}/hooks/callbacks/on-question.sh '${request_type}'",
-            "decision": "allow"
-          }
-        ]
-      }
-    ],
-    "Notification": [
-      {
-        "matchers": {
-          "type": "error"
-        },
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ${WIGGUM_HOME}/hooks/callbacks/on-error.sh '${message}'"
+            "command": "bash ${WIGGUM_HOME}/hooks/callbacks/inject-workspace-boundary.sh"
           }
         ]
       }

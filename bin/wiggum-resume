@@ -20,6 +20,7 @@ source "$WIGGUM_HOME/lib/worker/agent-registry.sh"
 source "$WIGGUM_HOME/lib/core/agent-base.sh"
 source "$WIGGUM_HOME/lib/git/git-operations.sh"
 source "$WIGGUM_HOME/lib/core/file-lock.sh"
+source "$WIGGUM_HOME/lib/claude/usage-tracker.sh"
 
 # Default configuration
 MAX_ITERATIONS=20
@@ -235,7 +236,16 @@ do_resume() {
     # === STEP 5: Re-create required directories ===
     mkdir -p "$worker_dir/logs" "$worker_dir/summaries"
 
-    # === STEP 6: Launch task-worker ===
+    # === STEP 6: Check rate limit before launching ===
+    # Update usage data and check rate limit (orchestrator may not be running)
+    usage_tracker_write_shared "$RALPH_DIR" > /dev/null 2>&1 || true
+    if rate_limit_check "$RALPH_DIR"; then
+        log "Rate limit threshold reached - waiting for cycle reset before resuming"
+        rate_limit_wait_for_cycle_reset
+        usage_tracker_write_shared "$RALPH_DIR" > /dev/null 2>&1 || true
+    fi
+
+    # === STEP 7: Launch task-worker ===
     # Always use normal task-worker (not plan-mode) — it picks up existing plan files
     echo "Launching task-worker from step: $resume_step"
 
@@ -311,6 +321,9 @@ main() {
                 ;;
         esac
     done
+
+    # Load rate limit configuration
+    load_rate_limit_config
 
     # Require target
     if [ -z "$target" ]; then

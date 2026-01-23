@@ -57,3 +57,13 @@ load_review_config() {
     export WIGGUM_COMMENT_FIX_MAX_TURNS
     export WIGGUM_AUTO_COMMIT_AFTER_FIX
 }
+
+# Load rate limit config from config.json (with env var overrides)
+load_rate_limit_config() {
+    local config_file="$WIGGUM_HOME/config/config.json"
+    if [ -f "$config_file" ]; then
+        WIGGUM_RATE_LIMIT_THRESHOLD="${WIGGUM_RATE_LIMIT_THRESHOLD:-$(jq -r '.rate_limit.threshold_prompts // 900' "$config_file" 2>/dev/null)}"
+    fi
+    WIGGUM_RATE_LIMIT_THRESHOLD="${WIGGUM_RATE_LIMIT_THRESHOLD:-900}"
+    export WIGGUM_RATE_LIMIT_THRESHOLD
+}

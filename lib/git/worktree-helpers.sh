@@ -40,7 +40,7 @@ setup_worktree() {
         log_debug "Worktree already exists at $workspace, reusing"
         WORKTREE_PATH="$workspace"
         export WORKER_WORKSPACE="$workspace"
-        export CLAUDE_HOOKS_CONFIG="$WIGGUM_HOME/hooks/worker-hooks.json"
+        _write_workspace_hooks_config "$workspace"
         return 0
     fi
 
@@ -54,12 +54,62 @@ setup_worktree() {
 
     # Setup environment for workspace boundary enforcement
     export WORKER_WORKSPACE="$workspace"
-    export CLAUDE_HOOKS_CONFIG="$WIGGUM_HOME/hooks/worker-hooks.json"
+    _write_workspace_hooks_config "$workspace"
 
     WORKTREE_PATH="$workspace"
     export WORKTREE_PATH
     log_debug "Worktree created successfully at $workspace"
     return 0
+}
+
+# Write Claude hooks configuration into workspace settings
+#
+# Creates .claude/settings.local.json in the workspace with PreToolUse hooks
+# that enforce workspace boundary constraints. This is the documented way to
+# register hooks with Claude Code (via project settings files).
+#
+# Args:
+#   workspace - Path to the workspace directory
+_write_workspace_hooks_config() {
+    local workspace="$1"
+
+    mkdir -p "$workspace/.claude"
+
+    # Write settings with hooks using resolved WIGGUM_HOME path
+    local hooks_dir="$WIGGUM_HOME/hooks/callbacks"
+    cat > "$workspace/.claude/settings.local.json" << EOF
+{
+  "permissions": {
+    "allow": [
+      "Bash(tail:*)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|Bash|Read|Glob|Grep",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${hooks_dir}/validate-workspace-path.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${hooks_dir}/inject-workspace-boundary.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
+EOF
+
+    log_debug "Wrote hooks config to $workspace/.claude/settings.local.json"
 }
 
 # Cleanup git worktree

@@ -378,3 +378,66 @@ usage_tracker_update() {
     usage_tracker_save "$usage_json"
     echo "$usage_json"
 }
+
+# Write usage JSON to a shared .ralph/claude-usage.json file
+# Args: $1 = ralph directory path
+# Output: prints usage JSON to stdout
+usage_tracker_write_shared() {
+    local ralph_dir="$1"
+    local usage_json
+    usage_json=$(usage_tracker_calculate)
+    mkdir -p "$ralph_dir"
+    echo "$usage_json" > "$ralph_dir/claude-usage.json"
+    echo "$usage_json"
+}
+
+# Check if rate limit threshold has been exceeded
+# Args: $1 = ralph directory path
+# Returns: 0 if over threshold (rate limited), 1 if OK
+rate_limit_check() {
+    local ralph_dir="$1"
+    local usage_file="$ralph_dir/claude-usage.json"
+    local threshold="${WIGGUM_RATE_LIMIT_THRESHOLD:-900}"
+
+    if [ ! -f "$usage_file" ]; then
+        return 1  # No data = not rate limited
+    fi
+
+    local cycle_prompts
+    cycle_prompts=$(jq -r '.current_5h_cycle.total_prompts // 0' "$usage_file" 2>/dev/null)
+
+    if [ "$cycle_prompts" -ge "$threshold" ]; then
+        return 0  # Rate limited
+    fi
+    return 1  # OK
+}
+
+# Wait until the current 5-hour cycle resets, logging periodically
+rate_limit_wait_for_cycle_reset() {
+    local now cycle_start cycle_end wait_seconds
+    now=$(date +%s)
+    cycle_start=$(_usage_get_5h_cycle_start)
+    cycle_end=$(( cycle_start + 18000 ))  # 5 hours
+    wait_seconds=$(( cycle_end - now ))
+
+    if [ "$wait_seconds" -le 0 ]; then
+        return 0
+    fi
+
+    log "Rate limit reached. Waiting ${wait_seconds}s for 5h cycle reset ($(date -d @$cycle_end +%H:%M:%S))"
+
+    local elapsed=0
+    while [ "$elapsed" -lt "$wait_seconds" ]; do
+        local remaining=$(( wait_seconds - elapsed ))
+        local remaining_min=$(( remaining / 60 ))
+        log "Rate limit: ${remaining_min}m remaining until cycle reset"
+        local sleep_interval=60
+        if [ "$remaining" -lt 60 ]; then
+            sleep_interval="$remaining"
+        fi
+        sleep "$sleep_interval"
+        elapsed=$(( elapsed + sleep_interval ))
+    done
+
+    log "Rate limit cycle reset complete - resuming"
+}
