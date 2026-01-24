@@ -43,7 +43,7 @@ agent_run() {
     local worker_id task_id
     worker_id=$(basename "$worker_dir")
     # Match any task prefix format: TASK-001, PIPELINE-001, etc.
-    task_id=$(echo "$worker_id" | sed -E 's/worker-([A-Z]+-[0-9]+)-.*/\1/')
+    task_id=$(echo "$worker_id" | sed -E 's/worker-([A-Za-z]{2,10}-[0-9]{1,4})-.*/\1/')
 
     # Setup logging
     export LOG_FILE="$worker_dir/worker.log"

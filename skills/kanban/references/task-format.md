@@ -20,10 +20,10 @@
 ## Field Specifications
 
 ### Task ID
-- **Pattern**: `[A-Za-z]{2,8}-[0-9]+`
+- **Pattern**: `[A-Za-z]{2,10}-[0-9]{1,4}`
 - **Examples**: `[TASK-001]`, `[FEATURE-042]`, `[BUG-123]`
-- Prefix: 2-8 uppercase letters
-- Number: One or more digits
+- Prefix: 2-10 letters
+- Number: 1-4 digits
 - Must be unique across the kanban file
 - Wrapped in brackets and bold: `**[TASK-ID]**`
 
@@ -109,7 +109,7 @@
 # Wrong
 - [ ] **TASK-001** Do something        # missing brackets
 - [ ] **[T-1]** Do something           # prefix too short
-- [ ] **[VERYLONGID-001]** Do something # prefix too long
+- [ ] **[VERYLONGPREFIX-001]** Do something # prefix too long
 
 # Correct
 - [ ] **[TASK-001]** Do something

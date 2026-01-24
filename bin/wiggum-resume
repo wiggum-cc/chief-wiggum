@@ -108,7 +108,7 @@ do_resume() {
     worker_id=$(basename "$worker_dir")
     local task_id
     # Match any task prefix format: TASK-001, PIPELINE-001, etc.
-    task_id=$(echo "$worker_id" | sed -E 's/worker-([A-Z]+-[0-9]+)-.*/\1/')
+    task_id=$(echo "$worker_id" | sed -E 's/worker-([A-Za-z]{2,10}-[0-9]{1,4})-.*/\1/')
 
     # Check if already running
     if [ -f "$worker_dir/agent.pid" ]; then

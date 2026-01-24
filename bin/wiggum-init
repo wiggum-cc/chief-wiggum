@@ -73,7 +73,7 @@ if [ ! -f "$RALPH_DIR/kanban.md" ]; then
 # Project Kanban
 
 <!-- Task format: - [ ] **[ID-###]** Title
-     Task ID: 2-8 letter prefix, dash, number (e.g., TASK-001, BUG-42, FEATURE-1)
+     Task ID: 2-10 letter prefix, dash, 1-4 digit number (e.g., TASK-001, BUG-42, FEATURE-1)
      Required: Description, Priority (CRITICAL|HIGH|MEDIUM|LOW), Dependencies (task IDs or "none")
      Optional: Complexity (HIGH|MEDIUM|LOW), Agent (task-worker), Scope, Out of Scope, Acceptance Criteria
      Status: [ ] pending, [=] in-progress, [P] pending approval, [x] complete, [*] failed, [N] not planned -->

@@ -19,7 +19,7 @@ STATUS_MAP = {
 # Pattern: - [ ] **[TASK-ID]** Title
 # Status chars: space (pending), = (in progress), P (pending approval),
 #               x (complete), N (not planned), * (failed), T (timeout/failed)
-TASK_PATTERN = re.compile(r"^- \[([ =PxN*T])\] \*\*\[([A-Za-z]{2,8}-\d+)\]\*\*\s*(.*)")
+TASK_PATTERN = re.compile(r"^- \[([ =PxN*T])\] \*\*\[([A-Za-z]{2,10}-\d{1,4})\]\*\*\s*(.*)")
 
 
 def parse_kanban(file_path: Path) -> list[Task]:

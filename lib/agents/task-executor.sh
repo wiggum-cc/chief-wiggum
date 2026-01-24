@@ -72,7 +72,7 @@ agent_run() {
     local task_id
     local worker_id
     worker_id=$(basename "$worker_dir")
-    task_id=$(echo "$worker_id" | sed -E 's/worker-([A-Z]+-[0-9]+)-.*/\1/')
+    task_id=$(echo "$worker_id" | sed -E 's/worker-([A-Za-z]{2,10}-[0-9]{1,4})-.*/\1/')
     agent_setup_context "$worker_dir" "$workspace" "$project_dir" "$task_id"
 
     # Set globals for callbacks

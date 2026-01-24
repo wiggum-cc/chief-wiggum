@@ -198,7 +198,7 @@ cleanup_stale_pid() {
 # Returns: task ID (e.g., TASK-001)
 get_task_id_from_worker() {
     local worker_id="$1"
-    echo "$worker_id" | sed -E 's/worker-(TASK-[0-9]+)-.*/\1/'
+    echo "$worker_id" | sed -E 's/worker-([A-Za-z]{2,10}-[0-9]{1,4})-.*/\1/'
 }
 
 # Scan for active workers and return their info

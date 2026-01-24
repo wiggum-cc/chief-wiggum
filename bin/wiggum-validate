@@ -36,7 +36,7 @@ Options:
   -h, --help        Show this help message
 
 Validates:
-  - Task ID format ([A-Za-z]{2,8}-[0-9]+)
+  - Task ID format ([A-Za-z]{2,10}-[0-9]{1,4})
   - Required fields (Description, Priority)
   - Priority values (CRITICAL, HIGH, MEDIUM, LOW)
   - Unique task IDs
@@ -148,8 +148,8 @@ validate_kanban() {
             esac
 
             # Validate task ID format
-            if [[ ! "$task_id" =~ ^[A-Za-z]{2,8}-[0-9]+$ ]]; then
-                add_error "$line_num" "Malformed task ID '$task_id' - must match pattern [A-Za-z]{2,8}-[0-9]+ (e.g., TASK-001)"
+            if [[ ! "$task_id" =~ ^[A-Za-z]{2,10}-[0-9]{1,4}$ ]]; then
+                add_error "$line_num" "Malformed task ID '$task_id' - must match pattern [A-Za-z]{2,10}-[0-9]{1,4} (e.g., TASK-001)"
             fi
 
             # Check for duplicate task IDs

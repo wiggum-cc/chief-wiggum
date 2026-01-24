@@ -66,7 +66,7 @@ Tasks can include additional optional fields for more detailed specifications:
 
 **Format**: `[PREFIX-NUMBER]`
 
-**Pattern**: `[A-Za-z]{2,8}-[0-9]+`
+**Pattern**: `[A-Za-z]{2,10}-[0-9]{1,4}`
 
 **Examples**:
 - `[TASK-001]`
@@ -75,8 +75,8 @@ Tasks can include additional optional fields for more detailed specifications:
 - `[REFACTOR-5]`
 
 **Requirements**:
-- Prefix: 2-8 uppercase letters
-- Number: One or more digits
+- Prefix: 2-10 letters
+- Number: 1-4 digits
 - Must be unique across the kanban file
 - Wrapped in square brackets and bold markers: `**[TASK-ID]**`
 
@@ -171,7 +171,7 @@ Tasks use markdown checkboxes to indicate their status:
 
 The system uses `lib/task-parser.sh` with the following logic:
 
-1. **Task Detection**: Finds lines matching `^- \[[ =PxN*T]\] \*\*\[[A-Za-z]{2,8}-[0-9]+\]\*\*` in the TASKS section
+1. **Task Detection**: Finds lines matching `^- \[[ =PxN*T]\] \*\*\[[A-Za-z]{2,10}-[0-9]{1,4}\]\*\*` in the TASKS section
 2. **Field Parsing**: Extracts fields using indentation:
    - Top-level fields: 2-space indent (`  - Field:`)
    - Sub-items: 4-space indent (`    - Item`)

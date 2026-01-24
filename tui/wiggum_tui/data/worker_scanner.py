@@ -7,7 +7,7 @@ from .models import Worker, WorkerStatus
 
 
 # Pattern: worker-TASK-XXX-TIMESTAMP
-WORKER_PATTERN = re.compile(r"^worker-([A-Za-z]{2,8}-\d+)-(\d+)$")
+WORKER_PATTERN = re.compile(r"^worker-([A-Za-z]{2,10}-\d{1,4})-(\d+)$")
 
 
 def is_process_running(pid: int) -> bool:

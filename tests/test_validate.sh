@@ -49,6 +49,7 @@ test_malformed_task_ids() {
     assert_output_contains "$output" "Malformed task ID 'T-001'" "Should detect prefix too short"
     assert_output_contains "$output" "Malformed task ID 'VERYLONGPREFIX-001'" "Should detect prefix too long"
     assert_output_contains "$output" "Malformed task ID 'TASK-abc'" "Should detect non-numeric ID"
+    assert_output_contains "$output" "Malformed task ID 'TASK-12345'" "Should detect number too long"
 }
 
 # =============================================================================

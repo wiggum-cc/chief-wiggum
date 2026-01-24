@@ -29,8 +29,8 @@ get_prd_status() {
 get_todo_tasks() {
     local kanban="$1"
     # Extract task IDs - ONLY incomplete tasks (- [ ]) matching the task format
-    awk '/^- \[ \] \*\*\[[A-Za-z]{2,8}-[0-9]+\]\*\*/{
-            match($0, /\[[A-Za-z]{2,8}-[0-9]+\]/)
+    awk '/^- \[ \] \*\*\[[A-Za-z]{2,10}-[0-9]{1,4}\]\*\*/{
+            match($0, /\[[A-Za-z]{2,10}-[0-9]{1,4}\]/)
             print substr($0, RSTART+1, RLENGTH-2)
         }' "$kanban"
 }
@@ -38,8 +38,8 @@ get_todo_tasks() {
 get_failed_tasks() {
     local kanban="$1"
     # Extract task IDs - ONLY failed tasks (- [*]) matching the task format
-    awk '/^- \[\*\] \*\*\[[A-Za-z]{2,8}-[0-9]+\]\*\*/{
-            match($0, /\[[A-Za-z]{2,8}-[0-9]+\]/)
+    awk '/^- \[\*\] \*\*\[[A-Za-z]{2,10}-[0-9]{1,4}\]\*\*/{
+            match($0, /\[[A-Za-z]{2,10}-[0-9]{1,4}\]/)
             print substr($0, RSTART+1, RLENGTH-2)
         }' "$kanban"
 }
@@ -47,8 +47,8 @@ get_failed_tasks() {
 get_pending_approval_tasks() {
     local kanban="$1"
     # Extract task IDs - ONLY pending approval tasks (- [P]) matching the task format
-    awk '/^- \[P\] \*\*\[[A-Za-z]{2,8}-[0-9]+\]\*\*/{
-            match($0, /\[[A-Za-z]{2,8}-[0-9]+\]/)
+    awk '/^- \[P\] \*\*\[[A-Za-z]{2,10}-[0-9]{1,4}\]\*\*/{
+            match($0, /\[[A-Za-z]{2,10}-[0-9]{1,4}\]/)
             print substr($0, RSTART+1, RLENGTH-2)
         }' "$kanban"
 }
@@ -56,8 +56,8 @@ get_pending_approval_tasks() {
 get_completed_tasks() {
     local kanban="$1"
     # Extract task IDs - ONLY completed/merged tasks (- [x]) matching the task format
-    awk '/^- \[x\] \*\*\[[A-Za-z]{2,8}-[0-9]+\]\*\*/{
-            match($0, /\[[A-Za-z]{2,8}-[0-9]+\]/)
+    awk '/^- \[x\] \*\*\[[A-Za-z]{2,10}-[0-9]{1,4}\]\*\*/{
+            match($0, /\[[A-Za-z]{2,10}-[0-9]{1,4}\]/)
             print substr($0, RSTART+1, RLENGTH-2)
         }' "$kanban"
 }
@@ -67,13 +67,13 @@ get_completed_tasks() {
 get_all_tasks_with_metadata() {
     local kanban="$1"
     awk '
-        /^- \[.\] \*\*\[[A-Za-z]{2,8}-[0-9]+\]\*\*/ {
+        /^- \[.\] \*\*\[[A-Za-z]{2,10}-[0-9]{1,4}\]\*\*/ {
             # Extract status
             match($0, /\[.\]/)
             status = substr($0, RSTART+1, 1)
 
             # Extract task ID
-            match($0, /\*\*\[[A-Za-z]{2,8}-[0-9]+\]\*\*/)
+            match($0, /\*\*\[[A-Za-z]{2,10}-[0-9]{1,4}\]\*\*/)
             task_id = substr($0, RSTART+3, RLENGTH-6)
 
             current_task = task_id
@@ -532,7 +532,7 @@ extract_task() {
     task_title=$(awk -v task="$task_id" '
         $0 ~ "\\*\\*\\[" task "\\]\\*\\*" {
             # Extract everything after **[TASK-ID]**
-            sub(/.*\*\*\[[A-Za-z]{2,8}-[0-9]+\]\*\* */, "")
+            sub(/.*\*\*\[[A-Za-z]{2,10}-[0-9]{1,4}\]\*\* */, "")
             print
             exit
         }' "$kanban")

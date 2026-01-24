@@ -94,7 +94,7 @@ checkpoint_write() {
 
     local worker_id task_id
     worker_id=$(basename "$worker_dir")
-    task_id=$(echo "$worker_id" | sed -E 's/worker-([A-Z]+-[0-9]+)-.*/\1/' 2>/dev/null || echo "unknown")
+    task_id=$(echo "$worker_id" | sed -E 's/worker-([A-Za-z]{2,10}-[0-9]{1,4})-.*/\1/' 2>/dev/null || echo "unknown")
 
     # Build checkpoint JSON
     cat > "$checkpoint_file" << CHECKPOINT_JSON

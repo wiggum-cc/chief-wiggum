@@ -305,7 +305,7 @@ cmd_global_sync() {
 
         # Extract task ID from branch name (task/TASK-001-description -> TASK-001)
         local task_id
-        task_id=$(echo "$branch" | sed -E 's|^task/([A-Z]+-[0-9]+).*|\1|')
+        task_id=$(echo "$branch" | sed -E 's|^task/([A-Za-z]{2,10}-[0-9]{1,4}).*|\1|')
 
         if [ -z "$task_id" ] || [ "$task_id" = "$branch" ]; then
             continue
@@ -393,7 +393,7 @@ cmd_task_sync() {
         echo "$prs" | jq -c '.[] | select(.state == "MERGED")' | while read -r pr; do
             local branch task_id
             branch=$(echo "$pr" | jq -r '.headRefName')
-            task_id=$(echo "$branch" | sed -E 's|^task/([A-Z]+-[0-9]+).*|\1|')
+            task_id=$(echo "$branch" | sed -E 's|^task/([A-Za-z]{2,10}-[0-9]{1,4}).*|\1|')
 
             if [ -n "$task_id" ] && [ "$task_id" != "$branch" ]; then
                 local current_status
@@ -609,7 +609,7 @@ cmd_task_commit() {
     worker_id=$(basename "$worker_dir")
     # Extract task ID from worker ID (handles TASK-001, PIPELINE-001, etc.)
     local task_id
-    task_id=$(echo "$worker_id" | sed -E 's/worker-([A-Z]+-[0-9]+)-.*/\1/')
+    task_id=$(echo "$worker_id" | sed -E 's/worker-([A-Za-z]{2,10}-[0-9]{1,4})-.*/\1/')
 
     log "Creating commit for $task_id in $workspace"
 
@@ -709,7 +709,7 @@ cmd_task_pr() {
     local worker_id
     worker_id=$(basename "$worker_dir")
     local task_id
-    task_id=$(echo "$worker_id" | sed -E 's/worker-([A-Z]+-[0-9]+)-.*/\1/')
+    task_id=$(echo "$worker_id" | sed -E 's/worker-([A-Za-z]{2,10}-[0-9]{1,4})-.*/\1/')
 
     cd "$workspace" || return 1
 
