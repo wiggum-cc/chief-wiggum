@@ -276,7 +276,7 @@ test_pipeline_on_result_fail_abort() {
 }
 
 # =============================================================================
-# Test: No on_result handler means continue to next
+# Test: No on_result handler for FAIL applies default behavior (abort)
 # =============================================================================
 test_pipeline_no_handler_continues() {
     _create_mock_agent "soft-fail" "FAIL"
@@ -296,12 +296,12 @@ test_pipeline_no_handler_continues() {
     local exit_code=0
     pipeline_run_all "$TEST_DIR/worker" "$TEST_DIR/project" "$TEST_DIR/worker/workspace" "" || exit_code=$?
 
-    assert_equals "0" "$exit_code" "Pipeline should return 0 with no handler (continues)"
+    assert_equals "1" "$exit_code" "Pipeline should abort on FAIL without explicit handler"
 
     local invocations
     invocations=$(cat "$TEST_DIR/agent_invocations.txt")
-    assert_output_contains "$invocations" "agent-continues" \
-        "Steps after unhandled result should continue"
+    assert_output_not_contains "$invocations" "agent-continues" \
+        "Steps after FAIL should NOT run when no handler present"
 }
 
 # =============================================================================

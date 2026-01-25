@@ -10,6 +10,8 @@ RALPH_DIR="$PROJECT_DIR/.ralph"
 source "$WIGGUM_HOME/lib/core/exit-codes.sh"
 source "$WIGGUM_HOME/lib/core/defaults.sh"
 source "$WIGGUM_HOME/lib/tasks/task-parser.sh"
+source "$WIGGUM_HOME/lib/tasks/plan-parser.sh"
+source "$WIGGUM_HOME/lib/tasks/conflict-detection.sh"
 source "$WIGGUM_HOME/lib/core/logger.sh"
 source "$WIGGUM_HOME/lib/core/file-lock.sh"
 source "$WIGGUM_HOME/lib/utils/audit-logger.sh"
@@ -668,6 +670,14 @@ main() {
                 continue
             fi
 
+            # Skip if file conflict with active worker
+            if has_file_conflict "$RALPH_DIR" "$task_id" active_workers; then
+                local conflicts
+                conflicts=$(get_conflicting_files "$RALPH_DIR" "$task_id" active_workers | tr '\n' ',' | sed 's/,$//')
+                log "Deferring $task_id - file conflict: $conflicts"
+                continue
+            fi
+
             # Run pre-worker checks (git pull, conflict detection)
             if ! pre_worker_checks; then
                 log_error "Pre-worker checks failed for $task_id - skipping this task"
@@ -740,6 +750,22 @@ main() {
                 local waiting_on
                 waiting_on=$(get_unsatisfied_dependencies "$RALPH_DIR/kanban.md" "$task_id" | tr '\n' ',' | sed 's/,$//')
                 echo "  - $task_id (waiting on: $waiting_on)"
+            done
+        fi
+
+        # Show tasks deferred due to file conflicts
+        local deferred_conflicts=()
+        for task_id in $ready_tasks; do
+            if has_file_conflict "$RALPH_DIR" "$task_id" active_workers; then
+                deferred_conflicts+=("$task_id")
+            fi
+        done
+        if [ ${#deferred_conflicts[@]} -gt 0 ]; then
+            echo "Deferred (file conflict):"
+            for task_id in "${deferred_conflicts[@]}"; do
+                local conflicting_tasks
+                conflicting_tasks=$(get_conflicting_tasks "$RALPH_DIR" "$task_id" active_workers | tr '\n' ',' | sed 's/,$//')
+                echo "  - $task_id (conflicts with: $conflicting_tasks)"
             done
         fi
 

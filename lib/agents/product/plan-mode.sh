@@ -212,11 +212,11 @@ Write to $plan_output with this structure:
 [Technical risks, edge cases, things to watch out for]
 
 ### Critical Files
-| Action | File | Reason |
+| File | Action | Reason |
 |--------|------|--------|
-| CREATE | path/file.ext | [Purpose] |
-| MODIFY | path/file.ext | [What changes] |
-| REFERENCE | path/file.ext | [Pattern to follow] |
+| path/file.ext | CREATE | Purpose |
+| path/file.ext | MODIFY | [What changes] |
+| path/file.ext | REFERENCE | [Pattern to follow] |
 \`\`\`
 
 The "### Critical Files" section is REQUIRED - list 3-5 files most critical for implementation.

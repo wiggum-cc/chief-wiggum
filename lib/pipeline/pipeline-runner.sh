@@ -90,8 +90,20 @@ _dispatch_on_result() {
     handler=$(pipeline_get_on_result "$idx" "$gate_result")
 
     if [ -z "$handler" ]; then
-        # No handler for this result - default to next
-        _PIPELINE_NEXT_IDX=$((idx + 1))
+        # No explicit handler - apply default behaviors per spec:
+        # PASS -> next, FAIL -> abort, FIX -> prev, SKIP -> next
+        case "$gate_result" in
+            FAIL)
+                _resolve_jump_target "abort" "$idx"
+                ;;
+            FIX)
+                _resolve_jump_target "prev" "$idx"
+                ;;
+            *)
+                # PASS, SKIP, and unknown results continue to next
+                _PIPELINE_NEXT_IDX=$((idx + 1))
+                ;;
+        esac
         return
     fi
 

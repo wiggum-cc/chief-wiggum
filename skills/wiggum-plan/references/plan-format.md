@@ -38,11 +38,11 @@ Plans are written to `.ralph/plans/TASK-ID.md`.
 [Technical risks, edge cases, things to watch out for]
 
 ### Critical Files
-| Action | File | Reason |
-|--------|------|--------|
-| CREATE | path/file.ext | [Purpose] |
-| MODIFY | path/file.ext | [What changes] |
-| REFERENCE | path/file.ext | [Pattern to follow] |
+| File | Action | Reason |
+|------|--------|--------|
+| path/file.ext | CREATE | [Purpose] |
+| path/file.ext | MODIFY | [What changes] |
+| path/file.ext | REFERENCE | [Pattern to follow] |
 
 ### Incompatible With (only if applicable)
 TASK-029
