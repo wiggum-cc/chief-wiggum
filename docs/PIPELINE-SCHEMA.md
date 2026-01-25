@@ -43,7 +43,7 @@ results default to `PASS -> jump:next, FIX -> jump:prev , FAIL -> abort, SKIP ->
 | `readonly` | no | `false` | Git checkpoint before, restore after |
 | `enabled_by` | no | — | Env var that must be `"true"` for step to run |
 | `commit_after` | no | `false` | Auto-commit workspace changes after step |
-| `config` | no | `{}` | Agent-specific configuration passed via step-config.json |
+| `config` | no | `{}` | Agent-specific configuration passed via pipeline-config.json |
 | `hooks` | no | `{}` | Pre/post hook functions |
 
 ### on_result

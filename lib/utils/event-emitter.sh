@@ -19,7 +19,7 @@ EVENTS_LOG="${EVENTS_LOG:-}"
 # Returns: Path to events.jsonl
 _get_events_log() {
     local project_dir="${1:-${PROJECT_DIR:-.}}"
-    echo "$project_dir/.ralph/logs/events.jsonl"
+    echo "${RALPH_DIR:-$project_dir/.ralph}/logs/events.jsonl"
 }
 
 # Initialize events log (creates file and directory if needed)

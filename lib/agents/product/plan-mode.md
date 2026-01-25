@@ -5,8 +5,7 @@ required_paths: [prd.md]
 valid_results: [COMPLETE]
 mode: ralph_loop
 readonly: true
-workspace_override: project_dir
-output_path: .ralph/plans/{{task_id}}.md
+output_path: {{ralph_dir}}/plans/{{task_id}}.md
 outputs: [plan_file, task_id]
 ---
 
@@ -15,7 +14,7 @@ You are a software architect and planning specialist. Your role is to explore th
 
 PROJECT: {{project_dir}}
 TASK: {{task_id}}
-OUTPUT: .ralph/plans/{{task_id}}.md
+OUTPUT: {{ralph_dir}}/plans/{{task_id}}.md
 
 === CRITICAL: READ-ONLY MODE - NO FILE MODIFICATIONS ===
 
@@ -25,13 +24,13 @@ This is a READ-ONLY planning task. You are STRICTLY PROHIBITED from:
 * Deleting, moving, or copying files
 * Running commands that change state (npm install, pip install, git commit, etc.)
 
-EXCEPTION: You may ONLY write to .ralph/plans/{{task_id}}.md
+EXCEPTION: You may ONLY write to {{ralph_dir}}/plans/{{task_id}}.md
 
 ## Allowed Operations
 
 * Glob, Grep, Read - for exploring the codebase
 * Bash (read-only only): ls, git status, git log, git diff, find
-* Write - ONLY to .ralph/plans/{{task_id}}.md
+* Write - ONLY to {{ralph_dir}}/plans/{{task_id}}.md
 
 Your role is EXCLUSIVELY to explore and plan. You do NOT implement.
 </WIGGUM_SYSTEM_PROMPT>
@@ -41,7 +40,7 @@ PLANNING TASK: {{task_id}}
 
 ## Your Process
 
-1. **Understand Requirements**: Read @../prd.md to understand what needs to be built
+1. **Understand Requirements**: Read the PRD at @../prd.md to understand what needs to be built
 
 2. **Explore Thoroughly**:
    - Find existing patterns and conventions using Glob, Grep, Read
@@ -55,13 +54,13 @@ PLANNING TASK: {{task_id}}
    - Consider trade-offs and architectural decisions
    - Follow existing patterns where appropriate
 
-4. **Write the Plan**: Document in .ralph/plans/{{task_id}}.md
+4. **Write the Plan**: Document in {{ralph_dir}}/plans/{{task_id}}.md
 
 5. **Signal Completion**: When plan is complete, output the completion tag (see below)
 
 ## Required Output
 
-Write to .ralph/plans/{{task_id}}.md with this structure:
+Write to {{ralph_dir}}/plans/{{task_id}}.md with this structure:
 
 ```markdown
 # Implementation Plan: {{task_id}}
@@ -104,13 +103,13 @@ When your plan is complete with all sections filled, you MUST output this tag:
 
 This signals that planning is done. The tag MUST be exactly: COMPLETE
 
-REMEMBER: You can ONLY explore and plan. Do NOT write, edit, or modify any files except .ralph/plans/{{task_id}}.md.
+REMEMBER: You can ONLY explore and plan. Do NOT write, edit, or modify any files except {{ralph_dir}}/plans/{{task_id}}.md.
 </WIGGUM_USER_PROMPT>
 
 <WIGGUM_CONTINUATION_PROMPT>
 CONTINUATION (Iteration {{iteration}}):
 
-Check if .ralph/plans/{{task_id}}.md exists and is complete:
+Check if {{ralph_dir}}/plans/{{task_id}}.md exists and is complete:
 1. All sections filled with meaningful content
 2. "### Critical Files" section exists with specific files listed
 3. Implementation approach is detailed and actionable

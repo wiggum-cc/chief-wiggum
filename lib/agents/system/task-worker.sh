@@ -198,7 +198,7 @@ agent_run() {
 
     # === PIPELINE PHASE ===
     # Load pipeline configuration
-    local plan_file="$project_dir/.ralph/plans/${task_id}.md"
+    local plan_file="$RALPH_DIR/plans/${task_id}.md"
     if [ ! -f "$plan_file" ] || [ ! -s "$plan_file" ]; then
         plan_file=""
     fi
@@ -255,12 +255,12 @@ agent_run() {
             cd "$workspace" || return 1
 
             # Get task description from kanban for commit message
-            task_desc=$(grep -F "**[$task_id]**" "$project_dir/.ralph/kanban.md" | sed 's/.*\*\*\[.*\]\*\* //' | head -1) || true
+            task_desc=$(grep -F "**[$task_id]**" "$RALPH_DIR/kanban.md" | sed 's/.*\*\*\[.*\]\*\* //' | head -1) || true
             log_debug "Task description: ${task_desc:-<empty>}"
 
             # Get task priority
             local task_priority
-            task_priority=$(grep -F -A2 "**[$task_id]**" "$project_dir/.ralph/kanban.md" | grep "Priority:" | sed 's/.*Priority: //') || true
+            task_priority=$(grep -F -A2 "**[$task_id]**" "$RALPH_DIR/kanban.md" | grep "Priority:" | sed 's/.*Priority: //') || true
             log_debug "Task priority: ${task_priority:-<empty>}"
 
             # Create commit using shared library
@@ -424,12 +424,12 @@ _update_kanban_status() {
         # If no PR (gh CLI unavailable), mark as complete [x] directly
         if [ -n "$pr_url" ] && [ "$pr_url" != "N/A" ]; then
             log "Marking task $task_id as pending approval [P] in kanban (PR: $pr_url)"
-            if ! update_kanban_pending_approval "$project_dir/.ralph/kanban.md" "$task_id"; then
+            if ! update_kanban_pending_approval "$RALPH_DIR/kanban.md" "$task_id"; then
                 log_error "Failed to update kanban.md after retries"
             fi
         else
             log "Marking task $task_id as complete [x] in kanban (no PR created)"
-            if ! update_kanban "$project_dir/.ralph/kanban.md" "$task_id"; then
+            if ! update_kanban "$RALPH_DIR/kanban.md" "$task_id"; then
                 log_error "Failed to update kanban.md after retries"
             fi
         fi
@@ -444,14 +444,14 @@ _update_kanban_status() {
             log "Including detailed summary in changelog"
         fi
 
-        if ! append_changelog "$project_dir/.ralph/changelog.md" "$task_id" "$worker_id" "$task_desc" "$pr_url" "$summary"; then
+        if ! append_changelog "$RALPH_DIR/changelog.md" "$task_id" "$worker_id" "$task_desc" "$pr_url" "$summary"; then
             log_error "Failed to update changelog.md after retries"
         fi
 
         log "Task worker $worker_id completed task $task_id"
     else
         log_error "Marking task $task_id as FAILED [*] in kanban"
-        if ! update_kanban_failed "$project_dir/.ralph/kanban.md" "$task_id"; then
+        if ! update_kanban_failed "$RALPH_DIR/kanban.md" "$task_id"; then
             log_error "Failed to update kanban.md after retries"
         fi
         log_error "Task worker $worker_id failed task $task_id"
@@ -462,5 +462,5 @@ _update_kanban_status() {
 
     # Update metrics.json with latest worker data
     log_debug "Exporting metrics to metrics.json"
-    export_metrics "$project_dir/.ralph" 2>/dev/null || true
+    export_metrics "$RALPH_DIR" 2>/dev/null || true
 }

@@ -25,7 +25,7 @@ _ACTIVITY_LOG_FILE=""
 # Returns: 0 on success
 activity_init() {
     local project_dir="$1"
-    local log_dir="$project_dir/.ralph/logs"
+    local log_dir="${RALPH_DIR:-$project_dir/.ralph}/logs"
 
     mkdir -p "$log_dir"
     _ACTIVITY_LOG_FILE="$log_dir/activity.jsonl"

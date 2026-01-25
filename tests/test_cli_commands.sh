@@ -317,14 +317,24 @@ test_stop_help_shows_usage() {
 # wiggum-kill
 # =============================================================================
 
-test_kill_no_ralph_dir_reports_no_workers() {
-    # wiggum-kill without .ralph/workers reports no workers and exits 0
+test_kill_no_args_fails() {
+    # wiggum-kill without arguments should fail with usage error
     local output exit_code
     output=$(wiggum-kill 2>&1) || exit_code=$?
     exit_code=${exit_code:-0}
 
-    assert_equals "0" "$exit_code" "wiggum-kill without workers dir should exit 0"
-    assert_output_contains "$output" "No wiggum workers" "wiggum-kill should report no workers found"
+    assert_equals "$EXIT_USAGE" "$exit_code" "wiggum-kill without args should exit with usage error"
+    assert_output_contains "$output" "Missing argument" "wiggum-kill should report missing argument"
+}
+
+test_kill_all_no_ralph_dir_reports_no_workers() {
+    # wiggum-kill all without .ralph/workers reports no workers and exits 0
+    local output exit_code
+    output=$(wiggum-kill all 2>&1) || exit_code=$?
+    exit_code=${exit_code:-0}
+
+    assert_equals "0" "$exit_code" "wiggum-kill all without workers dir should exit 0"
+    assert_output_contains "$output" "No wiggum workers" "wiggum-kill all should report no workers found"
 }
 
 test_kill_help_shows_usage() {
@@ -463,7 +473,8 @@ run_test test_stop_no_ralph_dir_reports_no_workers
 run_test test_stop_help_shows_usage
 
 # wiggum-kill tests
-run_test test_kill_no_ralph_dir_reports_no_workers
+run_test test_kill_no_args_fails
+run_test test_kill_all_no_ralph_dir_reports_no_workers
 run_test test_kill_help_shows_usage
 
 # wiggum-run tests

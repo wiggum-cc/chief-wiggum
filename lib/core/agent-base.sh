@@ -1066,7 +1066,7 @@ agent_get_runtime_config() {
     fi
 }
 
-# Read step-config.json from the worker directory
+# Read step config from pipeline-config.json
 # DEPRECATED: Use agent_get_step_config instead
 #
 # Args:
@@ -1075,26 +1075,5 @@ agent_get_runtime_config() {
 # Returns: JSON content of step config, or "{}" if not found
 agent_read_step_config() {
     local worker_dir="$1"
-
-    # First try pipeline-config.json (new format)
-    local step_id="${WIGGUM_STEP_ID:-}"
-    if [ -n "$step_id" ]; then
-        local pipeline_config="$worker_dir/pipeline-config.json"
-        if [ -f "$pipeline_config" ]; then
-            local config
-            config=$(jq -r --arg id "$step_id" '.steps[$id].config // null' "$pipeline_config" 2>/dev/null)
-            if [ -n "$config" ] && [ "$config" != "null" ]; then
-                echo "$config"
-                return 0
-            fi
-        fi
-    fi
-
-    # Fallback to legacy step-config.json
-    local config_file="$worker_dir/step-config.json"
-    if [ -f "$config_file" ]; then
-        cat "$config_file"
-    else
-        echo "{}"
-    fi
+    agent_get_step_config "$worker_dir"
 }

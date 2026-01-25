@@ -262,7 +262,7 @@ pipeline_resolve() {
             return 0
         fi
         # Check .ralph/pipelines/
-        cli_path="$project_dir/.ralph/pipelines/${cli_pipeline_name}.json"
+        cli_path="$RALPH_DIR/pipelines/${cli_pipeline_name}.json"
         if [ -f "$cli_path" ]; then
             echo "$cli_path"
             return 0
@@ -271,7 +271,7 @@ pipeline_resolve() {
     fi
 
     # 2. Per-task override
-    local task_path="$project_dir/.ralph/pipelines/${task_id}.json"
+    local task_path="$RALPH_DIR/pipelines/${task_id}.json"
     if [ -f "$task_path" ]; then
         echo "$task_path"
         return 0

@@ -3,7 +3,7 @@
 # Tracks who ran what task and when for security audit trail
 set -euo pipefail
 
-AUDIT_LOG="${AUDIT_LOG:-$PROJECT_DIR/.ralph/logs/audit.log}"
+AUDIT_LOG="${AUDIT_LOG:-${RALPH_DIR:-$PROJECT_DIR/.ralph}/logs/audit.log}"
 
 # Get git user information
 get_git_user_info() {

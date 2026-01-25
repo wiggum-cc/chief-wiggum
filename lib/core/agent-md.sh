@@ -255,6 +255,7 @@ _md_interpolate() {
     result="${result//\{\{workspace\}\}/$_MD_WORKSPACE}"
     result="${result//\{\{worker_dir\}\}/$_MD_WORKER_DIR}"
     result="${result//\{\{project_dir\}\}/$_MD_PROJECT_DIR}"
+    result="${result//\{\{ralph_dir\}\}/${RALPH_DIR:-$_MD_PROJECT_DIR/.ralph}}"
 
     # Task/step context
     result="${result//\{\{task_id\}\}/$_MD_TASK_ID}"

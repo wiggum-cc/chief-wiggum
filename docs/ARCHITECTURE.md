@@ -223,7 +223,7 @@ Every N iterations, a supervisor agent reviews progress and can redirect work.
 │   ├── execution/          # Per-agent output directories
 │   ├── audit/
 │   └── ...
-├── step-config.json        # Current step configuration
+├── pipeline-config.json    # Full pipeline config with all steps and runtime context
 ├── activity.jsonl          # Event log (NDJSON)
 ├── agent.pid               # Running agent PID
 └── gate_result             # Last agent result (PASS/FAIL/FIX/STOP)

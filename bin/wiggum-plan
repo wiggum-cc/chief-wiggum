@@ -8,7 +8,7 @@ set -euo pipefail
 
 WIGGUM_HOME="${WIGGUM_HOME:-$HOME/.claude/chief-wiggum}"
 PROJECT_DIR="$(pwd)"
-RALPH_DIR="$PROJECT_DIR/.ralph"
+RALPH_DIR="${RALPH_DIR:-$PROJECT_DIR/.ralph}"
 
 source "$WIGGUM_HOME/lib/core/exit-codes.sh"
 source "$WIGGUM_HOME/lib/core/logger.sh"

@@ -111,8 +111,7 @@ Your previous work: @../summaries/{{run_id}}/{{step_id}}-{{prev_iteration}}-summ
 | `readonly` | bool | no | false | If true, inject git restrictions into prompts |
 | `report_tag` | string | no | `report` | XML tag to extract for report |
 | `result_tag` | string | no | `result` | XML tag containing result |
-| `output_path` | string | no | - | Custom output file path (for plan-mode style agents) |
-| `workspace_override` | string | no | - | Use `project_dir` instead of `workspace` |
+| `output_path` | string | no | - | Custom output file path (supports `{{ralph_dir}}`, `{{project_dir}}` variables) |
 | `completion_check` | string | no | `result_tag` | Completion check type (see below) |
 | `session_from` | string | no | - | For resume mode: `parent` to use parent session |
 | `outputs` | array | no | - | Output keys to expose for downstream steps |
@@ -138,6 +137,7 @@ Variables use `{{name}}` syntax and are replaced at runtime.
 | `{{workspace}}` | `$worker_dir/workspace` | Git worktree containing code |
 | `{{worker_dir}}` | arg 1 to `agent_run()` | Worker directory root |
 | `{{project_dir}}` | arg 2 to `agent_run()` | Original project root |
+| `{{ralph_dir}}` | `$RALPH_DIR` or `$PROJECT_DIR/.ralph` | Ralph configuration directory (configurable) |
 
 #### Current Step Context
 

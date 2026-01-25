@@ -133,7 +133,7 @@ agent_runner_detect_violations() {
         log_error ""
 
         # Log violation with timestamp
-        mkdir -p "$project_dir/.ralph/logs"
+        mkdir -p "${RALPH_DIR:-$project_dir/.ralph}/logs"
         {
             echo "================================================================================"
             echo "VIOLATION: Workspace Escape"
@@ -142,7 +142,7 @@ agent_runner_detect_violations() {
             cat "$_AGENT_RUNNER_DIR/violation_flag.txt"
             echo "================================================================================"
             echo ""
-        } >> "$project_dir/.ralph/logs/violations.log"
+        } >> "${RALPH_DIR:-$project_dir/.ralph}/logs/violations.log"
 
         return 1
     fi

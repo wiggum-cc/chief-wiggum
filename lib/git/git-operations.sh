@@ -349,8 +349,8 @@ git_finalize_worker() {
 
     # Get task description and priority from kanban
     local task_desc task_priority
-    task_desc=$(grep -F "**[$task_id]**" "$project_dir/.ralph/kanban.md" 2>/dev/null | sed 's/.*\*\*\[.*\]\*\* //' | head -1) || true
-    task_priority=$(grep -F -A2 "**[$task_id]**" "$project_dir/.ralph/kanban.md" 2>/dev/null | grep "Priority:" | sed 's/.*Priority: //') || true
+    task_desc=$(grep -F "**[$task_id]**" "$RALPH_DIR/kanban.md" 2>/dev/null | sed 's/.*\*\*\[.*\]\*\* //' | head -1) || true
+    task_priority=$(grep -F -A2 "**[$task_id]**" "$RALPH_DIR/kanban.md" 2>/dev/null | grep "Priority:" | sed 's/.*Priority: //') || true
 
     # Create commit
     if ! git_create_commit "$workspace" "$task_id" "$task_desc" "$task_priority" "$worker_id"; then

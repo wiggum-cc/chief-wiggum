@@ -66,7 +66,7 @@
         "config": {
           "type": "object",
           "default": {},
-          "description": "Per-step config written to step-config.json for the agent to read"
+          "description": "Per-step config available in pipeline-config.json for the agent to read"
         },
         "hooks": {
           "type": "object",

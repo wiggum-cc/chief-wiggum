@@ -9,7 +9,7 @@ set -euo pipefail
 
 WIGGUM_HOME="${WIGGUM_HOME:-$HOME/.claude/chief-wiggum}"
 PROJECT_DIR="$(pwd)"
-RALPH_DIR="$PROJECT_DIR/.ralph"
+RALPH_DIR="${RALPH_DIR:-$PROJECT_DIR/.ralph}"
 
 source "$WIGGUM_HOME/lib/core/exit-codes.sh"
 source "$WIGGUM_HOME/lib/core/defaults.sh"
@@ -127,7 +127,7 @@ main() {
     # No arguments = error
     if [ $# -eq 0 ]; then
         echo "Error: Missing argument. Use 'wiggum kill all' or 'wiggum kill <id>'" >&2
-        exit $EXIT_INVALID_ARGS
+        exit $EXIT_USAGE
     fi
 
     local target="$1"
