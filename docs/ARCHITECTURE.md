@@ -236,7 +236,7 @@ Every N iterations, a supervisor agent reviews progress and can redirect work.
 ├── pipeline-config.json    # Full pipeline config with all steps and runtime context
 ├── activity.jsonl          # Event log (NDJSON)
 ├── agent.pid               # Running agent PID
-└── gate_result             # Last agent result (PASS/FAIL/FIX/STOP)
+└── gate_result             # Last agent result (PASS/FAIL/FIX/SKIP)
 ```
 
 ### Activity Log Format
@@ -351,7 +351,6 @@ Defined in `lib/core/exit-codes.sh`:
 | 4 | Git error |
 | 5 | Claude error |
 | 10 | Agent FAIL result |
-| 11 | Agent STOP result |
 | 12 | Max iterations exceeded |
 
 ## Testing

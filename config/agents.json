@@ -7,8 +7,7 @@
       "plan_mode": false,
       "result_mappings": {
         "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
-        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" },
-        "STOP": { "status": "success", "exit_code": 11, "default_jump": "abort" }
+        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" }
       }
     },
     "engineering.software-engineer": {
@@ -18,8 +17,7 @@
       "timeout_seconds": 3600,
       "result_mappings": {
         "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
-        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" },
-        "STOP": { "status": "success", "exit_code": 11, "default_jump": "abort" }
+        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" }
       }
     },
     "general.task-summarizer": {

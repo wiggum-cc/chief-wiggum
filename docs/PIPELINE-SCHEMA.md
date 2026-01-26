@@ -48,7 +48,7 @@ results default to `PASS -> jump:next, FIX -> jump:prev , FAIL -> abort, SKIP ->
 
 ### on_result
 
-Maps gate result values to handlers. Unhandled results default to `jump:next`.
+Maps gate result values to handlers. Unhandled results use the `default_jump` from result_mappings.
 
 ```json
 "on_result": {
@@ -93,7 +93,7 @@ The `max` on an inline handler bounds how many times that handler can fire (glob
 |--------|---------|
 | `self` | Re-run the current step |
 | `prev` | Jump to the previous step in array order |
-| `next` | Continue to the next step (default for unhandled results) |
+| `next` | Continue to the next step |
 | `<id>` | Jump to step with matching `id` |
 | `abort` | Halt pipeline with failure |
 
@@ -121,7 +121,7 @@ any step that participates in loops).
 1. Steps execute in array order by default.
 2. After a step completes, check `on_result` for the agent's gate result.
 3. If a handler exists for the result, execute it (jump or inline agent).
-4. If no handler exists, `jump:next`.
+4. If no handler exists, use `default_jump` from result_mappings (see below).
 5. If `max` is exceeded on any step, jump to `on_max` target (default: `next`).
 6. If control reaches past the last step, pipeline succeeds.
 7. `abort` halts the pipeline immediately with failure status.
@@ -136,7 +136,6 @@ Agents produce a `gate_result` in their output JSON. Standard values:
 | `FAIL` | Quality check failed |
 | `FIX` | Fixable issues found |
 | `SKIP` | Not applicable |
-| `STOP` | Graceful termination |
 
 Any string is valid as a gate result — agents and handlers are not limited to
 these values. The pipeline dispatches on exact string match against `on_result` keys.
@@ -176,7 +175,9 @@ only declare the results they can actually produce:
   "defaults": {
     "result_mappings": {
       "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
-      "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" }
+      "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" },
+      "FIX":  { "status": "partial", "exit_code": 0, "default_jump": "prev" },
+      "SKIP": { "status": "success", "exit_code": 0, "default_jump": "next" }
     }
   }
 }
@@ -411,23 +412,18 @@ The previous schema fields map to this model:
       "id": "planning",
       "agent": "product.plan-mode",
       "readonly": true,
-      "enabled_by": "WIGGUM_PLAN_MODE",
-      "on_result": {
-        "FAIL": { "jump": "abort" }
-      }
+      "enabled_by": "WIGGUM_PLAN_MODE"
     },
     {
       "id": "execution",
       "agent": "engineering.software-engineer",
       "max": 3,
-      "config": { "max_iterations": 20, "max_turns": 50, "supervisor_interval": 2 },
-      "on_result": {
-        "FAIL": { "jump": "abort" }
-      }
+      "commit_after": true,
+      "config": { "max_iterations": 20, "max_turns": 50, "supervisor_interval": 2 }
     },
     {
       "id": "summary",
-      "agent": "system.task-summarizer",
+      "agent": "general.task-summarizer",
       "readonly": true
     },
     {
@@ -450,22 +446,105 @@ The previous schema fields map to this model:
       "max": 2,
       "commit_after": true,
       "on_result": {
-        "FAIL": { "jump": "execution" }
+        "FIX": {
+          "id": "test-fix",
+          "agent": "engineering.generic-fix",
+          "max": 2,
+          "commit_after": true
+        }
       }
     },
     {
       "id": "docs",
-      "agent": "product.documentation-writer",
+      "agent": "general.documentation-writer",
       "commit_after": true
     },
     {
       "id": "validation",
       "agent": "engineering.validation-review",
-      "readonly": true,
-      "on_result": {
-        "FAIL": { "jump": "execution" }
-      }
+      "readonly": true
     }
   ]
 }
 ```
+
+## Hooks
+
+Steps can define `pre` and `post` hooks that run before and after agent execution.
+
+```json
+{
+  "id": "test",
+  "agent": "engineering.test-coverage",
+  "hooks": {
+    "pre": ["setup_test_env"],
+    "post": ["cleanup_artifacts", "notify_complete"]
+  }
+}
+```
+
+Hooks are **function names**, not shell commands. The function must be defined and
+available (typically via `declare -F`). Each hook receives environment variables:
+
+| Variable | Description |
+|----------|-------------|
+| `PIPELINE_WORKER_DIR` | Worker directory path |
+| `PIPELINE_PROJECT_DIR` | Project root directory |
+| `PIPELINE_WORKSPACE` | Git worktree workspace |
+| `PIPELINE_STEP_ID` | Current step ID |
+
+Hook failures are logged but do not abort the pipeline.
+
+## Step Context Variables
+
+The pipeline runner exports context variables for each step, enabling agents to
+access upstream outputs via markdown templates (`{{parent.step_id}}`).
+
+### Parent Step Context
+
+| Variable | Description |
+|----------|-------------|
+| `WIGGUM_PARENT_STEP_ID` | Previous step's ID |
+| `WIGGUM_PARENT_RUN_ID` | Previous step's run ID (epoch-based) |
+| `WIGGUM_PARENT_SESSION_ID` | Previous step's Claude session ID |
+| `WIGGUM_PARENT_RESULT` | Previous step's gate result |
+| `WIGGUM_PARENT_REPORT` | Path to previous step's report file |
+| `WIGGUM_PARENT_OUTPUT_DIR` | Previous step's output directory |
+
+### Next Step Context
+
+| Variable | Description |
+|----------|-------------|
+| `WIGGUM_NEXT_STEP_ID` | Next step's ID (if any) |
+
+These variables are cleared after each step completes.
+
+## Runtime State
+
+The pipeline runner creates `pipeline-config.json` in the worker directory at
+pipeline start. This file is used by `wiggum inspect` and the scheduler for
+resume logic.
+
+```json
+{
+  "pipeline": {
+    "name": "default",
+    "source": "/path/to/pipeline.json"
+  },
+  "runtime": {
+    "plan_file": "/path/to/plan.md",
+    "resume_instructions": ""
+  },
+  "current": {
+    "step_idx": 2,
+    "step_id": "summary"
+  },
+  "steps": {
+    "planning": { "agent": "product.plan-mode", "config": {} },
+    "execution": { "agent": "engineering.software-engineer", "config": {...} }
+  }
+}
+```
+
+The `current` field is updated atomically as each step runs, enabling resume
+from the last active step after interruption.

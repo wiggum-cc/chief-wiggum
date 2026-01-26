@@ -67,7 +67,7 @@ WIGGUM_LOG_LEVEL=debug wiggum run           # Verbose logging
 
 ### Pipeline Engine
 
-Jump-based state machine defined in `config/pipeline.json`. Steps have `on_result` handlers (PASS/FAIL/FIX/STOP) controlling flow via jump targets: `self`, `prev`, `next`, `abort`, or step ID.
+Jump-based state machine defined in `config/pipeline.json`. Steps have `on_result` handlers (PASS/FAIL/FIX/SKIP) controlling flow via jump targets: `self`, `prev`, `next`, `abort`, or step ID.
 
 Default pipeline: planning → execution (supervised) → summary → audit → audit-fix → test → docs → validation
 
@@ -76,7 +76,7 @@ Default pipeline: planning → execution (supervised) → summary → audit → 
 All agents source `lib/core/agent-base.sh` and implement:
 ```bash
 agent_run(worker_dir, project_dir)
-# Returns: 0=PASS, 10=FAIL, 11=STOP, 12=MAX_ITERATIONS
+# Returns: 0=PASS, 10=FAIL, 12=MAX_ITERATIONS
 ```
 
 **Agent Categories**:
@@ -91,7 +91,7 @@ Each worker operates in `.ralph/workers/worker-TASK-XXX-<timestamp>/` with:
 - `prd.md` - Generated requirements
 - `activity.jsonl` - Event log (NDJSON)
 - `output/<agent>/` - Per-agent outputs
-- `gate_result` - Last agent result (PASS/FAIL/FIX/STOP)
+- `gate_result` - Last agent result (PASS/FAIL/FIX/SKIP)
 
 ### Exit Codes (`lib/core/exit-codes.sh`)
 
@@ -104,7 +104,6 @@ Each worker operates in `.ralph/workers/worker-TASK-XXX-<timestamp>/` with:
 | 4 | Git error |
 | 5 | Claude error |
 | 10 | Agent FAIL |
-| 11 | Agent STOP |
 | 12 | Max iterations exceeded |
 
 ### Configuration
@@ -248,7 +247,7 @@ The TUI component uses Python 3.10+ with [uv](https://docs.astral.sh/uv/) for de
 
 ### Pipeline Rules
 - **Every cycle needs a bounded `max`** - termination guarantee requires `max` on any step in a loop
-- **Unhandled results default to `jump:next`** - explicit handlers needed for FAIL/FIX/STOP
+- **Unhandled results use `default_jump` from result_mappings** - explicit handlers needed for custom behavior
 - **Inline agent handlers implicitly jump to parent (`prev`)** after completion
 - **`on_max` default is `next`** - pipeline continues even if step hit iteration limit
 
@@ -274,7 +273,6 @@ The TUI component uses Python 3.10+ with [uv](https://docs.astral.sh/uv/) for de
 | `FAIL` | failure | 10 | abort |
 | `FIX` | partial | 0 | prev |
 | `SKIP` | success | 0 | next |
-| `STOP` | success | 11 | abort |
 
 Each agent defines its own `result_mappings` in `config/agents.json`. Fallback mappings are in `defaults.result_mappings`. Pipeline-level overrides are also supported.
 

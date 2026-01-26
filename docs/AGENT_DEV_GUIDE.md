@@ -759,7 +759,7 @@ agent_create_directories "$worker_dir"
 
 ```bash
 # Write epoch-named result to results/<epoch>-<agent-type>-result.json
-# Args: worker_dir, gate_result (PASS|FAIL|FIX|SKIP|STOP), extra_outputs, errors
+# Args: worker_dir, gate_result (PASS|FAIL|FIX|SKIP), extra_outputs, errors
 # Status and exit_code are derived automatically from gate_result
 agent_write_result "$worker_dir" "PASS"                      # Basic usage
 agent_write_result "$worker_dir" "PASS" '{"pr_url":"..."}'   # With extra outputs
@@ -805,7 +805,7 @@ agent_extract_and_write_result "$worker_dir" "SECURITY" "audit" "report" "PASS|F
 }
 ```
 
-The `outputs.gate_result` field replaces legacy text-file values (PASS/FAIL/FIX/SKIP/STOP).
+The `outputs.gate_result` field replaces legacy text-file values (PASS/FAIL/FIX/SKIP).
 Agents never delete from `logs/`, `results/`, `reports/`, or `summaries/` — they only append new epoch-named entries.
 
 ## Execution Patterns
