@@ -962,10 +962,14 @@ agent_extract_and_write_result() {
 
     local result="UNKNOWN"
 
-    # Find the latest log file for this step
+    # Find the latest log file for this step (run-isolated via RALPH_RUN_ID)
+    # RALPH_RUN_ID format: {step_id}-{epoch}, matching log dir naming
     # Pattern matches both old format (prefix-N.log) and new format (prefix-N-timestamp.log)
-    local log_file
-    log_file=$(find_newest "$worker_dir/logs" -name "${log_prefix}-*.log")
+    local log_file=""
+    local run_id="${RALPH_RUN_ID:-}"
+    if [ -n "$run_id" ] && [ -d "$worker_dir/logs/$run_id" ]; then
+        log_file=$(find_newest "$worker_dir/logs/$run_id" -name "${log_prefix}-*.log")
+    fi
 
     if [ -n "$log_file" ] && [ -f "$log_file" ]; then
         # Extract report content and save using agent_write_report

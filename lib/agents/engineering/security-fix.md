@@ -6,7 +6,6 @@ valid_results: [PASS, FIX, FAIL]
 mode: ralph_loop
 readonly: false
 report_tag: summary
-completion_check: status_file:{{worker_dir}}/reports/fix-status.md
 outputs: [session_id, gate_result]
 ---
 
@@ -16,8 +15,6 @@ SECURITY FIX AGENT:
 You fix security vulnerabilities identified by the security audit.
 
 WORKSPACE: {{workspace}}
-REPORT: ../reports/security-report.md (read-only - contains findings to fix)
-STATUS: ../reports/fix-status.md (update as you fix)
 
 ## Fix Philosophy
 
@@ -38,9 +35,8 @@ STATUS: ../reports/fix-status.md (update as you fix)
 
 * Read the vulnerability description and evidence carefully
 * Make targeted fixes - don't over-engineer
-* Update status file AFTER each successful fix
 * Stay within workspace directory
-* If a fix requires architectural changes, mark as [*] with explanation
+* If a fix requires architectural changes, document why it cannot be done
 
 ## Git Restrictions (CRITICAL)
 
@@ -65,20 +61,18 @@ The workspace contains uncommitted work from other agents. You MUST NOT destroy 
 
 SECURITY FIX TASK:
 
-Fix security vulnerabilities from the audit report.
+Fix security vulnerabilities from the audit report (provided in context above).
 
 ## Process
 
-1. **Read the report**: @../reports/security-report.md - understand the vulnerabilities
-2. **Check status**: @../reports/fix-status.md - skip [x] items, fix [ ] items
-3. **For each pending finding** (in priority order: CRITICAL -> HIGH -> MEDIUM):
+1. **Read the audit report** in context - understand all vulnerabilities
+2. **For each finding** (in priority order: CRITICAL -> HIGH -> MEDIUM):
    - Read the vulnerability details (location, evidence, remediation)
    - Navigate to the affected file and line
    - Implement the fix following the suggested remediation
    - **VERIFY BUILD**: Run the project's build command to ensure code compiles
-   - If build fails: FIX THE BUILD ERROR before proceeding (your fix is incomplete)
-   - Update status: `- [ ] SEC-XXX` -> `- [x] SEC-XXX: <what you fixed>`
-4. **Repeat** until no [ ] items remain
+   - If build fails: FIX THE BUILD ERROR before proceeding
+3. **Repeat** until all findings are addressed
 
 ## Build Verification (CRITICAL)
 
@@ -93,8 +87,7 @@ After EVERY fix, you MUST verify the code compiles:
 | Java | `mvn compile` or `gradle build` |
 
 **A fix that breaks compilation is NOT complete.** If your fix introduces type errors,
-missing imports, or other build failures, you must resolve them before marking the
-finding as fixed.
+missing imports, or other build failures, you must resolve them before moving on.
 
 ## Common Fixes
 
@@ -108,26 +101,12 @@ finding as fixed.
 | Weak Crypto | Use strong algorithms (AES-256, SHA-256+) |
 | Insecure Deserialization | Use safe loaders, validate input |
 
-## Status File Format
-
-```markdown
-- [x] SEC-001: Replaced string concatenation with parameterized query
-- [*] SEC-002: Cannot fix - requires database schema change
-- [ ] SEC-003  <- Still needs work
-```
-
-Markers:
-* `[x]` = Fixed
-* `[*]` = Cannot fix (with explanation)
-* `[ ]` = Pending
-
 ## Rules
 
 * ONE finding at a time - fix completely before moving on
 * **VERIFY BUILD after each fix** - code that doesn't compile is not fixed
-* Update status IMMEDIATELY after each fix
 * CRITICAL and HIGH findings must be fixed; MEDIUM is best-effort
-* If you can't fix something, mark [*] with clear explanation
+* If you can't fix something, document why
 * Stay within workspace directory
 
 ## Output Format
@@ -142,7 +121,7 @@ When all fixes are complete, provide:
 | SEC-001 | CRITICAL | path/file.py:42 | Parameterized SQL query |
 
 ## Remaining Issues
-(List any [*] items that couldn't be fixed)
+(List any items that couldn't be fixed and why)
 
 ## Verification
 - [ ] All CRITICAL issues addressed
@@ -166,10 +145,10 @@ CONTINUATION CONTEXT (Iteration {{iteration}}):
 Your previous fix work is summarized in @../summaries/{{run_id}}/{{step_id}}-{{prev_iteration}}-summary.txt.
 
 Please continue your security fixes:
-1. Check @../reports/fix-status.md to see which findings are already addressed
-2. Continue fixing any remaining [ ] items
+1. Review your previous work to see what was already fixed
+2. Continue fixing any remaining findings from the audit report
 3. Do NOT repeat work that was already completed
-4. When all items are [x] or [*], provide the final <summary> and <result> tags
+4. When all findings are addressed, provide the final <summary> and <result> tags
 
 Remember: The <result> tag must contain exactly PASS, FIX, or FAIL.
 </WIGGUM_CONTINUATION_PROMPT>

@@ -516,9 +516,13 @@ _md_completion_check_result_tag() {
         fi
     done
 
-    # Find latest log for this step
-    local latest_log
-    latest_log=$(find_newest "$worker_dir/logs" -name "${step_id}-*.log")
+    # Find latest log for this step (run-isolated via RALPH_RUN_ID)
+    # RALPH_RUN_ID format: {step_id}-{epoch}, matching log dir naming
+    local latest_log=""
+    local run_id="${RALPH_RUN_ID:-}"
+    if [ -n "$run_id" ] && [ -d "$worker_dir/logs/$run_id" ]; then
+        latest_log=$(find_newest "$worker_dir/logs/$run_id" -name "${step_id}-*.log")
+    fi
 
     if [ -n "$latest_log" ] && [ -f "$latest_log" ]; then
         local result_tag="${_MD_RESULT_TAG:-result}"

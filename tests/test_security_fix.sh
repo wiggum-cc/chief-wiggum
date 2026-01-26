@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Test suite for security-fix agent
-# Tests: _find_security_audit_report helper, step-config handling
+# Tests: markdown agent loading, step-config handling
 
 set -euo pipefail
 
@@ -33,201 +33,35 @@ teardown() {
 }
 
 # =============================================================================
-# Test: Bash Syntax Validation
+# Test: Markdown Agent Definition
 # =============================================================================
 
-test_security_fix_sh_syntax() {
-    if bash -n "$WIGGUM_HOME/lib/agents/engineering/security-fix.sh" 2>/dev/null; then
-        assert_success "security-fix.sh should have valid bash syntax" true
-    else
-        assert_failure "security-fix.sh should have valid bash syntax" true
-    fi
+test_security_fix_md_exists() {
+    assert_file_exists "$WIGGUM_HOME/lib/agents/engineering/security-fix.md" \
+        "security-fix.md agent definition should exist"
 }
 
-# =============================================================================
-# Test: _find_security_audit_report Helper
-# =============================================================================
+test_security_fix_md_has_required_frontmatter() {
+    local md_file="$WIGGUM_HOME/lib/agents/engineering/security-fix.md"
 
-test_find_security_audit_report_finds_critical() {
-    source "$WIGGUM_HOME/lib/core/agent-base.sh"
-    source "$WIGGUM_HOME/lib/agents/engineering/security-fix.sh"
-
-    # Create a report with CRITICAL findings
-    cat > "$TEST_TMP_DIR/reports/1234567890-audit-report.md" << 'EOF'
-# Security Audit Report
-
-### CRITICAL
-- **[SEC-001]** SQL Injection vulnerability
-
-### HIGH
-- **[SEC-002]** XSS vulnerability
-EOF
-
-    local result
-    result=$(_find_security_audit_report "$TEST_TMP_DIR")
-
-    assert_not_equals "" "$result" "Should find report with CRITICAL findings"
-    assert_file_exists "$result" "Report file should exist"
+    # Check for required frontmatter fields
+    assert_file_contains "$md_file" "type: engineering.security-fix" \
+        "Should have type field"
+    assert_file_contains "$md_file" "valid_results:" \
+        "Should have valid_results field"
+    assert_file_contains "$md_file" "mode: ralph_loop" \
+        "Should have mode field"
 }
 
-test_find_security_audit_report_finds_high() {
-    source "$WIGGUM_HOME/lib/core/agent-base.sh"
-    source "$WIGGUM_HOME/lib/agents/engineering/security-fix.sh"
+test_security_fix_md_has_prompt_sections() {
+    local md_file="$WIGGUM_HOME/lib/agents/engineering/security-fix.md"
 
-    # Create a report with only HIGH findings
-    cat > "$TEST_TMP_DIR/reports/1234567890-security-report.md" << 'EOF'
-# Security Audit Report
-
-### HIGH
-- **[SEC-001]** Hardcoded credentials
-EOF
-
-    local result
-    result=$(_find_security_audit_report "$TEST_TMP_DIR")
-
-    assert_not_equals "" "$result" "Should find report with HIGH findings"
-}
-
-test_find_security_audit_report_finds_medium() {
-    source "$WIGGUM_HOME/lib/core/agent-base.sh"
-    source "$WIGGUM_HOME/lib/agents/engineering/security-fix.sh"
-
-    # Create a report with only MEDIUM findings
-    cat > "$TEST_TMP_DIR/reports/1234567890-scan-report.md" << 'EOF'
-# Security Scan
-
-### MEDIUM
-- **[SEC-001]** Weak password policy
-EOF
-
-    local result
-    result=$(_find_security_audit_report "$TEST_TMP_DIR")
-
-    assert_not_equals "" "$result" "Should find report with MEDIUM findings"
-}
-
-test_find_security_audit_report_finds_low() {
-    source "$WIGGUM_HOME/lib/core/agent-base.sh"
-    source "$WIGGUM_HOME/lib/agents/engineering/security-fix.sh"
-
-    # Create a report with only LOW findings
-    cat > "$TEST_TMP_DIR/reports/1234567890-analysis-report.md" << 'EOF'
-# Analysis
-
-### LOW
-- Minor issue
-EOF
-
-    local result
-    result=$(_find_security_audit_report "$TEST_TMP_DIR")
-
-    assert_not_equals "" "$result" "Should find report with LOW findings"
-}
-
-test_find_security_audit_report_finds_info() {
-    source "$WIGGUM_HOME/lib/core/agent-base.sh"
-    source "$WIGGUM_HOME/lib/agents/engineering/security-fix.sh"
-
-    # Create a report with only INFO findings
-    cat > "$TEST_TMP_DIR/reports/1234567890-info-report.md" << 'EOF'
-# Informational
-
-### INFO
-- Informational note
-EOF
-
-    local result
-    result=$(_find_security_audit_report "$TEST_TMP_DIR")
-
-    assert_not_equals "" "$result" "Should find report with INFO findings"
-}
-
-test_find_security_audit_report_ignores_non_security() {
-    source "$WIGGUM_HOME/lib/core/agent-base.sh"
-    source "$WIGGUM_HOME/lib/agents/engineering/security-fix.sh"
-
-    # Create a non-security report
-    cat > "$TEST_TMP_DIR/reports/1234567890-code-review-report.md" << 'EOF'
-# Code Review Report
-
-## Summary
-Code looks good.
-
-## Recommendations
-- Add more tests
-EOF
-
-    local result
-    result=$(_find_security_audit_report "$TEST_TMP_DIR")
-
-    assert_equals "" "$result" "Should not find non-security reports"
-}
-
-test_find_security_audit_report_returns_most_recent() {
-    source "$WIGGUM_HOME/lib/core/agent-base.sh"
-    source "$WIGGUM_HOME/lib/agents/engineering/security-fix.sh"
-
-    # Create an older security report
-    cat > "$TEST_TMP_DIR/reports/1000000000-old-report.md" << 'EOF'
-# Old Report
-### CRITICAL
-- Old finding
-EOF
-    # Set older modification time (using -t for BSD/GNU portability)
-    touch -t 202001010000.00 "$TEST_TMP_DIR/reports/1000000000-old-report.md"
-
-    # Create a newer security report
-    cat > "$TEST_TMP_DIR/reports/2000000000-new-report.md" << 'EOF'
-# New Report
-### HIGH
-- New finding
-EOF
-
-    local result
-    result=$(_find_security_audit_report "$TEST_TMP_DIR")
-
-    assert_output_contains "$result" "new-report" "Should return most recent security report"
-}
-
-test_find_security_audit_report_empty_reports_dir() {
-    source "$WIGGUM_HOME/lib/core/agent-base.sh"
-    source "$WIGGUM_HOME/lib/agents/engineering/security-fix.sh"
-
-    # Empty reports directory (already created in setup)
-    local result
-    result=$(_find_security_audit_report "$TEST_TMP_DIR")
-
-    assert_equals "" "$result" "Should return empty for empty reports dir"
-}
-
-test_find_security_audit_report_no_reports_dir() {
-    source "$WIGGUM_HOME/lib/core/agent-base.sh"
-    source "$WIGGUM_HOME/lib/agents/engineering/security-fix.sh"
-
-    # Remove reports directory
-    rm -rf "$TEST_TMP_DIR/reports"
-
-    local result
-    result=$(_find_security_audit_report "$TEST_TMP_DIR")
-
-    assert_equals "" "$result" "Should return empty when no reports dir"
-}
-
-test_find_security_audit_report_step_id_agnostic() {
-    source "$WIGGUM_HOME/lib/core/agent-base.sh"
-    source "$WIGGUM_HOME/lib/agents/engineering/security-fix.sh"
-
-    # Create report with arbitrary step ID in filename
-    cat > "$TEST_TMP_DIR/reports/1234567890-custom-step-name-report.md" << 'EOF'
-# Security Report
-### CRITICAL
-- Finding
-EOF
-
-    local result
-    result=$(_find_security_audit_report "$TEST_TMP_DIR")
-
-    assert_not_equals "" "$result" "Should find report regardless of step ID in filename"
+    assert_file_contains "$md_file" "<WIGGUM_SYSTEM_PROMPT>" \
+        "Should have system prompt section"
+    assert_file_contains "$md_file" "<WIGGUM_USER_PROMPT>" \
+        "Should have user prompt section"
+    assert_file_contains "$md_file" "{{context_section}}" \
+        "Should use context_section for parent report"
 }
 
 # =============================================================================
@@ -268,20 +102,10 @@ EOF
 # Run Tests
 # =============================================================================
 
-# Syntax validation
-run_test test_security_fix_sh_syntax
-
-# _find_security_audit_report helper
-run_test test_find_security_audit_report_finds_critical
-run_test test_find_security_audit_report_finds_high
-run_test test_find_security_audit_report_finds_medium
-run_test test_find_security_audit_report_finds_low
-run_test test_find_security_audit_report_finds_info
-run_test test_find_security_audit_report_ignores_non_security
-run_test test_find_security_audit_report_returns_most_recent
-run_test test_find_security_audit_report_empty_reports_dir
-run_test test_find_security_audit_report_no_reports_dir
-run_test test_find_security_audit_report_step_id_agnostic
+# Markdown agent definition
+run_test test_security_fix_md_exists
+run_test test_security_fix_md_has_required_frontmatter
+run_test test_security_fix_md_has_prompt_sections
 
 # Step-based report lookup
 run_test test_agent_find_latest_report_by_step_id
