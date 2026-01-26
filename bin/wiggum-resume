@@ -92,10 +92,14 @@ archive_previous_run() {
     mv "$worker_dir/worker.log" "$archive_dir/" 2>/dev/null || true
     mv "$worker_dir/reports" "$archive_dir/" 2>/dev/null || true
     mv "$worker_dir/agent-result.json" "$archive_dir/" 2>/dev/null || true
-    # reports/resume-instructions.md stays — needed by the resumed worker
-    if [ -d "$archive_dir/reports" ] && [ -f "$archive_dir/reports/resume-instructions.md" ]; then
-        mkdir -p "$worker_dir/reports"
-        mv "$archive_dir/reports/resume-instructions.md" "$worker_dir/reports/"
+    # Preserve the latest resume-decide report — needed by the resumed worker via {{parent.report}}
+    if [ -d "$archive_dir/reports" ]; then
+        local resume_report
+        resume_report=$(find_newest "$archive_dir/reports" -maxdepth 1 -name "*-system.resume-decide-report.md")
+        if [ -n "$resume_report" ] && [ -f "$resume_report" ]; then
+            mkdir -p "$worker_dir/reports"
+            mv "$resume_report" "$worker_dir/reports/"
+        fi
     fi
 
     echo "Archived previous run to $(basename "$archive_dir")"
@@ -211,9 +215,11 @@ do_resume() {
         echo "RESUME ABORTED"
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         echo ""
-        if [ -f "$worker_dir/reports/resume-instructions.md" ]; then
+        local abort_report
+        abort_report=$(agent_find_latest_report "$worker_dir" "system.resume-decide")
+        if [ -n "$abort_report" ] && [ -f "$abort_report" ]; then
             echo "Reason:"
-            cat "$worker_dir/reports/resume-instructions.md"
+            cat "$abort_report"
         fi
         echo ""
         exit $EXIT_ERROR
@@ -289,7 +295,14 @@ do_resume() {
     export _WORKER_MAX_ITERATIONS="$MAX_ITERATIONS"
     export _WORKER_MAX_TURNS="$MAX_TURNS"
     export _WORKER_RESUME_STEP="$resume_step"
-    export _WORKER_RESUME_INSTRUCTIONS="$worker_dir/reports/resume-instructions.md"
+
+    # Read report path from result file (standard mechanism)
+    local resume_result_file resume_instructions_path
+    resume_result_file=$(agent_find_latest_result "$worker_dir" "system.resume-decide")
+    if [ -n "$resume_result_file" ] && [ -f "$resume_result_file" ]; then
+        resume_instructions_path=$(jq -r '.outputs.report_file // ""' "$resume_result_file")
+    fi
+    export _WORKER_RESUME_INSTRUCTIONS="${resume_instructions_path:-}"
 
     # shellcheck disable=SC2016
     setsid bash -c '

@@ -94,6 +94,14 @@ _export_step_context() {
         fi
     fi
 
+    # If this is the first step of a resumed run and no parent report was set,
+    # use resume_instructions as the parent report
+    if [ "$idx" -eq "${_PIPELINE_START_IDX:-0}" ] && [ -z "${WIGGUM_PARENT_REPORT:-}" ]; then
+        if [ -n "${PIPELINE_RESUME_INSTRUCTIONS:-}" ] && [ -f "${PIPELINE_RESUME_INSTRUCTIONS:-}" ]; then
+            export WIGGUM_PARENT_REPORT="$PIPELINE_RESUME_INSTRUCTIONS"
+        fi
+    fi
+
     # Determine next step (next in pipeline, if any)
     local next_idx=$((idx + 1))
     if [ "$next_idx" -lt "$step_count" ]; then
@@ -378,6 +386,9 @@ pipeline_run_all() {
             log_warn "Unknown start_from_step '$start_from_step' - starting from beginning"
         fi
     fi
+
+    # Track start index for resume context propagation
+    export _PIPELINE_START_IDX="$current_idx"
 
     # Main state machine loop
     while [ "$current_idx" -ge 0 ] && [ "$current_idx" -lt "$step_count" ]; do

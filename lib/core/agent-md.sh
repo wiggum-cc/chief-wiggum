@@ -36,9 +36,14 @@ declare -g _MD_OUTPUT_PATH=""
 declare -g _MD_WORKSPACE_OVERRIDE=""
 declare -g _MD_COMPLETION_CHECK=""
 declare -g _MD_SESSION_FROM=""
+declare -g _MD_SUPERVISOR_INTERVAL=""
+declare -g _MD_PLAN_FILE=""
 declare -gA _MD_REQUIRED_PATHS=()
 declare -gA _MD_VALID_RESULTS=()
 declare -gA _MD_OUTPUTS=()
+
+# Runtime state for callbacks
+declare -g _MD_SUPERVISOR_FEEDBACK=""
 
 # Prompt sections (raw templates)
 declare -g _MD_SYSTEM_PROMPT=""
@@ -199,6 +204,8 @@ _md_parse_frontmatter_impl() {
     _MD_WORKSPACE_OVERRIDE=$(_yaml_get_value "$frontmatter" "workspace_override" "")
     _MD_COMPLETION_CHECK=$(_yaml_get_value "$frontmatter" "completion_check" "result_tag")
     _MD_SESSION_FROM=$(_yaml_get_value "$frontmatter" "session_from" "")
+    _MD_SUPERVISOR_INTERVAL=$(_yaml_get_value "$frontmatter" "supervisor_interval" "0")
+    _MD_PLAN_FILE=$(_yaml_get_value "$frontmatter" "plan_file" "")
 
     # Extract array values
     _yaml_get_array "$frontmatter" "required_paths" "_MD_REQUIRED_PATHS"
@@ -273,6 +280,10 @@ _md_interpolate() {
     result="${result//\{\{step_id\}\}/${WIGGUM_STEP_ID:-}}"
     result="${result//\{\{run_id\}\}/${RALPH_RUN_ID:-}}"
 
+    # Plan file (from env or computed default)
+    local plan_file_path="${WIGGUM_PLAN_FILE:-${RALPH_DIR:-$_MD_PROJECT_DIR/.ralph}/plans/${_MD_TASK_ID}.md}"
+    result="${result//\{\{plan_file\}\}/$plan_file_path}"
+
     # Parent step context (from pipeline)
     result="${result//\{\{parent.step_id\}\}/${WIGGUM_PARENT_STEP_ID:-}}"
     result="${result//\{\{parent.run_id\}\}/${WIGGUM_PARENT_RUN_ID:-}}"
@@ -295,6 +306,12 @@ _md_interpolate() {
         local git_restrictions
         git_restrictions=$(_md_generate_git_restrictions)
         result="${result//\{\{git_restrictions\}\}/$git_restrictions}"
+    fi
+
+    if [[ "$result" == *"{{plan_section}}"* ]]; then
+        local plan_section
+        plan_section=$(_md_generate_plan_section)
+        result="${result//\{\{plan_section\}\}/$plan_section}"
     fi
 
     echo "$result"
@@ -321,6 +338,9 @@ _md_interpolate_iteration() {
     result="${result//\{\{iteration\}\}/$iteration}"
     result="${result//\{\{prev_iteration\}\}/$((iteration - 1))}"
     result="${result//\{\{output_dir\}\}/$output_dir}"
+
+    # Supervisor feedback variable
+    result="${result//\{\{supervisor_feedback\}\}/${_MD_SUPERVISOR_FEEDBACK:-}}"
 
     echo "$result"
 }
@@ -494,6 +514,128 @@ You operate by READING files. Do NOT modify the workspace in any way.
 EOF
 }
 
+# Generate plan section if plan file exists
+#
+# Returns: Markdown section referencing the plan file, or empty string
+_md_generate_plan_section() {
+    local plan_file="${_MD_PLAN_FILE:-}"
+
+    # Interpolate path variables in plan_file
+    [ -n "$plan_file" ] && plan_file=$(_md_interpolate "$plan_file")
+
+    # Return empty if no plan file specified or file doesn't exist
+    [ -z "$plan_file" ] || [ ! -f "$plan_file" ] && { echo ""; return; }
+
+    cat << EOF
+
+IMPLEMENTATION PLAN AVAILABLE:
+
+An implementation plan has been created for this task. Before starting:
+1. Read the plan at: @$plan_file
+2. Follow the implementation approach described in the plan
+3. Pay attention to the Critical Files section
+4. Consider the potential challenges identified
+
+The plan provides guidance on:
+- Existing patterns in the codebase to follow
+- Recommended implementation approach
+- Dependencies and sequencing
+- Potential challenges to watch for
+EOF
+}
+
+# =============================================================================
+# CONDITIONAL SECTION PROCESSING
+# =============================================================================
+
+# Process conditional XML tags in template
+#
+# Supports:
+#   <WIGGUM_IF_SUPERVISOR>content</WIGGUM_IF_SUPERVISOR> - Include if supervisor_feedback non-empty
+#   <WIGGUM_IF_ITERATION_ZERO>content</WIGGUM_IF_ITERATION_ZERO> - Include on iteration 0 only
+#   <WIGGUM_IF_ITERATION_NONZERO>content</WIGGUM_IF_ITERATION_NONZERO> - Include on iteration > 0
+#   <WIGGUM_IF_FILE_EXISTS:path>content</WIGGUM_IF_FILE_EXISTS> - Include if path exists
+#
+# Args:
+#   template  - Template string with conditional tags
+#   iteration - Current iteration number
+#
+# Returns: Processed template string
+_md_process_conditionals() {
+    local template="$1"
+    local iteration="$2"
+    local result="$template"
+
+    # Process <WIGGUM_IF_SUPERVISOR>
+    if [ -n "${_MD_SUPERVISOR_FEEDBACK:-}" ]; then
+        # Keep content, remove tags
+        result=$(echo "$result" | sed 's/<WIGGUM_IF_SUPERVISOR>//g; s/<\/WIGGUM_IF_SUPERVISOR>//g')
+    else
+        # Remove entire block
+        result=$(echo "$result" | awk '
+            BEGIN { skip = 0 }
+            /<WIGGUM_IF_SUPERVISOR>/ { skip = 1; next }
+            /<\/WIGGUM_IF_SUPERVISOR>/ { skip = 0; next }
+            !skip { print }
+        ')
+    fi
+
+    # Process <WIGGUM_IF_ITERATION_ZERO>
+    if [ "$iteration" -eq 0 ]; then
+        # Keep content, remove tags
+        result=$(echo "$result" | sed 's/<WIGGUM_IF_ITERATION_ZERO>//g; s/<\/WIGGUM_IF_ITERATION_ZERO>//g')
+    else
+        # Remove entire block
+        result=$(echo "$result" | awk '
+            BEGIN { skip = 0 }
+            /<WIGGUM_IF_ITERATION_ZERO>/ { skip = 1; next }
+            /<\/WIGGUM_IF_ITERATION_ZERO>/ { skip = 0; next }
+            !skip { print }
+        ')
+    fi
+
+    # Process <WIGGUM_IF_ITERATION_NONZERO>
+    if [ "$iteration" -gt 0 ]; then
+        # Keep content, remove tags
+        result=$(echo "$result" | sed 's/<WIGGUM_IF_ITERATION_NONZERO>//g; s/<\/WIGGUM_IF_ITERATION_NONZERO>//g')
+    else
+        # Remove entire block
+        result=$(echo "$result" | awk '
+            BEGIN { skip = 0 }
+            /<WIGGUM_IF_ITERATION_NONZERO>/ { skip = 1; next }
+            /<\/WIGGUM_IF_ITERATION_NONZERO>/ { skip = 0; next }
+            !skip { print }
+        ')
+    fi
+
+    # Process <WIGGUM_IF_FILE_EXISTS:{path}> tags
+    # Extract all WIGGUM_IF_FILE_EXISTS tags and process them
+    while [[ "$result" =~ \<WIGGUM_IF_FILE_EXISTS:([^>]+)\> ]]; do
+        local file_path="${BASH_REMATCH[1]}"
+        local open_tag="<WIGGUM_IF_FILE_EXISTS:${file_path}>"
+        local close_tag_pattern="</WIGGUM_IF_FILE_EXISTS>"
+
+        # Interpolate the path
+        local resolved_path
+        resolved_path=$(_md_interpolate "$file_path")
+
+        if [ -f "$resolved_path" ]; then
+            # File exists - keep content, remove tags
+            result=$(echo "$result" | sed "s|${open_tag}||g; s|${close_tag_pattern}||g")
+        else
+            # File doesn't exist - remove entire block using awk
+            result=$(echo "$result" | awk -v open_tag="$open_tag" -v close_tag="$close_tag_pattern" '
+                BEGIN { skip = 0 }
+                index($0, open_tag) { skip = 1; next }
+                index($0, close_tag) { skip = 0; next }
+                !skip { print }
+            ')
+        fi
+    done
+
+    echo "$result"
+}
+
 # =============================================================================
 # COMPLETION CHECK IMPLEMENTATIONS
 # =============================================================================
@@ -597,18 +739,26 @@ _md_completion_check() {
 _md_user_prompt_callback() {
     local iteration="$1"
     local output_dir="$2"
-    # shellcheck disable=SC2034  # supervisor args available for future use
+    # shellcheck disable=SC2034  # supervisor_dir available for custom prompt functions
     local supervisor_dir="${3:-}"
-    # shellcheck disable=SC2034
     local supervisor_feedback="${4:-}"
 
-    # Always output the user prompt (with interpolation)
-    _md_interpolate_iteration "$_MD_USER_PROMPT" "$iteration" "$output_dir"
+    # Store supervisor feedback for interpolation and conditional processing
+    _MD_SUPERVISOR_FEEDBACK="$supervisor_feedback"
+
+    # Interpolate and process conditionals in user prompt
+    local user_prompt
+    user_prompt=$(_md_interpolate_iteration "$_MD_USER_PROMPT" "$iteration" "$output_dir")
+    user_prompt=$(_md_process_conditionals "$user_prompt" "$iteration")
+    echo "$user_prompt"
 
     # Append continuation prompt on iteration > 0
     if [ "$iteration" -gt 0 ] && [ -n "$_MD_CONTINUATION_PROMPT" ]; then
         echo ""
-        _md_interpolate_iteration "$_MD_CONTINUATION_PROMPT" "$iteration" "$output_dir"
+        local cont_prompt
+        cont_prompt=$(_md_interpolate_iteration "$_MD_CONTINUATION_PROMPT" "$iteration" "$output_dir")
+        cont_prompt=$(_md_process_conditionals "$cont_prompt" "$iteration")
+        echo "$cont_prompt"
     fi
 }
 
@@ -851,13 +1001,17 @@ _md_run_ralph_loop() {
     fi
     log_debug "_md_run_ralph_loop: callback functions verified"
 
+    # Get supervisor interval (0 = disabled)
+    local supervisor_interval="${_MD_SUPERVISOR_INTERVAL:-0}"
+
     # Run the loop
-    log_debug "_md_run_ralph_loop: calling run_ralph_loop with workspace=$_MD_WORKSPACE"
+    log_debug "_md_run_ralph_loop: calling run_ralph_loop with workspace=$_MD_WORKSPACE supervisor_interval=$supervisor_interval"
     run_ralph_loop "$_MD_WORKSPACE" \
         "$system_prompt" \
         "_md_user_prompt_callback" \
         "_md_completion_check" \
-        "$max_iterations" "$max_turns" "$worker_dir" "$session_prefix"
+        "$max_iterations" "$max_turns" "$worker_dir" "$session_prefix" \
+        "$supervisor_interval"
 }
 
 # Execute in once mode

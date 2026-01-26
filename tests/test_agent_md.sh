@@ -542,6 +542,299 @@ EOF
 }
 
 # =============================================================================
+# Test: Supervisor Integration
+# =============================================================================
+
+test_parse_frontmatter_supervisor_interval() {
+    source "$WIGGUM_HOME/lib/core/agent-md.sh"
+
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    local agent_file="$tmpdir/supervised-agent.md"
+
+    cat > "$agent_file" << 'EOF'
+---
+type: test.supervised-agent
+description: Agent with supervisor interval
+required_paths: [workspace]
+valid_results: [PASS, FAIL]
+mode: ralph_loop
+supervisor_interval: 3
+---
+
+<WIGGUM_SYSTEM_PROMPT>
+System prompt
+</WIGGUM_SYSTEM_PROMPT>
+
+<WIGGUM_USER_PROMPT>
+User prompt
+</WIGGUM_USER_PROMPT>
+EOF
+
+    md_agent_load "$agent_file"
+
+    assert_equals "3" "$_MD_SUPERVISOR_INTERVAL" "Should parse supervisor_interval from frontmatter"
+
+    rm -rf "$tmpdir"
+}
+
+test_supervisor_feedback_interpolation() {
+    source "$WIGGUM_HOME/lib/core/agent-md.sh"
+
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    local agent_file
+    agent_file=$(_create_test_agent_md "$tmpdir")
+
+    md_agent_load "$agent_file"
+
+    # Set supervisor feedback
+    _MD_SUPERVISOR_FEEDBACK="Focus on error handling"
+
+    local result
+    result=$(_md_interpolate_iteration "Supervisor says: {{supervisor_feedback}}" "1" "/output")
+
+    if echo "$result" | grep -q "Supervisor says: Focus on error handling"; then
+        assert_success "Should interpolate supervisor_feedback variable" true
+    else
+        assert_failure "Should interpolate supervisor_feedback variable (got: $result)" true
+    fi
+
+    rm -rf "$tmpdir"
+}
+
+# =============================================================================
+# Test: Plan File Support
+# =============================================================================
+
+test_parse_frontmatter_plan_file() {
+    source "$WIGGUM_HOME/lib/core/agent-md.sh"
+
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    local agent_file="$tmpdir/plan-agent.md"
+
+    cat > "$agent_file" << 'EOF'
+---
+type: test.plan-agent
+description: Agent with plan file
+required_paths: [workspace]
+valid_results: [PASS, FAIL]
+mode: ralph_loop
+plan_file: "{{ralph_dir}}/plans/{{task_id}}.md"
+---
+
+<WIGGUM_SYSTEM_PROMPT>
+System prompt
+</WIGGUM_SYSTEM_PROMPT>
+
+<WIGGUM_USER_PROMPT>
+User prompt
+</WIGGUM_USER_PROMPT>
+EOF
+
+    md_agent_load "$agent_file"
+
+    assert_equals "{{ralph_dir}}/plans/{{task_id}}.md" "$_MD_PLAN_FILE" "Should parse plan_file from frontmatter"
+
+    rm -rf "$tmpdir"
+}
+
+test_plan_section_generation() {
+    source "$WIGGUM_HOME/lib/core/agent-md.sh"
+
+    local tmpdir
+    tmpdir=$(mktemp -d)
+
+    # Create a mock plan file
+    mkdir -p "$tmpdir/plans"
+    echo "# Implementation Plan" > "$tmpdir/plans/TEST-001.md"
+
+    # Set context for interpolation
+    _MD_PROJECT_DIR="$tmpdir"
+    _MD_TASK_ID="TEST-001"
+    _MD_PLAN_FILE="{{ralph_dir}}/plans/{{task_id}}.md"
+    export RALPH_DIR="$tmpdir"
+
+    local result
+    result=$(_md_generate_plan_section)
+
+    if echo "$result" | grep -q "IMPLEMENTATION PLAN AVAILABLE"; then
+        assert_success "Should generate plan section when plan file exists" true
+    else
+        assert_failure "Should generate plan section when plan file exists (got: $result)" true
+    fi
+
+    unset RALPH_DIR
+    rm -rf "$tmpdir"
+}
+
+test_plan_section_empty_when_no_file() {
+    source "$WIGGUM_HOME/lib/core/agent-md.sh"
+
+    local tmpdir
+    tmpdir=$(mktemp -d)
+
+    _MD_PROJECT_DIR="$tmpdir"
+    _MD_TASK_ID="TEST-001"
+    _MD_PLAN_FILE=""
+
+    local result
+    result=$(_md_generate_plan_section)
+
+    if [ -z "$result" ]; then
+        assert_success "Should return empty when no plan file specified" true
+    else
+        assert_failure "Should return empty when no plan file specified (got: $result)" true
+    fi
+
+    rm -rf "$tmpdir"
+}
+
+# =============================================================================
+# Test: Conditional Section Processing
+# =============================================================================
+
+test_conditional_supervisor_with_feedback() {
+    source "$WIGGUM_HOME/lib/core/agent-md.sh"
+
+    _MD_SUPERVISOR_FEEDBACK="Some feedback"
+
+    local template="Before
+<WIGGUM_IF_SUPERVISOR>
+GUIDANCE: {{supervisor_feedback}}
+</WIGGUM_IF_SUPERVISOR>
+After"
+
+    local result
+    result=$(_md_process_conditionals "$template" "1")
+
+    if echo "$result" | grep -q "GUIDANCE:"; then
+        assert_success "Should include supervisor section when feedback present" true
+    else
+        assert_failure "Should include supervisor section when feedback present (got: $result)" true
+    fi
+}
+
+test_conditional_supervisor_without_feedback() {
+    source "$WIGGUM_HOME/lib/core/agent-md.sh"
+
+    _MD_SUPERVISOR_FEEDBACK=""
+
+    local template="Before
+<WIGGUM_IF_SUPERVISOR>
+GUIDANCE: hidden
+</WIGGUM_IF_SUPERVISOR>
+After"
+
+    local result
+    result=$(_md_process_conditionals "$template" "1")
+
+    if echo "$result" | grep -q "GUIDANCE:"; then
+        assert_failure "Should exclude supervisor section when no feedback" true
+    else
+        assert_success "Should exclude supervisor section when no feedback" true
+    fi
+}
+
+test_conditional_iteration_zero() {
+    source "$WIGGUM_HOME/lib/core/agent-md.sh"
+
+    _MD_SUPERVISOR_FEEDBACK=""
+
+    local template="<WIGGUM_IF_ITERATION_ZERO>
+First iteration content
+</WIGGUM_IF_ITERATION_ZERO>
+<WIGGUM_IF_ITERATION_NONZERO>
+Later iteration content
+</WIGGUM_IF_ITERATION_NONZERO>"
+
+    local result
+    result=$(_md_process_conditionals "$template" "0")
+
+    if echo "$result" | grep -q "First iteration content" && ! echo "$result" | grep -q "Later iteration content"; then
+        assert_success "Should show only iteration zero content on iteration 0" true
+    else
+        assert_failure "Should show only iteration zero content on iteration 0 (got: $result)" true
+    fi
+}
+
+test_conditional_iteration_nonzero() {
+    source "$WIGGUM_HOME/lib/core/agent-md.sh"
+
+    _MD_SUPERVISOR_FEEDBACK=""
+
+    local template="<WIGGUM_IF_ITERATION_ZERO>
+First iteration content
+</WIGGUM_IF_ITERATION_ZERO>
+<WIGGUM_IF_ITERATION_NONZERO>
+Later iteration content
+</WIGGUM_IF_ITERATION_NONZERO>"
+
+    local result
+    result=$(_md_process_conditionals "$template" "3")
+
+    if echo "$result" | grep -q "Later iteration content" && ! echo "$result" | grep -q "First iteration content"; then
+        assert_success "Should show only nonzero content on iteration > 0" true
+    else
+        assert_failure "Should show only nonzero content on iteration > 0 (got: $result)" true
+    fi
+}
+
+test_conditional_file_exists() {
+    source "$WIGGUM_HOME/lib/core/agent-md.sh"
+
+    local tmpdir
+    tmpdir=$(mktemp -d)
+
+    # Create a test file
+    echo "test" > "$tmpdir/exists.txt"
+
+    _MD_WORKER_DIR="$tmpdir"
+
+    local template="<WIGGUM_IF_FILE_EXISTS:{{worker_dir}}/exists.txt>
+File content
+</WIGGUM_IF_FILE_EXISTS>
+<WIGGUM_IF_FILE_EXISTS:{{worker_dir}}/missing.txt>
+Missing content
+</WIGGUM_IF_FILE_EXISTS>"
+
+    local result
+    result=$(_md_process_conditionals "$template" "0")
+
+    if echo "$result" | grep -q "File content" && ! echo "$result" | grep -q "Missing content"; then
+        assert_success "Should show content only when file exists" true
+    else
+        assert_failure "Should show content only when file exists (got: $result)" true
+    fi
+
+    rm -rf "$tmpdir"
+}
+
+# =============================================================================
+# Test: Task Executor MD
+# =============================================================================
+
+test_task_executor_md_loads() {
+    source "$WIGGUM_HOME/lib/core/agent-md.sh"
+
+    local md_file="$WIGGUM_HOME/lib/agents/system/task-executor.md"
+
+    if [ ! -f "$md_file" ]; then
+        skip_test "task-executor.md not found"
+        return
+    fi
+
+    if md_agent_load "$md_file"; then
+        assert_equals "system.task-executor" "$_MD_TYPE" "task-executor.md should have correct type"
+        assert_equals "ralph_loop" "$_MD_MODE" "task-executor.md should be ralph_loop mode"
+        assert_equals "2" "$_MD_SUPERVISOR_INTERVAL" "task-executor.md should have supervisor_interval=2"
+    else
+        assert_failure "task-executor.md should load successfully" true
+    fi
+}
+
+# =============================================================================
 # Test: Real Agent Files
 # =============================================================================
 
@@ -624,6 +917,17 @@ run_test test_agent_required_paths_returns_paths
 run_test test_load_fails_on_missing_file
 run_test test_load_fails_on_missing_type
 run_test test_load_fails_on_missing_user_prompt
+run_test test_parse_frontmatter_supervisor_interval
+run_test test_supervisor_feedback_interpolation
+run_test test_parse_frontmatter_plan_file
+run_test test_plan_section_generation
+run_test test_plan_section_empty_when_no_file
+run_test test_conditional_supervisor_with_feedback
+run_test test_conditional_supervisor_without_feedback
+run_test test_conditional_iteration_zero
+run_test test_conditional_iteration_nonzero
+run_test test_conditional_file_exists
+run_test test_task_executor_md_loads
 run_test test_security_audit_md_loads
 run_test test_validation_review_md_loads
 run_test test_documentation_writer_md_loads

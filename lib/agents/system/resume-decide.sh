@@ -33,6 +33,9 @@ agent_output_files() {
     echo "resume-step.txt"
 }
 
+# Global variable to track report path across functions
+declare -g _RESUME_DECIDE_REPORT_PATH=""
+
 # Source dependencies
 agent_source_core
 agent_source_once
@@ -211,7 +214,23 @@ agent_run() {
     # Setup logging to worker.log
     export LOG_FILE="$worker_dir/worker.log"
 
-    log "Resume-decide agent analyzing previous run..."
+    # Extract worker info for logging
+    local worker_id
+    worker_id=$(basename "$worker_dir")
+    local task_id
+    task_id=$(echo "$worker_id" | sed -E 's/worker-([A-Za-z]{2,10}-[0-9]{1,4})-.*/\1/' || echo "")
+    local start_time
+    start_time=$(date -Iseconds)
+
+    # Log header
+    log_section "RESUME-DECIDE"
+    log_kv "Agent" "system.resume-decide"
+    log_kv "Worker ID" "$worker_id"
+    log_kv "Task ID" "$task_id"
+    log_kv "Worker Dir" "$worker_dir"
+    log_kv "Started" "$start_time"
+
+    log "Analyzing previous run..."
 
     # Load pipeline configuration for dynamic prompt generation
     _load_pipeline_config "$project_dir"
@@ -257,8 +276,13 @@ agent_run() {
     if [ ! -f "$worker_dir/resume-step.txt" ] || [ ! -s "$worker_dir/resume-step.txt" ]; then
         log_error "resume-decide failed to produce resume-step.txt"
         echo "ABORT" > "$worker_dir/resume-step.txt"
-        echo "Resume-decide agent failed to produce a decision." > "$worker_dir/reports/resume-instructions.md"
-        agent_write_result "$worker_dir" "FAIL"
+        _RESUME_DECIDE_REPORT_PATH=$(agent_write_report "$worker_dir" "Resume-decide agent failed to produce a decision.")
+        agent_write_result "$worker_dir" "FAIL" "$(printf '{"report_file":"%s"}' "${_RESUME_DECIDE_REPORT_PATH:-}")"
+
+        # Log failure footer
+        log_subsection "RESUME-DECIDE FAILED"
+        log_kv "Decision" "ABORT (no output)"
+        log_kv "Finished" "$(date -Iseconds)"
         return 1
     fi
 
@@ -266,112 +290,15 @@ agent_run() {
     step=$(cat "$worker_dir/resume-step.txt")
     log "Resume decision: $step"
 
-    # Archive artifacts from the resume point onward (not earlier phases)
-    if [ "$step" != "ABORT" ]; then
-        archive_from_step "$worker_dir" "$step"
-    fi
+    # Log completion footer
+    log_subsection "RESUME-DECIDE COMPLETED"
+    log_kv "Decision" "$step"
+    log_kv "Finished" "$(date -Iseconds)"
+
     # Both resume and abort are successful decisions
-    agent_write_result "$worker_dir" "PASS" "$(printf '{"resume_step":"%s"}' "$step")"
+    agent_write_result "$worker_dir" "PASS" "$(printf '{"resume_step":"%s","report_file":"%s"}' "$step" "${_RESUME_DECIDE_REPORT_PATH:-}")"
 
     return 0
-}
-
-# Archive artifacts from the resume step onward using timestamp comparison.
-# Finds the conversation log for the resume step, uses its mtime as reference,
-# and archives all artifacts created at or after that point.
-# Earlier phase artifacts are kept (they represent completed work).
-# Workspace is LEFT UNTOUCHED (it has the actual code changes).
-archive_from_step() {
-    local worker_dir="$1"
-    local resume_step="$2"
-    local archive_dir
-    archive_dir="$worker_dir/history/resume-$(date +%s)"
-
-    # Map resume step to its conversation log prefix
-    # All agents use their step ID as the prefix (no special cases)
-    local step_prefix="${resume_step}-"
-
-    # Find the earliest conversation log for the resume step (timestamp reference)
-    local reference_file=""
-    if [ -d "$worker_dir/conversations" ]; then
-        reference_file=$(ls -tr "$worker_dir/conversations/${step_prefix}"*.md 2>/dev/null | head -1)
-    fi
-
-    if [ -z "$reference_file" ]; then
-        log_warn "No conversation log found for step '$resume_step', archiving all run artifacts"
-        _archive_all "$worker_dir" "$archive_dir"
-        return
-    fi
-
-    mkdir -p "$archive_dir"
-
-    # Always archive run-level artifacts (they span the whole run, will be regenerated)
-    mv "$worker_dir/logs" "$archive_dir/" 2>/dev/null || true
-    mv "$worker_dir/worker.log" "$archive_dir/" 2>/dev/null || true
-
-    # Archive conversation files with mtime >= reference file
-    if [ -d "$worker_dir/conversations" ]; then
-        mkdir -p "$archive_dir/conversations"
-        for f in "$worker_dir/conversations/"*.md; do
-            [ -f "$f" ] || continue
-            if [ ! "$f" -ot "$reference_file" ]; then
-                mv "$f" "$archive_dir/conversations/"
-            fi
-        done
-    fi
-
-    # Archive results/ and reports/ directories
-    for subdir in results reports; do
-        [ -d "$worker_dir/$subdir" ] || continue
-        mkdir -p "$archive_dir/$subdir"
-        for f in "$worker_dir/$subdir"/*; do
-            [ -f "$f" ] || continue
-            if [ ! "$f" -ot "$reference_file" ]; then
-                mv "$f" "$archive_dir/$subdir/"
-            fi
-        done
-        # Remove subdir if now empty
-        rmdir "$worker_dir/$subdir" 2>/dev/null || true
-    done
-
-    # Archive artifact directories whose contents are entirely from the resume point onward
-    for dir in summaries checkpoints supervisors; do
-        [ -d "$worker_dir/$dir" ] || continue
-        local dominated=true
-        while IFS= read -r f; do
-            if [ "$f" -ot "$reference_file" ]; then
-                dominated=false
-                break
-            fi
-        done < <(find "$worker_dir/$dir" -type f 2>/dev/null)
-        if [ "$dominated" = true ]; then
-            mv "$worker_dir/$dir" "$archive_dir/"
-        fi
-    done
-
-    # Preserve resume-instructions.md — needed by the resumed worker
-    if [ -f "$archive_dir/reports/resume-instructions.md" ]; then
-        mkdir -p "$worker_dir/reports"
-        mv "$archive_dir/reports/resume-instructions.md" "$worker_dir/reports/"
-    fi
-    log "Archived artifacts from step '$resume_step' (ref: $(basename "$reference_file")) to $(basename "$archive_dir")"
-}
-
-# Fallback: archive all run artifacts when no reference file exists
-_archive_all() {
-    local worker_dir="$1"
-    local archive_dir="$2"
-
-    mkdir -p "$archive_dir"
-    mv "$worker_dir/logs" "$archive_dir/" 2>/dev/null || true
-    mv "$worker_dir/summaries" "$archive_dir/" 2>/dev/null || true
-    mv "$worker_dir/checkpoints" "$archive_dir/" 2>/dev/null || true
-    mv "$worker_dir/conversations" "$archive_dir/" 2>/dev/null || true
-    mv "$worker_dir/supervisors" "$archive_dir/" 2>/dev/null || true
-    mv "$worker_dir/worker.log" "$archive_dir/" 2>/dev/null || true
-    mv "$worker_dir/results" "$archive_dir/" 2>/dev/null || true
-    mv "$worker_dir/reports" "$archive_dir/" 2>/dev/null || true
-    log "Archived all run artifacts to $(basename "$archive_dir")"
 }
 
 # System prompt for the resume-decide agent
@@ -597,7 +524,7 @@ _extract_decision() {
     if [ -z "$log_file" ] || [ ! -f "$log_file" ]; then
         log_error "No resume-decide log file found in $worker_dir/logs"
         echo "ABORT" > "$worker_dir/resume-step.txt"
-        echo "No decision log produced." > "$worker_dir/reports/resume-instructions.md"
+        _RESUME_DECIDE_REPORT_PATH=$(agent_write_report "$worker_dir" "No decision log produced.")
         return 1
     fi
 
@@ -612,7 +539,7 @@ _extract_decision() {
     if [ -z "$full_text" ]; then
         log_error "No assistant text found in resume-decide log"
         echo "ABORT" > "$worker_dir/resume-step.txt"
-        echo "Failed to extract decision from agent output." > "$worker_dir/reports/resume-instructions.md"
+        _RESUME_DECIDE_REPORT_PATH=$(agent_write_report "$worker_dir" "Failed to extract decision from agent output.")
         return 1
     fi
 
@@ -628,7 +555,7 @@ _extract_decision() {
     if [ -z "$step" ]; then
         log_error "No valid <step> tag found in resume-decide output"
         echo "ABORT" > "$worker_dir/resume-step.txt"
-        echo "Agent did not produce a valid step decision." > "$worker_dir/reports/resume-instructions.md"
+        _RESUME_DECIDE_REPORT_PATH=$(agent_write_report "$worker_dir" "Agent did not produce a valid step decision.")
         return 1
     fi
 
@@ -642,7 +569,8 @@ _extract_decision() {
         instructions="Resuming from step: $step. No detailed instructions available."
     fi
 
-    echo "$instructions" > "$worker_dir/reports/resume-instructions.md"
+    # Use standard report naming convention
+    _RESUME_DECIDE_REPORT_PATH=$(agent_write_report "$worker_dir" "$instructions")
 
     log "Extracted decision: step=$step"
     return 0

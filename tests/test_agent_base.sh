@@ -557,12 +557,8 @@ test_validation_review_md_exists() {
     assert_file_exists "$WIGGUM_HOME/lib/agents/engineering/validation-review.md" "validation-review.md should exist"
 }
 
-test_task_executor_sh_syntax() {
-    if bash -n "$WIGGUM_HOME/lib/agents/system/task-executor.sh" 2>/dev/null; then
-        assert_success "system/task-executor.sh should have valid bash syntax" true
-    else
-        assert_failure "system/task-executor.sh should have valid bash syntax" true
-    fi
+test_task_executor_md_exists() {
+    assert_file_exists "$WIGGUM_HOME/lib/agents/system/task-executor.md" "task-executor.md should exist"
 }
 
 test_task_summarizer_md_exists() {
@@ -615,7 +611,7 @@ run_test test_agent_registry_sh_syntax
 run_test test_task_worker_sh_syntax
 run_test test_pr_comment_fix_sh_syntax
 run_test test_validation_review_md_exists
-run_test test_task_executor_sh_syntax
+run_test test_task_executor_md_exists
 run_test test_task_summarizer_md_exists
 run_test test_agents_json_has_new_agents
 

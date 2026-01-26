@@ -114,6 +114,8 @@ Your previous work: @../summaries/{{run_id}}/{{step_id}}-{{prev_iteration}}-summ
 | `output_path` | string | no | - | Custom output file path (supports `{{ralph_dir}}`, `{{project_dir}}` variables) |
 | `completion_check` | string | no | `result_tag` | Completion check type (see below) |
 | `session_from` | string | no | - | For resume mode: `parent` to use parent session |
+| `supervisor_interval` | int | no | `0` | Run supervisor every N iterations (0 = disabled) |
+| `plan_file` | string | no | - | Path template to implementation plan file (supports variables) |
 | `outputs` | array | no | - | Output keys to expose for downstream steps |
 
 ### Prompt Sections
@@ -174,6 +176,8 @@ These variables enable modular agents that consume outputs from upstream steps:
 | `{{iteration}}` | Callback arg 1 | Current iteration (0-based) |
 | `{{prev_iteration}}` | Computed | Previous iteration number |
 | `{{output_dir}}` | Callback arg 2 | Output directory for this run |
+| `{{supervisor_feedback}}` | Supervisor guidance | Feedback from supervisor (empty if no supervisor or first run) |
+| `{{plan_file}}` | `$WIGGUM_PLAN_FILE` or default | Path to implementation plan file |
 
 #### Generated Content Variables
 
@@ -181,6 +185,51 @@ These variables enable modular agents that consume outputs from upstream steps:
 |----------|--------------|-------------|
 | `{{context_section}}` | `_md_generate_context_section()` | Dynamic context based on available files |
 | `{{git_restrictions}}` | `_md_generate_git_restrictions()` | Forbidden/allowed git commands block |
+| `{{plan_section}}` | `_md_generate_plan_section()` | Implementation plan guidance (if plan file exists) |
+
+### Conditional Prompt Sections
+
+Conditional XML tags allow dynamic prompt content based on runtime conditions:
+
+| Tag | Condition |
+|-----|-----------|
+| `<WIGGUM_IF_SUPERVISOR>` | Include content only if supervisor feedback is present |
+| `<WIGGUM_IF_ITERATION_ZERO>` | Include content only on iteration 0 |
+| `<WIGGUM_IF_ITERATION_NONZERO>` | Include content only on iteration > 0 |
+| `<WIGGUM_IF_FILE_EXISTS:path>` | Include content only if the interpolated path exists |
+
+**Example Usage:**
+
+```markdown
+<WIGGUM_USER_PROMPT>
+<WIGGUM_IF_SUPERVISOR>
+SUPERVISOR GUIDANCE:
+{{supervisor_feedback}}
+---
+</WIGGUM_IF_SUPERVISOR>
+
+Your main task instructions here...
+
+<WIGGUM_IF_ITERATION_ZERO>
+<WIGGUM_IF_FILE_EXISTS:{{worker_dir}}/resume_instructions.md>
+CONTEXT FROM PREVIOUS SESSION:
+Read @../resume_instructions.md for context from the previous run.
+</WIGGUM_IF_FILE_EXISTS>
+</WIGGUM_IF_ITERATION_ZERO>
+
+<WIGGUM_IF_ITERATION_NONZERO>
+CONTINUATION CONTEXT:
+Read @../summaries/{{run_id}}/{{step_id}}-{{prev_iteration}}-summary.txt
+</WIGGUM_IF_ITERATION_NONZERO>
+</WIGGUM_USER_PROMPT>
+```
+
+**How it works:**
+- Tags are processed after variable interpolation
+- When condition is true: content is kept, tags are removed
+- When condition is false: entire block (including content) is removed
+- Tags can be nested (inner conditions evaluated after outer)
+- `<WIGGUM_IF_FILE_EXISTS:path>` interpolates the path before checking
 
 ### Execution Modes
 
@@ -190,9 +239,20 @@ Iterative execution with optional supervision. Uses all three prompt sections.
 
 ```yaml
 mode: ralph_loop
+supervisor_interval: 2  # Optional: run supervisor every 2 iterations
 ```
 
 The continuation prompt section is only appended when `iteration > 0`.
+
+**Supervisor Integration:**
+
+When `supervisor_interval` is set to a value > 0, the ralph loop runs a supervisor
+agent every N iterations. The supervisor can:
+- **CONTINUE**: Proceed with guidance (feedback available via `{{supervisor_feedback}}`)
+- **STOP**: Halt the loop
+- **RESTART**: Reset iteration to 0 with guidance
+
+Use `<WIGGUM_IF_SUPERVISOR>` to include supervisor feedback conditionally in prompts.
 
 #### Mode: `once`
 
