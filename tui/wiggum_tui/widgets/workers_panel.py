@@ -113,8 +113,17 @@ class WorkersPanel(Widget):
         """Load workers from .ralph/workers directory."""
         self._workers_list = scan_workers(self.ralph_dir)
 
-    def _populate_table(self, table: DataTable) -> None:
+    def _populate_table(self, table: DataTable, preserve_cursor: bool = False) -> None:
         """Populate the table with worker data."""
+        # Save cursor position by worker ID before clearing
+        cursor_worker_id = None
+        if preserve_cursor and table.cursor_row is not None:
+            try:
+                row_key = table.get_row_at(table.cursor_row)
+                cursor_worker_id = str(row_key) if row_key else None
+            except Exception:
+                pass
+
         table.clear()
         for worker in self._workers_list:
             status_style = self._get_status_style(worker.status)
@@ -148,6 +157,13 @@ class WorkersPanel(Widget):
                 pr_url,
                 key=worker.id,
             )
+
+        # Restore cursor position by worker ID
+        if cursor_worker_id:
+            for i, worker in enumerate(self._workers_list):
+                if worker.id == cursor_worker_id:
+                    table.move_cursor(row=i)
+                    break
 
     def _get_status_style(self, status: WorkerStatus) -> str:
         """Get Rich style for a status."""
@@ -294,9 +310,9 @@ class WorkersPanel(Widget):
         except Exception:
             pass
 
-        # Update table
+        # Update table while preserving cursor position
         try:
             table = self.query_one("#workers-table", DataTable)
-            self._populate_table(table)
+            self._populate_table(table, preserve_cursor=True)
         except Exception:
             pass

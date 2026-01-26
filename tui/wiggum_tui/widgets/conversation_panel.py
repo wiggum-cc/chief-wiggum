@@ -257,33 +257,80 @@ class ConversationPanel(Widget):
         self._last_data_hash = self._compute_data_hash(self.conversation)
         self._populate_tree()
 
-    def _get_expanded_paths(self, node: TreeNode, path: str = "") -> set[str]:
-        """Get set of paths for all expanded nodes."""
+    def _get_node_key(self, node: TreeNode) -> str:
+        """Generate a stable key for a node based on its label content."""
+        # Extract text content from the node label, stripping Rich markup
+        label = str(node.label)
+        # Remove Rich tags for comparison
+        import re
+        clean_label = re.sub(r'\[/?[^\]]*\]', '', label)
+        # Use first 100 chars to keep key size reasonable
+        return clean_label[:100]
+
+    def _get_expanded_keys(self, node: TreeNode, parent_key: str = "") -> set[str]:
+        """Get set of keys for all expanded nodes using content-based identification."""
         expanded = set()
+        node_key = self._get_node_key(node)
+        full_key = f"{parent_key}/{node_key}" if parent_key else node_key
+
         if node.is_expanded:
-            expanded.add(path)
-        for i, child in enumerate(node.children):
-            child_path = f"{path}/{i}"
-            expanded.update(self._get_expanded_paths(child, child_path))
+            expanded.add(full_key)
+        for child in node.children:
+            expanded.update(self._get_expanded_keys(child, full_key))
         return expanded
 
-    def _restore_expanded_paths(self, node: TreeNode, expanded_paths: set[str], path: str = "") -> None:
-        """Restore expanded state from saved paths."""
-        if path in expanded_paths:
+    def _restore_expanded_keys(self, node: TreeNode, expanded_keys: set[str], parent_key: str = "") -> None:
+        """Restore expanded state using content-based keys."""
+        node_key = self._get_node_key(node)
+        full_key = f"{parent_key}/{node_key}" if parent_key else node_key
+
+        if full_key in expanded_keys:
             node.expand()
         else:
             node.collapse()
-        for i, child in enumerate(node.children):
-            child_path = f"{path}/{i}"
-            self._restore_expanded_paths(child, expanded_paths, child_path)
+        for child in node.children:
+            self._restore_expanded_keys(child, expanded_keys, full_key)
+
+    def _get_cursor_key(self, tree: Tree) -> str | None:
+        """Get the key for the currently selected node."""
+        if not tree.cursor_node:
+            return None
+        # Build the full path of keys from root to cursor
+        keys = []
+        node = tree.cursor_node
+        while node:
+            keys.append(self._get_node_key(node))
+            node = node.parent
+        keys.reverse()
+        return "/".join(keys)
+
+    def _restore_cursor_by_key(self, tree: Tree, cursor_key: str | None) -> None:
+        """Try to restore cursor position using content-based key."""
+        if not cursor_key:
+            return
+        key_parts = cursor_key.split("/")
+        node = tree.root
+        # Skip root key, start matching from children
+        for key_part in key_parts[1:]:
+            found = False
+            for child in node.children:
+                if self._get_node_key(child) == key_part:
+                    node = child
+                    found = True
+                    break
+            if not found:
+                break
+        if node != tree.root:
+            tree.select_node(node)
 
     def _populate_tree(self) -> None:
         """Populate the tree with conversation turns."""
         try:
             tree = self.query_one("#conv-tree", Tree)
 
-            # Save expanded state before clearing
-            expanded_paths = self._get_expanded_paths(tree.root)
+            # Save expanded state and cursor position before clearing
+            expanded_keys = self._get_expanded_keys(tree.root)
+            cursor_key = self._get_cursor_key(tree)
             had_content = bool(tree.root.children)
 
             tree.clear()
@@ -338,8 +385,10 @@ class ConversationPanel(Widget):
                     self._add_turn_to_tree(log_node, turn, i, first_turn_in_log)
 
             # Restore expanded state if we had content before, otherwise use defaults
-            if had_content and expanded_paths:
-                self._restore_expanded_paths(tree.root, expanded_paths)
+            if had_content and expanded_keys:
+                self._restore_expanded_keys(tree.root, expanded_keys)
+                # Restore cursor position
+                self._restore_cursor_by_key(tree, cursor_key)
             else:
                 tree.root.expand()
 

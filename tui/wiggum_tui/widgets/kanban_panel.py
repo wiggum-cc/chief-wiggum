@@ -468,6 +468,28 @@ class KanbanPanel(Widget):
         """Load tasks from kanban.md with running status."""
         self._tasks_list = parse_kanban_with_status(self.kanban_path, self.ralph_dir)
 
+    def _get_focused_task_id(self) -> str | None:
+        """Get the task ID of the currently focused card."""
+        try:
+            for card in self.query(TaskCard):
+                if card.has_focus:
+                    return card._task_data.id
+        except Exception:
+            pass
+        return None
+
+    def _restore_focus_by_task_id(self, task_id: str | None) -> None:
+        """Restore focus to a card with the given task ID."""
+        if not task_id:
+            return
+        try:
+            for card in self.query(TaskCard):
+                if card._task_data.id == task_id:
+                    card.focus()
+                    return
+        except Exception:
+            pass
+
     def refresh_data(self) -> None:
         """Refresh task data and re-render only if data changed."""
         self._load_tasks()
@@ -477,6 +499,9 @@ class KanbanPanel(Widget):
         if new_hash == self._last_data_hash:
             return  # No change, skip refresh
         self._last_data_hash = new_hash
+
+        # Save focused card's task ID before rebuilding
+        focused_task_id = self._get_focused_task_id()
 
         grouped = group_tasks_by_status(self._tasks_list)
 
@@ -512,6 +537,8 @@ class KanbanPanel(Widget):
                     classes="kanban-board",
                 )
             )
+            # Restore focus to the previously focused card
+            self._restore_focus_by_task_id(focused_task_id)
 
     def _get_all_cards(self) -> list[TaskCard]:
         """Get all TaskCard widgets in order."""

@@ -131,6 +131,11 @@ class PlanPanel(Widget):
             return
         self._last_data_hash = new_hash
 
+        # Save current selection by file name (stem) before refreshing
+        selected_stem = None
+        if self._plan_files and 0 <= self._selected_index < len(self._plan_files):
+            selected_stem = self._plan_files[self._selected_index].stem
+
         new_files = self._scan_plans()
         self._plan_files = new_files
 
@@ -142,12 +147,26 @@ class PlanPanel(Widget):
         except Exception:
             pass
 
-        # Clamp selected index
-        if self._selected_index >= len(self._plan_files):
+        # Try to restore selection by file name, fall back to clamped index
+        if selected_stem:
+            new_index = next(
+                (i for i, f in enumerate(self._plan_files) if f.stem == selected_stem),
+                None
+            )
+            if new_index is not None:
+                self._selected_index = new_index
+            elif self._selected_index >= len(self._plan_files):
+                self._selected_index = max(0, len(self._plan_files) - 1)
+        elif self._selected_index >= len(self._plan_files):
             self._selected_index = max(0, len(self._plan_files) - 1)
 
-        # Update content display
+        # Restore highlighted state and update content display
         if self._plan_files:
+            try:
+                option_list = self.query_one("#plan-option-list", OptionList)
+                option_list.highlighted = self._selected_index
+            except Exception:
+                pass
             try:
                 md_widget = self.query_one("#plan-content-md", Markdown)
                 content = self._read_plan(self._plan_files[self._selected_index])
