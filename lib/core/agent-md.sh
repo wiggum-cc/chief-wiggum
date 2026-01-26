@@ -833,7 +833,14 @@ _md_extract_and_write_result() {
             result="UNKNOWN"
         fi
 
-        agent_write_result "$worker_dir" "$result"
+        # Include session_id in extra_outputs for downstream steps (e.g., task-summarizer)
+        local extra_outputs="{}"
+        local session_id="${RALPH_LOOP_LAST_SESSION_ID:-}"
+        if [ -n "$session_id" ]; then
+            extra_outputs="{\"session_id\":\"$session_id\"}"
+        fi
+
+        agent_write_result "$worker_dir" "$result" "$extra_outputs"
         log "${agent_name} result: $result"
         return
     fi
