@@ -148,39 +148,75 @@ Result mappings define the behavior for each gate result value, including:
 - **exit_code**: Process exit code when this result is produced
 - **default_jump**: Default control flow when no `on_result` handler matches
 
-### Built-in Result Mappings
+### Per-Agent Result Mappings
 
-Defined in `config/agents.json`:
+Each agent defines its own `result_mappings` in `config/agents.json`. This ensures agents
+only declare the results they can actually produce:
 
 ```json
 {
-  "result_mappings": {
-    "PASS":  { "status": "success", "exit_code": 0,  "default_jump": "next" },
-    "FAIL":  { "status": "failure", "exit_code": 10, "default_jump": "abort" },
-    "FIX":   { "status": "partial", "exit_code": 0,  "default_jump": "prev" },
-    "SKIP":  { "status": "success", "exit_code": 0,  "default_jump": "next" },
-    "STOP":  { "status": "success", "exit_code": 11, "default_jump": "abort" }
+  "agents": {
+    "engineering.security-audit": {
+      "max_iterations": 8,
+      "result_mappings": {
+        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
+        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" },
+        "FIX":  { "status": "partial", "exit_code": 0, "default_jump": "prev" }
+      }
+    },
+    "engineering.test-coverage": {
+      "result_mappings": {
+        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
+        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" },
+        "FIX":  { "status": "partial", "exit_code": 0, "default_jump": "prev" },
+        "SKIP": { "status": "success", "exit_code": 0, "default_jump": "next" }
+      }
+    }
+  },
+  "defaults": {
+    "result_mappings": {
+      "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
+      "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" }
+    }
   }
 }
 ```
 
-### Custom Result Mappings
+### Default Mappings
 
-Define custom results in `config/agents.json` (global) or in a pipeline's `result_mappings`
-section (per-pipeline override):
+The `defaults.result_mappings` in `config/agents.json` provides fallback mappings:
+
+```json
+{
+  "defaults": {
+    "result_mappings": {
+      "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
+      "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" },
+      "FIX":  { "status": "partial", "exit_code": 0, "default_jump": "prev" },
+      "SKIP": { "status": "success", "exit_code": 0, "default_jump": "next" }
+    }
+  }
+}
+```
+
+Agents inherit these mappings and can override or extend them with additional results.
+
+### Pipeline-Level Overrides
+
+Pipelines can override agent mappings for specific results:
 
 ```json
 {
   "name": "my-pipeline",
   "result_mappings": {
     "REVIEW": { "status": "pending", "exit_code": 0, "default_jump": "self" },
-    "RETRY":  { "status": "partial", "exit_code": 0, "default_jump": "self" }
+    "FAIL":   { "status": "failure", "exit_code": 10, "default_jump": "next" }
   },
   "steps": [...]
 }
 ```
 
-Pipeline-level mappings override global mappings for the same result value.
+Resolution order: pipeline `result_mappings` → agent `result_mappings` → `defaults.result_mappings`.
 
 ### Result Mapping Fields
 

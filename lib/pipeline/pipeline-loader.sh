@@ -316,21 +316,25 @@ pipeline_step_count() {
     echo "$_PIPELINE_STEP_COUNT"
 }
 
-# Get a result mapping field value with pipeline override support
+# Get a result mapping field value with per-agent and pipeline override support
 #
-# Checks pipeline-level result_mappings first, then falls back to
-# config/agents.json result_mappings.
+# Resolution order:
+#   1. Pipeline-level result_mappings (highest priority)
+#   2. Per-agent result_mappings in config/agents.json
+#   3. defaults.result_mappings in config/agents.json (lowest priority)
 #
 # Args:
-#   result - Gate result value (e.g., PASS, FAIL, FIX)
-#   field  - Field name: status, exit_code, or default_jump
+#   result     - Gate result value (e.g., PASS, FAIL, FIX)
+#   field      - Field name: status, exit_code, or default_jump
+#   agent_type - Agent type (e.g., "engineering.security-audit") for per-agent lookup
 #
 # Returns: Field value, or empty string if not found
 pipeline_get_result_mapping() {
     local result="$1"
     local field="$2"
+    local agent_type="${3:-}"
 
-    # Try pipeline-level override first
+    # 1. Try pipeline-level override first
     local pipeline_value=""
     pipeline_value=$(_pipeline_jq ".result_mappings.\"$result\".$field // null" -r 2>/dev/null)
 
@@ -339,13 +343,23 @@ pipeline_get_result_mapping() {
         return 0
     fi
 
-    # Fall back to global config/agents.json
     local config_file="$WIGGUM_HOME/config/agents.json"
     if [ -f "$config_file" ]; then
-        local global_value
-        global_value=$(jq -r ".result_mappings.\"$result\".$field // null" "$config_file" 2>/dev/null)
-        if [ -n "$global_value" ] && [ "$global_value" != "null" ]; then
-            echo "$global_value"
+        # 2. Try per-agent result_mappings
+        if [ -n "$agent_type" ]; then
+            local agent_value
+            agent_value=$(jq -r ".agents.\"$agent_type\".result_mappings.\"$result\".$field // null" "$config_file" 2>/dev/null)
+            if [ -n "$agent_value" ] && [ "$agent_value" != "null" ]; then
+                echo "$agent_value"
+                return 0
+            fi
+        fi
+
+        # 3. Fall back to defaults.result_mappings
+        local default_value
+        default_value=$(jq -r ".defaults.result_mappings.\"$result\".$field // null" "$config_file" 2>/dev/null)
+        if [ -n "$default_value" ] && [ "$default_value" != "null" ]; then
+            echo "$default_value"
             return 0
         fi
     fi

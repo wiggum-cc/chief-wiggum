@@ -110,7 +110,7 @@ Each worker operates in `.ralph/workers/worker-TASK-XXX-<timestamp>/` with:
 ### Configuration
 
 - `config/pipeline.json` - Default pipeline definition
-- `config/agents.json` - Agent registry with iteration/turn limits
+- `config/agents.json` - Agent registry with iteration/turn limits and per-agent result_mappings
 - `.ralph/config.json` - Project-specific overrides
 - `.ralph/pipeline.json` - Project pipeline override
 - `.ralph/pipelines/<TASK-ID>.json` - Task-specific pipeline
@@ -267,7 +267,7 @@ The TUI component uses Python 3.10+ with [uv](https://docs.astral.sh/uv/) for de
 | `test-coverage` | PASS, FIX, FAIL, SKIP |
 | `plan-mode` | PASS, FAIL |
 
-**Result Mappings** (config-driven in `config/agents.json`):
+**Result Mappings** (defined per-agent in `config/agents.json`):
 | Result | Status | Exit Code | Default Jump |
 |--------|--------|-----------|--------------|
 | `PASS` | success | 0 | next |
@@ -276,7 +276,7 @@ The TUI component uses Python 3.10+ with [uv](https://docs.astral.sh/uv/) for de
 | `SKIP` | success | 0 | next |
 | `STOP` | success | 11 | abort |
 
-Custom results can be defined in `config/agents.json` or per-pipeline in `result_mappings`.
+Each agent defines its own `result_mappings` in `config/agents.json`. Fallback mappings are in `defaults.result_mappings`. Pipeline-level overrides are also supported.
 
 ### Environment Variables for Config Override
 Pattern: `WIGGUM_{AGENT_NAME}_MAX_TURNS` (uppercase, underscores)

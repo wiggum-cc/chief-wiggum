@@ -403,16 +403,24 @@ load_agent_config() {
 # Result mappings define the status, exit_code, and default_jump for each
 # gate result value. This allows custom results beyond the built-in PASS/FAIL/FIX/SKIP.
 #
-# Loaded from config/agents.json "result_mappings" section.
-# Can be overridden per-pipeline in pipeline.json "result_mappings".
+# Resolution order (per-agent):
+#   1. Per-agent result_mappings in config/agents.json (highest priority)
+#   2. defaults.result_mappings in config/agents.json (lowest priority)
+#
+# Can be overridden per-pipeline in pipeline.json "result_mappings" (handled by pipeline-loader).
 
-# Global associative arrays for result mappings (loaded once)
+# Global associative arrays for result mappings (loaded once per agent)
 declare -gA _RESULT_STATUS=()
 declare -gA _RESULT_EXIT_CODE=()
 declare -gA _RESULT_DEFAULT_JUMP=()
 _RESULT_MAPPINGS_LOADED=""
+_RESULT_MAPPINGS_AGENT=""
 
 # Load result mappings from config/agents.json
+#
+# Resolution order:
+#   1. Per-agent result_mappings (from AGENT_TYPE)
+#   2. defaults.result_mappings
 #
 # Populates:
 #   _RESULT_STATUS[result]       - Status string (success, failure, partial, unknown)
@@ -421,7 +429,12 @@ _RESULT_MAPPINGS_LOADED=""
 #
 # Sets: _RESULT_MAPPINGS_LOADED=1 when complete
 load_result_mappings() {
-    [ -n "$_RESULT_MAPPINGS_LOADED" ] && return 0
+    local agent_type="${AGENT_TYPE:-}"
+
+    # Return early if already loaded for this agent
+    if [ -n "$_RESULT_MAPPINGS_LOADED" ] && [ "$_RESULT_MAPPINGS_AGENT" = "$agent_type" ]; then
+        return 0
+    fi
 
     local config_file="$WIGGUM_HOME/config/agents.json"
 
@@ -431,29 +444,42 @@ load_result_mappings() {
     _RESULT_DEFAULT_JUMP=([PASS]="next" [FAIL]="abort" [FIX]="prev" [SKIP]="next" [STOP]="abort")
 
     if [ -f "$config_file" ]; then
-        local mappings_json
-        mappings_json=$(jq -c '.result_mappings // {}' "$config_file" 2>/dev/null)
+        # Helper function to load mappings from a JSON object
+        _load_mappings_from_json() {
+            local mappings_json="$1"
+            if [ -n "$mappings_json" ] && [ "$mappings_json" != "{}" ] && [ "$mappings_json" != "null" ]; then
+                local result_keys
+                result_keys=$(echo "$mappings_json" | jq -r 'keys[]' 2>/dev/null)
 
-        if [ -n "$mappings_json" ] && [ "$mappings_json" != "{}" ] && [ "$mappings_json" != "null" ]; then
-            # Parse each result mapping
-            local result_keys
-            result_keys=$(echo "$mappings_json" | jq -r 'keys[]' 2>/dev/null)
+                while IFS= read -r result; do
+                    [ -z "$result" ] && continue
+                    local status exit_code default_jump
+                    status=$(echo "$mappings_json" | jq -r ".\"$result\".status // \"unknown\"")
+                    exit_code=$(echo "$mappings_json" | jq -r ".\"$result\".exit_code // 1")
+                    default_jump=$(echo "$mappings_json" | jq -r ".\"$result\".default_jump // \"next\"")
 
-            while IFS= read -r result; do
-                [ -z "$result" ] && continue
-                local status exit_code default_jump
-                status=$(echo "$mappings_json" | jq -r ".\"$result\".status // \"unknown\"")
-                exit_code=$(echo "$mappings_json" | jq -r ".\"$result\".exit_code // 1")
-                default_jump=$(echo "$mappings_json" | jq -r ".\"$result\".default_jump // \"next\"")
+                    _RESULT_STATUS[$result]="$status"
+                    _RESULT_EXIT_CODE[$result]="$exit_code"
+                    _RESULT_DEFAULT_JUMP[$result]="$default_jump"
+                done <<< "$result_keys"
+            fi
+        }
 
-                _RESULT_STATUS[$result]="$status"
-                _RESULT_EXIT_CODE[$result]="$exit_code"
-                _RESULT_DEFAULT_JUMP[$result]="$default_jump"
-            done <<< "$result_keys"
+        # 1. Load defaults.result_mappings first (base layer)
+        local defaults_json
+        defaults_json=$(jq -c '.defaults.result_mappings // {}' "$config_file" 2>/dev/null)
+        _load_mappings_from_json "$defaults_json"
+
+        # 2. Override with per-agent result_mappings (if agent type is set)
+        if [ -n "$agent_type" ]; then
+            local agent_json
+            agent_json=$(jq -c ".agents.\"$agent_type\".result_mappings // {}" "$config_file" 2>/dev/null)
+            _load_mappings_from_json "$agent_json"
         fi
     fi
 
     _RESULT_MAPPINGS_LOADED=1
+    _RESULT_MAPPINGS_AGENT="$agent_type"
 }
 
 # Get the status string for a gate result

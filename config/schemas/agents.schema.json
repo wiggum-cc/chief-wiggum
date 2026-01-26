@@ -9,7 +9,7 @@
       "type": "object",
       "description": "Agent type definitions",
       "patternProperties": {
-        "^[a-z][a-z0-9-]*$": {
+        "^[a-z][a-z0-9.-]*$": {
           "$ref": "#/definitions/agentConfig"
         }
       },
@@ -23,6 +23,28 @@
   "required": ["agents", "defaults"],
   "additionalProperties": false,
   "definitions": {
+    "resultMapping": {
+      "type": "object",
+      "description": "Defines the behavior for a gate result value",
+      "required": ["status", "exit_code", "default_jump"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["success", "failure", "partial", "unknown"],
+          "description": "Status category for the result"
+        },
+        "exit_code": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Exit code to return when this result is produced"
+        },
+        "default_jump": {
+          "type": "string",
+          "description": "Default jump target when no on_result handler matches: self, prev, next, abort, or step ID"
+        }
+      },
+      "additionalProperties": false
+    },
     "agentConfig": {
       "type": "object",
       "description": "Configuration for a single agent type",
@@ -60,6 +82,13 @@
           "minimum": 0,
           "maximum": 10,
           "description": "Maximum restart attempts"
+        },
+        "result_mappings": {
+          "type": "object",
+          "description": "Gate result mappings for this agent (merged with defaults)",
+          "additionalProperties": {
+            "$ref": "#/definitions/resultMapping"
+          }
         }
       },
       "additionalProperties": false

@@ -190,9 +190,11 @@ _dispatch_on_result() {
 
     if [ -z "$handler" ]; then
         # No explicit handler - use config-driven default_jump from result_mappings
-        # Pipeline-level overrides take precedence over global config/agents.json
+        # Resolution order: pipeline -> agent -> defaults
+        local step_agent
+        step_agent=$(pipeline_get "$idx" ".agent")
         local default_jump
-        default_jump=$(pipeline_get_result_mapping "$gate_result" "default_jump")
+        default_jump=$(pipeline_get_result_mapping "$gate_result" "default_jump" "$step_agent")
 
         if [ -n "$default_jump" ]; then
             _resolve_jump_target "$default_jump" "$idx"

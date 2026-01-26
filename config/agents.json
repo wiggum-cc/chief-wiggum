@@ -4,72 +4,143 @@
       "max_iterations": 20,
       "max_turns": 50,
       "timeout_seconds": 3600,
-      "plan_mode": false
+      "plan_mode": false,
+      "result_mappings": {
+        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
+        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" },
+        "STOP": { "status": "success", "exit_code": 11, "default_jump": "abort" }
+      }
     },
     "engineering.software-engineer": {
       "max_iterations": 20,
       "max_turns": 50,
       "supervisor_interval": 2,
-      "timeout_seconds": 3600
+      "timeout_seconds": 3600,
+      "result_mappings": {
+        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
+        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" },
+        "STOP": { "status": "success", "exit_code": 11, "default_jump": "abort" }
+      }
     },
     "general.task-summarizer": {
       "max_iterations": 1,
       "max_turns": 3,
-      "timeout_seconds": 120
+      "timeout_seconds": 120,
+      "result_mappings": {
+        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
+        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" }
+      }
     },
     "general.documentation-writer": {
       "max_iterations": 1,
       "max_turns": 100,
-      "timeout_seconds": 600
+      "timeout_seconds": 600,
+      "result_mappings": {
+        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
+        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" }
+      }
     },
     "general.domain-expert": {
       "max_iterations": 3,
       "max_turns": 20,
-      "timeout_seconds": 300
+      "timeout_seconds": 300,
+      "result_mappings": {
+        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
+        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" }
+      }
     },
     "product.plan-mode": {
       "max_iterations": 5,
       "max_turns": 30,
-      "timeout_seconds": 600
+      "timeout_seconds": 600,
+      "result_mappings": {
+        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
+        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" }
+      }
     },
     "product.system-architect": {
       "max_iterations": 8,
       "max_turns": 50,
-      "timeout_seconds": 1200
+      "timeout_seconds": 1200,
+      "result_mappings": {
+        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
+        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" }
+      }
     },
     "engineering.pr-comment-fix": {
       "max_iterations": 10,
       "max_turns": 30,
-      "auto_commit": true
+      "auto_commit": true,
+      "result_mappings": {
+        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
+        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" },
+        "FIX":  { "status": "partial", "exit_code": 0, "default_jump": "prev" }
+      }
     },
     "engineering.validation-review": {
       "max_iterations": 5,
-      "max_turns": 50
+      "max_turns": 50,
+      "result_mappings": {
+        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
+        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" }
+      }
     },
     "engineering.git-conflict-resolver": {
       "max_iterations": 10,
       "max_turns": 40,
-      "timeout_seconds": 1800
+      "timeout_seconds": 1800,
+      "result_mappings": {
+        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
+        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" }
+      }
     },
     "engineering.security-audit": {
       "max_iterations": 8,
       "max_turns": 60,
-      "timeout_seconds": 2400
+      "timeout_seconds": 2400,
+      "result_mappings": {
+        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
+        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" },
+        "FIX":  { "status": "partial", "exit_code": 0, "default_jump": "prev" }
+      }
     },
     "engineering.security-fix": {
       "max_iterations": 15,
       "max_turns": 50,
-      "timeout_seconds": 2400
+      "timeout_seconds": 2400,
+      "result_mappings": {
+        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
+        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" },
+        "FIX":  { "status": "partial", "exit_code": 0, "default_jump": "prev" }
+      }
     },
     "engineering.generic-fix": {
       "max_iterations": 15,
       "max_turns": 50,
-      "timeout_seconds": 2400
+      "timeout_seconds": 2400,
+      "result_mappings": {
+        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
+        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" },
+        "FIX":  { "status": "partial", "exit_code": 0, "default_jump": "prev" }
+      }
+    },
+    "engineering.test-coverage": {
+      "result_mappings": {
+        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
+        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" },
+        "FIX":  { "status": "partial", "exit_code": 0, "default_jump": "prev" },
+        "SKIP": { "status": "success", "exit_code": 0, "default_jump": "next" }
+      }
     },
     "engineering.code-review": {
       "max_iterations": 6,
       "max_turns": 50,
-      "timeout_seconds": 1800
+      "timeout_seconds": 1800,
+      "result_mappings": {
+        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
+        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" },
+        "FIX":  { "status": "partial", "exit_code": 0, "default_jump": "prev" }
+      }
     }
   },
   "defaults": {
@@ -78,13 +149,12 @@
     "timeout_seconds": 3600,
     "auto_commit": false,
     "supervisor_interval": 2,
-    "max_restarts": 2
-  },
-  "result_mappings": {
-    "PASS":  { "status": "success", "exit_code": 0,  "default_jump": "next" },
-    "FAIL":  { "status": "failure", "exit_code": 10, "default_jump": "abort" },
-    "FIX":   { "status": "partial", "exit_code": 0,  "default_jump": "prev" },
-    "SKIP":  { "status": "success", "exit_code": 0,  "default_jump": "next" },
-    "STOP":  { "status": "success", "exit_code": 11, "default_jump": "abort" }
+    "max_restarts": 2,
+    "result_mappings": {
+      "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
+      "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" },
+      "FIX":  { "status": "partial", "exit_code": 0, "default_jump": "prev" },
+      "SKIP": { "status": "success", "exit_code": 0, "default_jump": "next" }
+    }
   }
 }
