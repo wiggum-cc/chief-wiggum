@@ -881,6 +881,13 @@ main() {
     # Queue pending tasks with existing PRs for fix pipeline (sync→fix→push→merge)
     _schedule_pending_pr_fixes
 
+    # Immediately check for conflict batches after PR optimization
+    # (don't wait for SYNC_INTERVAL - workers need resolution plan promptly)
+    _check_and_spawn_multi_pr_planner
+
+    # Spawn resolve workers for any that are now ready
+    spawn_resolve_workers "$RALPH_DIR" "$PROJECT_DIR" "$FIX_WORKER_LIMIT"
+
     local iteration=0
     local sync_counter=0
 

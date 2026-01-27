@@ -56,7 +56,7 @@ teardown() {
 _create_mock_worker() {
     local task_id="$1"
     local pr_number="$2"
-    local files_modified="$3"  # comma-separated list
+    local _files_modified="$3"  # comma-separated list (unused, for future expansion)
 
     local worker_dir="$RALPH_DIR/workers/worker-${task_id}-1234567890"
     mkdir -p "$worker_dir/workspace/.git"
