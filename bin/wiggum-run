@@ -28,6 +28,7 @@ source "$WIGGUM_HOME/lib/tasks/conflict-detection.sh"
 source "$WIGGUM_HOME/lib/scheduler/scheduler.sh"
 source "$WIGGUM_HOME/lib/scheduler/conflict-queue.sh"
 source "$WIGGUM_HOME/lib/scheduler/conflict-registry.sh"
+source "$WIGGUM_HOME/lib/scheduler/pr-merge-optimizer.sh"
 
 # Default configuration
 MAX_WORKERS=4
@@ -607,151 +608,25 @@ _try_merge_pr() {
     fi
 }
 
-# Check PRs waiting for merge and route based on their state
+# Optimize and execute PR merges for pending-approval tasks
 #
-# Called at startup to handle pending-approval [P] tasks that have PRs
-# waiting to be merged. Implements the following routing logic:
+# Uses the global PR merge optimizer to:
+# 1. GATHER: Sync all PRs, collect files modified, check merge status
+# 2. ANALYZE: Build conflict graph showing PR interdependencies
+# 3. OPTIMIZE: Find best merge order to maximize successful merges
+# 4. EXECUTE: Merge in order with re-evaluation after each merge
+# 5. RESOLVE: Categorize remaining PRs for fix/resolve pipelines
 #
-#   Pending-approval task [P] with PR
-#       │
-#       ├─→ Sync PR (get latest comments)
-#       │
-#       ├─→ Has NEW comments (after last push)?
-#       │   ├─ YES → Fix pipeline
-#       │   └─ NO ─┐
-#       │          │
-#       │          ├─→ Has any review feedback yet (Copilot)?
-#       │          │   ├─ NO → Wait (review in progress)
-#       │          │   └─ YES ─┐
-#       │          │           │
-#       │          │           ├─→ Has merge conflicts?
-#       │          │           │   ├─ NO → Merge immediately
-#       │          │           │   └─ YES ─┐
-#       │          │           │           │
-#       │          │           │           ├─→ Check conflict registry
-#       │          │           │           │   ├─ File(s) conflict in THIS PR only → Simple resolve
-#       │          │           │           │   └─ File(s) conflict in MULTIPLE PRs → Multi-PR resolve
-#
-# Skips workers that:
-#   - Are already running
-#   - Don't have a PR number recorded
-#   - Are terminal failures
-#   - Have task status other than "P" (pending approval)
+# This approach ensures:
+# - All PRs are analyzed together before making decisions
+# - Conflict detection considers ALL PRs, not just pairs
+# - Merge order optimizes for maximum throughput
+# - Re-evaluation catches cascade effects (merging A may unblock B)
 _schedule_pending_pr_fixes() {
     [ -d "$RALPH_DIR/workers" ] || return 0
 
-    local pending_with_pr=()
-
-    # Find pending tasks with existing workers that have PRs
-    for worker_dir in "$RALPH_DIR/workers"/worker-*; do
-        [ -d "$worker_dir" ] || continue
-
-        # Skip plan workers
-        [[ "$(basename "$worker_dir")" == *"-plan-"* ]] && continue
-
-        # Must have workspace
-        [ -d "$worker_dir/workspace" ] || continue
-
-        # Skip if running
-        is_worker_running "$worker_dir" && continue
-
-        # Skip terminal failures
-        _is_terminal_failure "$worker_dir" && continue
-
-        local task_id
-        task_id=$(get_task_id_from_worker "$(basename "$worker_dir")")
-
-        # Check if task has PR waiting for merge (status "P" = pending approval)
-        local task_status
-        task_status=$(get_task_status "$RALPH_DIR/kanban.md" "$task_id")
-        [ "$task_status" = "P" ] || continue
-
-        # Check if worker has a PR recorded (backfill from pr_url.txt if missing)
-        local pr_number
-        pr_number=$(git_state_get_pr "$worker_dir" 2>/dev/null)
-        if { [ -z "$pr_number" ] || [ "$pr_number" = "null" ]; } && [ -f "$worker_dir/pr_url.txt" ]; then
-            local pr_url
-            pr_url=$(cat "$worker_dir/pr_url.txt")
-            pr_number=$(echo "$pr_url" | grep -oE '[0-9]+$' || true)
-            if [ -n "$pr_number" ]; then
-                log "Backfilling PR #$pr_number for $task_id from pr_url.txt"
-                git_state_set_pr "$worker_dir" "$pr_number" 2>/dev/null || true
-            fi
-        fi
-        [ -n "$pr_number" ] && [ "$pr_number" != "null" ] || continue
-
-        pending_with_pr+=("$worker_dir|$task_id|$pr_number")
-    done
-
-    [ ${#pending_with_pr[@]} -gt 0 ] || return 0
-
-    log "Found ${#pending_with_pr[@]} pending-approval task(s) with PRs - checking for conflicts..."
-    echo ""
-
-    # Initialize conflict registry
-    conflict_registry_init "$RALPH_DIR"
-
-    for entry in "${pending_with_pr[@]}"; do
-        local worker_dir task_id pr_number
-        IFS='|' read -r worker_dir task_id pr_number <<< "$entry"
-
-        echo "  $task_id (PR #$pr_number):"
-
-        # Step 1: Sync PR to get latest comments
-        "$WIGGUM_HOME/bin/wiggum-review" task "$task_id" sync 2>/dev/null || true
-
-        # Step 2: Check for NEW comments
-        local new_comment_count
-        if new_comment_count=$(_has_new_comments "$worker_dir"); then
-            echo "    → Has $new_comment_count new comment(s) - queueing for fix pipeline"
-            git_state_set "$worker_dir" "needs_fix" "wiggum-run._schedule_pending_pr_fixes" "$new_comment_count new comment(s) need addressing"
-            echo "$task_id" >> "$RALPH_DIR/.tasks-needing-fix.txt"
-            continue
-        fi
-
-        # Step 3: Check if copilot has reviewed
-        if ! _has_copilot_review "$worker_dir"; then
-            echo "    → No Copilot review yet - waiting (review in progress)"
-            continue
-        fi
-
-        # Step 4: All comments addressed, check for merge conflicts
-        local conflict_files
-        if conflict_files=$(_check_merge_conflicts "$worker_dir"); then
-            echo "    → Merge conflicts detected"
-
-            # Add to conflict registry
-            conflict_registry_add "$RALPH_DIR" "$task_id" "$pr_number" "$conflict_files"
-
-            # Check if multi-PR conflict (same files conflicting in other PRs)
-            local multi_conflict_files
-            if multi_conflict_files=$(conflict_registry_has_multi_pr_conflict "$RALPH_DIR" "$task_id"); then
-                echo "    → Multi-PR conflict in: $(echo "$multi_conflict_files" | tr '\n' ' ')"
-                echo "    → Queueing for multi-PR resolve pipeline"
-                # Add to conflict queue for multi-PR planner
-                local files_json
-                files_json=$(echo "$conflict_files" | jq -R -s 'split("\n") | map(select(length > 0))')
-                conflict_queue_add "$RALPH_DIR" "$task_id" "$worker_dir" "$pr_number" "$files_json"
-                git_state_set "$worker_dir" "needs_multi_resolve" "wiggum-run._schedule_pending_pr_fixes" "Multi-PR conflict detected"
-            else
-                echo "    → Single-PR conflict - queueing for simple resolve"
-                git_state_set "$worker_dir" "needs_resolve" "wiggum-run._schedule_pending_pr_fixes" "Merge conflict detected"
-            fi
-            continue
-        fi
-
-        # Step 5: No conflicts - attempt immediate merge
-        echo "    → No conflicts, all comments addressed - attempting merge"
-        if _try_merge_pr "$task_id" "$pr_number"; then
-            # Remove from conflict registry if it was there
-            conflict_registry_remove "$RALPH_DIR" "$task_id"
-            # Update kanban to pending approval
-            update_kanban_status "$RALPH_DIR/kanban.md" "$task_id" "P" || true
-        else
-            echo "    → Merge failed - will retry on next sync"
-        fi
-    done
-    echo ""
+    # Use the optimized PR merge flow
+    pr_merge_optimize_and_execute "$RALPH_DIR" "$PROJECT_DIR"
 }
 
 main() {

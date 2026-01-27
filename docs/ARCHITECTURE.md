@@ -34,7 +34,8 @@ chief-wiggum/
 │   ├── pipeline/           # Pipeline engine
 │   ├── tasks/              # Kanban parsing
 │   ├── utils/              # Logging, metrics
-│   └── worker/             # Worker lifecycle
+│   ├── worker/             # Worker lifecycle
+│   └── scheduler/          # Task scheduling, PR merge optimization
 ├── config/
 │   ├── pipeline.json       # Default pipeline
 │   ├── agents.json         # Agent registry
@@ -337,6 +338,9 @@ Work on the task: {{task_id}}
 | `lib/git/worktree-helpers.sh` | Git worktree operations |
 | `lib/tasks/task-parser.sh` | Kanban markdown parsing |
 | `lib/utils/activity-log.sh` | Event logging |
+| `lib/scheduler/pr-merge-optimizer.sh` | Global PR merge optimization |
+| `lib/scheduler/conflict-queue.sh` | Multi-PR conflict batching |
+| `lib/scheduler/conflict-registry.sh` | Per-file conflict tracking |
 
 ## Exit Codes
 
@@ -421,4 +425,213 @@ pipeline_load config/pipeline.json
 # Inspect loaded state
 echo "Steps: $(pipeline_step_count)"
 echo "Step 0: $(pipeline_get_id 0) -> $(pipeline_get_agent 0)"
+```
+
+## PR Merge Optimization
+
+When multiple PRs from different workers need to be merged, the orchestrator uses a global optimization strategy to maximize successful merges and minimize conflicts.
+
+### The Problem
+
+Naive per-PR processing leads to suboptimal decisions:
+
+```
+Task A: Check conflicts → "No conflicts" → Merge ✓
+Task B: Check conflicts → "Conflict with main!" (because A just merged)
+Task C: Check conflicts → "Multi-PR conflict!" (sees B but A already gone)
+```
+
+Each PR is evaluated in isolation without knowledge of the global state.
+
+### The Solution
+
+The PR Merge Optimizer (`lib/scheduler/pr-merge-optimizer.sh`) implements a five-phase approach:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    pr_merge_optimize_and_execute                │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+        ┌─────────────────────┼─────────────────────┐
+        ▼                     ▼                     ▼
+┌───────────────┐    ┌───────────────┐    ┌───────────────┐
+│  Phase 1:     │    │  Phase 2:     │    │  Phase 3:     │
+│  GATHER       │───▶│  ANALYZE      │───▶│  OPTIMIZE     │
+│               │    │               │    │               │
+│ • Sync all PRs│    │ • Build       │    │ • Calculate   │
+│ • Get files   │    │   conflict    │    │   priority    │
+│   modified    │    │   graph       │    │   scores      │
+│ • Check merge │    │ • Find file   │    │ • Sort by     │
+│   status      │    │   overlaps    │    │   merge-first │
+└───────────────┘    └───────────────┘    └───────────────┘
+                                                  │
+        ┌─────────────────────────────────────────┘
+        ▼
+┌───────────────┐    ┌───────────────┐
+│  Phase 4:     │    │  Phase 5:     │
+│  EXECUTE      │───▶│  RESOLVE      │
+│               │    │               │
+│ • Multi-pass  │    │ • Categorize  │
+│   merge loop  │    │   remaining:  │
+│ • Re-evaluate │    │   - needs_fix │
+│   after each  │    │   - needs_    │
+│   merge       │    │     resolve   │
+│ • Until no    │    │   - needs_    │
+│   progress    │    │     multi_    │
+└───────────────┘    │     resolve   │
+                     └───────────────┘
+```
+
+### Phase Details
+
+#### Phase 1: Gather
+
+Collects comprehensive data for ALL pending PRs before making any decisions:
+
+```bash
+pr_merge_gather_all "$ralph_dir" "$project_dir"
+```
+
+For each `[P]` status task:
+- Sync PR comments from GitHub
+- Get list of files modified (compared to merge-base with main)
+- Check if PR has new unaddressed comments
+- Check if Copilot has reviewed
+- Test merge-ability against current main
+- Record any conflict files
+
+#### Phase 2: Analyze
+
+Builds a conflict graph showing which PRs conflict with each other:
+
+```bash
+pr_merge_build_conflict_graph "$ralph_dir"
+```
+
+Two PRs conflict if they modify any of the same files:
+
+```
+PR_A modifies: [src/api.ts, src/utils.ts]
+PR_B modifies: [src/api.ts, tests/api.test.ts]
+PR_C modifies: [docs/README.md]
+
+Conflict Graph:
+  A ←──→ B  (both modify src/api.ts)
+  C       (independent - no conflicts)
+```
+
+#### Phase 3: Optimize
+
+Calculates priority scores and determines optimal merge order:
+
+```bash
+pr_merge_find_optimal_order "$ralph_dir"
+```
+
+Priority score calculation:
+| Factor | Score Impact |
+|--------|--------------|
+| Base score | +1000 |
+| Currently mergeable to main | +500 |
+| Per conflict with other PR | -100 |
+| Per file modified | -10 |
+
+Higher scores merge first. This prioritizes:
+1. PRs that can merge right now (no conflicts with main)
+2. PRs with fewer conflicts with other PRs
+3. Simpler PRs (fewer files changed)
+
+#### Phase 4: Execute
+
+Merges PRs in the optimized order with re-evaluation:
+
+```bash
+pr_merge_execute "$ralph_dir" "$project_dir"
+```
+
+```
+Pass 1:
+  TASK-004: Mergeable → Merge ✓
+  TASK-002: Mergeable → Merge ✓
+  TASK-001: Has conflicts → Skip
+
+  [Re-evaluate remaining PRs against new main]
+
+Pass 2:
+  TASK-001: Now mergeable! → Merge ✓
+  TASK-003: Still has conflicts → Skip
+
+Pass 3:
+  TASK-003: Still has conflicts → Stop
+```
+
+The multi-pass loop continues until no more PRs can be merged.
+
+#### Phase 5: Resolve
+
+Categorizes remaining PRs and queues them for appropriate handling:
+
+```bash
+pr_merge_handle_remaining "$ralph_dir"
+```
+
+| Category | Condition | Action |
+|----------|-----------|--------|
+| `needs_fix` | Has unaddressed PR comments | Queue for fix pipeline |
+| `needs_resolve` | Conflicts only with main | Queue for simple rebase |
+| `needs_multi_resolve` | Conflicts with other unmerged PRs | Queue for coordinated resolution |
+| `waiting` | Awaiting Copilot review | No action, check next cycle |
+
+### State File
+
+The optimizer maintains state in `.ralph/pr-merge-state.json`:
+
+```json
+{
+  "prs": {
+    "FEAT-001": {
+      "pr_number": 20,
+      "worker_dir": "/path/to/worker",
+      "branch": "feat-001-branch",
+      "files_modified": ["src/api.ts", "src/utils.ts"],
+      "base_commit": "abc123",
+      "has_new_comments": false,
+      "copilot_reviewed": true,
+      "mergeable_to_main": false,
+      "conflict_files_with_main": ["src/api.ts"]
+    }
+  },
+  "conflict_graph": {
+    "FEAT-001": ["FEAT-003"],
+    "FEAT-003": ["FEAT-001"]
+  },
+  "merge_order": ["TEST-002", "FEAT-003", "FEAT-001"],
+  "merged_this_cycle": ["TEST-002"],
+  "last_updated": "2024-01-27T12:00:00Z"
+}
+```
+
+### Integration
+
+The optimizer is called from `wiggum-run` at startup and during periodic sync:
+
+```bash
+# In _schedule_pending_pr_fixes()
+pr_merge_optimize_and_execute "$RALPH_DIR" "$PROJECT_DIR"
+```
+
+### Debugging
+
+```bash
+# View current optimizer state
+cat .ralph/pr-merge-state.json | jq .
+
+# Check conflict graph
+jq '.conflict_graph' .ralph/pr-merge-state.json
+
+# See merge order
+jq '.merge_order' .ralph/pr-merge-state.json
+
+# Check which PRs were merged
+jq '.merged_this_cycle' .ralph/pr-merge-state.json
 ```
