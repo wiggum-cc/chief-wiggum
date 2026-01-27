@@ -62,6 +62,12 @@ agent_run() {
 
     log "Merging origin/main into current branch..."
 
+    # Set git identity for merge commits
+    export GIT_AUTHOR_NAME="Ralph Wiggum"
+    export GIT_AUTHOR_EMAIL="ralph@wiggum.cc"
+    export GIT_COMMITTER_NAME="Ralph Wiggum"
+    export GIT_COMMITTER_EMAIL="ralph@wiggum.cc"
+
     # Attempt to merge origin/main
     local merge_output merge_exit=0
     merge_output=$(git -C "$workspace" merge origin/main --no-edit 2>&1) || merge_exit=$?
