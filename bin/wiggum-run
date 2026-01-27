@@ -370,11 +370,6 @@ _check_and_spawn_multi_pr_planner() {
     # Initialize conflict queue if needed
     conflict_queue_init "$RALPH_DIR"
 
-    # Check if any batches need planning
-    if ! conflict_queue_batch_ready "$RALPH_DIR"; then
-        return 0
-    fi
-
     # Check if a planner is already running
     for planner_dir in "$RALPH_DIR/workers"/planner-batch-*; do
         [ -d "$planner_dir" ] || continue
@@ -388,27 +383,46 @@ _check_and_spawn_multi_pr_planner() {
         fi
     done
 
-    # Get groups of related conflicts
-    local groups
-    groups=$(conflict_queue_group_related "$RALPH_DIR")
+    local batch_id task_ids
 
-    local group_count
-    group_count=$(echo "$groups" | jq 'length')
-
-    if [ "$group_count" -eq 0 ]; then
-        return 0
+    # First, check for existing "pending" batches (created by Phase 5 of PR merge optimizer)
+    local queue_file="$RALPH_DIR/conflict-queue.json"
+    if [ -f "$queue_file" ]; then
+        batch_id=$(jq -r '[.batches | to_entries[] | select(.value.status == "pending")] | .[0].key // empty' "$queue_file")
+        if [ -n "$batch_id" ]; then
+            task_ids=$(jq -r --arg b "$batch_id" '.batches[$b].task_ids' "$queue_file")
+            log "Found pending batch $batch_id ready for planning"
+        fi
     fi
 
-    log "Found $group_count conflict group(s) ready for coordinated planning"
+    # If no pending batch, try grouping unbatched tasks (legacy flow)
+    if [ -z "$batch_id" ]; then
+        # Check if any unbatched tasks can be grouped
+        if ! conflict_queue_batch_ready "$RALPH_DIR"; then
+            return 0
+        fi
 
-    # Process first ready group
-    local first_group task_ids
-    first_group=$(echo "$groups" | jq '.[0]')
-    task_ids=$(echo "$first_group" | jq '.task_ids')
+        # Get groups of related conflicts
+        local groups
+        groups=$(conflict_queue_group_related "$RALPH_DIR")
 
-    # Create batch
-    local batch_id
-    batch_id=$(conflict_queue_create_batch "$RALPH_DIR" "$task_ids")
+        local group_count
+        group_count=$(echo "$groups" | jq 'length')
+
+        if [ "$group_count" -eq 0 ]; then
+            return 0
+        fi
+
+        log "Found $group_count conflict group(s) ready for coordinated planning"
+
+        # Process first ready group
+        local first_group
+        first_group=$(echo "$groups" | jq '.[0]')
+        task_ids=$(echo "$first_group" | jq '.task_ids')
+
+        # Create batch
+        batch_id=$(conflict_queue_create_batch "$RALPH_DIR" "$task_ids")
+    fi
 
     # Create planner worker directory
     local planner_worker_dir="$RALPH_DIR/workers/planner-$batch_id"
