@@ -134,6 +134,41 @@ test_git_commit_push_missing_workspace_fails() {
     assert_equals "1" "$result" "Should fail without workspace"
 }
 
+test_git_commit_push_detects_unpushed_commits() {
+    # Create a bare remote to track against
+    local bare_remote="$TEST_DIR/remote.git"
+    git init --bare "$bare_remote" >/dev/null 2>&1
+
+    # Set up workspace with remote tracking
+    git -C "$WORKER_DIR/workspace" checkout -b test-branch
+    git -C "$WORKER_DIR/workspace" remote add origin "$bare_remote"
+    git -C "$WORKER_DIR/workspace" push -u origin test-branch >/dev/null 2>&1
+
+    # Create a local commit (simulating checkpoint commit from readonly agent)
+    echo "checkpoint content" > "$WORKER_DIR/workspace/resolved.txt"
+    git -C "$WORKER_DIR/workspace" add -A
+    git -C "$WORKER_DIR/workspace" commit -m "chore: checkpoint before read-only agent" >/dev/null 2>&1
+
+    # Verify we have unpushed commits
+    local unpushed_before
+    unpushed_before=$(git -C "$WORKER_DIR/workspace" rev-list '@{u}..HEAD' --count 2>/dev/null)
+    assert_equals "1" "$unpushed_before" "Should have 1 unpushed commit before agent runs"
+
+    source "$WIGGUM_HOME/lib/agents/workflow/git-commit-push.sh"
+
+    # Run agent and capture output
+    local output
+    output=$(agent_run "$WORKER_DIR" "$TEST_DIR" 2>&1) || true
+
+    # Should log that it found unpushed commits
+    assert_output_contains "$output" "Found 1 unpushed commit" "Should detect unpushed commits"
+
+    # Verify the commit was pushed
+    local unpushed_after
+    unpushed_after=$(git -C "$WORKER_DIR/workspace" rev-list '@{u}..HEAD' --count 2>/dev/null)
+    assert_equals "0" "$unpushed_after" "Should have 0 unpushed commits after agent runs"
+}
+
 # =============================================================================
 # pr-merge Agent Tests
 # =============================================================================
@@ -283,6 +318,7 @@ run_test test_git_commit_push_agent_sources
 run_test test_git_commit_push_no_changes_passes
 run_test test_git_commit_push_commits_changes
 run_test test_git_commit_push_missing_workspace_fails
+run_test test_git_commit_push_detects_unpushed_commits
 run_test test_pr_merge_agent_exists
 run_test test_pr_merge_agent_sources
 run_test test_pr_merge_no_pr_number_fails

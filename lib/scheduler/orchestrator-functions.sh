@@ -394,6 +394,32 @@ orch_cleanup_resolve_workers() {
     pool_cleanup_finished "resolve" "$timeout" "_resolve_completion" "_resolve_timeout"
 }
 
+# Clean up all finished workers (main, fix, resolve)
+#
+# Consolidated cleanup function that handles all worker types.
+# This is more efficient than running 3 separate services.
+#
+# Globals:
+#   RALPH_DIR   - Required (via scheduler context)
+#   PROJECT_DIR - Required
+#
+# Args:
+#   fix_timeout     - Timeout for fix workers (default: 1800)
+#   resolve_timeout - Timeout for resolve workers (default: 1800)
+orch_cleanup_all_workers() {
+    local fix_timeout="${1:-1800}"
+    local resolve_timeout="${2:-1800}"
+
+    # Clean up main workers (no timeout)
+    orch_cleanup_main_workers
+
+    # Clean up fix workers
+    orch_cleanup_fix_workers "$fix_timeout"
+
+    # Clean up resolve workers
+    orch_cleanup_resolve_workers "$resolve_timeout"
+}
+
 # Spawn workers for ready tasks
 #
 # This is the main task spawning logic extracted from wiggum-run.

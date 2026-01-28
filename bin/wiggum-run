@@ -38,6 +38,8 @@ if [ "${WIGGUM_USE_SERVICE_SCHEDULER:-false}" = "true" ]; then
     source "$WIGGUM_HOME/lib/service/service-state.sh"
     source "$WIGGUM_HOME/lib/service/service-runner.sh"
     source "$WIGGUM_HOME/lib/service/service-scheduler.sh"
+    # Service handlers (svc_* functions callable via services.json)
+    source "$WIGGUM_HOME/lib/services/orchestrator-handlers.sh"
 fi
 
 # Default configuration
@@ -855,61 +857,19 @@ _main_loop_service_based() {
             continue
         fi
 
-        # Spawn workers for ready tasks (up to MAX_WORKERS limit)
-        # Note: task-spawner service handles the tick, but we still need the spawn logic
-        for task_id in $SCHED_READY_TASKS; do
-            if ! scheduler_can_spawn_task "$task_id" "$MAX_WORKERS"; then
-                case "$SCHED_SKIP_REASON" in
-                    at_capacity) break ;;
-                    file_conflict)
-                        local -A _temp_workers=()
-                        _build_workers() {
-                            local pid="$1" type="$2" tid="$3"
-                            [ "$type" = "main" ] && _temp_workers[$pid]="$tid"
-                        }
-                        pool_foreach "main" _build_workers
-                        local conflicts
-                        conflicts=$(get_conflicting_files "$RALPH_DIR" "$task_id" _temp_workers | tr '\n' ',' | sed 's/,$//')
-                        log "Deferring $task_id - file conflict: $conflicts"
-                        ;;
-                    *) ;;
-                esac
-                continue
-            fi
+        # Update in-memory scheduler state for status display and aging
+        # (task-spawner service handles actual spawning via orch_spawn_ready_tasks)
+        scheduler_tick
 
-            if ! pre_worker_checks; then
-                log_error "Pre-worker checks failed for $task_id - skipping"
-                continue
-            fi
+        # Periodically decay skip counts (every ~3 minutes at 1s sleep)
+        if (( iteration % 180 == 0 )); then
+            scheduler_decay_skip_counts
+        fi
 
-            local task_priority
-            task_priority=$(get_task_priority "$RALPH_DIR/kanban.md" "$task_id")
-
-            log "Assigning $task_id (Priority: ${task_priority:-MEDIUM}) to new worker"
-            if ! update_kanban_status "$RALPH_DIR/kanban.md" "$task_id" "="; then
-                log_error "Failed to mark $task_id as in-progress"
-                scheduler_increment_skip "$task_id"
-                local skip_count
-                skip_count=$(scheduler_get_skip_count "$task_id")
-                log "Task $task_id skip count: $skip_count/$MAX_SKIP_RETRIES"
-                if [ "$skip_count" -ge "$MAX_SKIP_RETRIES" ]; then
-                    log_error "Task $task_id permanently skipped after $MAX_SKIP_RETRIES consecutive failures"
-                fi
-                continue
-            fi
-
-            if ! spawn_worker "$task_id"; then
-                log_error "Failed to spawn worker for $task_id"
-                update_kanban_status "$RALPH_DIR/kanban.md" "$task_id" "*"
-                continue
-            fi
-
-            pool_add "$SPAWNED_WORKER_PID" "main" "$task_id"
-            scheduler_mark_event
-            scheduler_remove_from_aging "$task_id"
-            audit_log_task_assigned "$task_id" "$SPAWNED_WORKER_ID" "$SPAWNED_WORKER_PID"
-            log "Spawned worker $SPAWNED_WORKER_ID for $task_id (PID: $SPAWNED_WORKER_PID)"
-        done
+        # Periodically detect orphan workers (every ~1 minute at 1s sleep)
+        if (( iteration % 60 == 0 )); then
+            scheduler_detect_orphan_workers
+        fi
 
         scheduler_update_aging
 

@@ -52,18 +52,29 @@ agent_run() {
     # Set up context
     agent_setup_context "$worker_dir" "$workspace" "$project_dir"
 
-    # Check if there are changes to commit
-    local has_changes=false
+    # Check if there are uncommitted changes to commit
+    local has_uncommitted_changes=false
     if ! git -C "$workspace" diff --quiet 2>/dev/null; then
-        has_changes=true
+        has_uncommitted_changes=true
     elif ! git -C "$workspace" diff --cached --quiet 2>/dev/null; then
-        has_changes=true
+        has_uncommitted_changes=true
     elif [ -n "$(git -C "$workspace" ls-files --others --exclude-standard 2>/dev/null)" ]; then
-        has_changes=true
+        has_uncommitted_changes=true
     fi
 
-    if [ "$has_changes" = false ]; then
-        log "No changes to commit"
+    # Check if there are unpushed commits (e.g., from readonly agent checkpoints)
+    local has_unpushed_commits=false
+    local unpushed_count=0
+    if git -C "$workspace" rev-parse --verify '@{u}' &>/dev/null; then
+        unpushed_count=$(git -C "$workspace" rev-list '@{u}..HEAD' --count 2>/dev/null || echo "0")
+        if [ "$unpushed_count" -gt 0 ]; then
+            has_unpushed_commits=true
+            log "Found $unpushed_count unpushed commit(s)"
+        fi
+    fi
+
+    if [ "$has_uncommitted_changes" = false ] && [ "$has_unpushed_commits" = false ]; then
+        log "No changes to commit or push"
         agent_write_result "$worker_dir" "PASS" '{"commit_sha":"","push_status":"no_changes"}'
         return 0
     fi
@@ -94,37 +105,44 @@ agent_run() {
         fi
     fi
 
-    log "Committing changes on branch: $current_branch"
-
-    # Stage all changes
-    if ! git -C "$workspace" add -A 2>&1; then
-        log_error "Failed to stage changes"
-        agent_write_result "$worker_dir" "FAIL" '{}' '["Failed to stage changes"]'
-        return 1
-    fi
-
-    # Set git author/committer identity
-    git_set_identity
-
-    # Check for resolution plan to customize commit message
-    if [ -f "$worker_dir/resolution-plan.md" ]; then
-        commit_message="fix: Resolve merge conflicts per coordination plan
-
-Automated resolution following multi-PR coordination plan."
-    fi
-
-    # Create commit
-    local commit_output
-    if ! commit_output=$(git -C "$workspace" commit --no-gpg-sign -m "$commit_message" 2>&1); then
-        log_error "Failed to create commit: $commit_output"
-        agent_write_result "$worker_dir" "FAIL" '{}' '["Commit failed: '"${commit_output:0:200}"'"]'
-        return 1
-    fi
-
-    # Get commit SHA
+    # Get commit SHA (may be updated if we create a new commit)
     local commit_sha
     commit_sha=$(git -C "$workspace" rev-parse HEAD 2>/dev/null)
-    log "Created commit: $commit_sha"
+
+    # Only create a new commit if there are uncommitted changes
+    if [ "$has_uncommitted_changes" = true ]; then
+        log "Committing changes on branch: $current_branch"
+
+        # Stage all changes
+        if ! git -C "$workspace" add -A 2>&1; then
+            log_error "Failed to stage changes"
+            agent_write_result "$worker_dir" "FAIL" '{}' '["Failed to stage changes"]'
+            return 1
+        fi
+
+        # Set git author/committer identity
+        git_set_identity
+
+        # Check for resolution plan to customize commit message
+        if [ -f "$worker_dir/resolution-plan.md" ]; then
+            commit_message="fix: Resolve merge conflicts per coordination plan
+
+Automated resolution following multi-PR coordination plan."
+        fi
+
+        # Create commit
+        local commit_output
+        if ! commit_output=$(git -C "$workspace" commit --no-gpg-sign -m "$commit_message" 2>&1); then
+            log_error "Failed to create commit: $commit_output"
+            agent_write_result "$worker_dir" "FAIL" '{}' '["Commit failed: '"${commit_output:0:200}"'"]'
+            return 1
+        fi
+
+        commit_sha=$(git -C "$workspace" rev-parse HEAD 2>/dev/null)
+        log "Created commit: $commit_sha"
+    else
+        log "No uncommitted changes, pushing $unpushed_count existing commit(s) on branch: $current_branch"
+    fi
 
     # Push to remote
     log "Pushing to remote..."

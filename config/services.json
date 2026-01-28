@@ -31,20 +31,7 @@
       },
       "execution": {
         "type": "function",
-        "function": "orch_usage_tracker_write_shared"
-      }
-    },
-    {
-      "id": "skip-decay",
-      "description": "Decay skip counts to give tasks another chance",
-      "schedule": {
-        "type": "interval",
-        "interval": 180,
-        "run_on_startup": true
-      },
-      "execution": {
-        "type": "function",
-        "function": "orch_decay_skip_counts"
+        "function": "svc_orch_usage_tracker_write_shared"
       }
     },
     {
@@ -57,7 +44,7 @@
       },
       "execution": {
         "type": "function",
-        "function": "orch_create_orphan_pr_workspaces"
+        "function": "svc_orch_create_orphan_pr_workspaces"
       }
     },
     {
@@ -69,7 +56,7 @@
       },
       "execution": {
         "type": "function",
-        "function": "orch_spawn_pr_optimizer"
+        "function": "svc_orch_spawn_pr_optimizer"
       },
       "concurrency": {
         "max_instances": 1,
@@ -85,7 +72,7 @@
       },
       "execution": {
         "type": "function",
-        "function": "orch_spawn_multi_pr_planner"
+        "function": "svc_orch_spawn_multi_pr_planner"
       }
     },
     {
@@ -98,7 +85,7 @@
       },
       "execution": {
         "type": "function",
-        "function": "orch_spawn_fix_workers"
+        "function": "svc_orch_spawn_fix_workers"
       }
     },
     {
@@ -111,12 +98,12 @@
       },
       "execution": {
         "type": "function",
-        "function": "orch_spawn_resolve_workers"
+        "function": "svc_orch_spawn_resolve_workers"
       }
     },
     {
-      "id": "scheduler-tick",
-      "description": "Update task lists from kanban",
+      "id": "worker-cleanup",
+      "description": "Clean up all finished workers (main, fix, resolve)",
       "schedule": {
         "type": "interval",
         "interval": 60,
@@ -124,56 +111,7 @@
       },
       "execution": {
         "type": "function",
-        "function": "orch_scheduler_tick"
-      }
-    },
-    {
-      "id": "main-worker-cleanup",
-      "description": "Clean up finished main workers",
-      "schedule": {
-        "type": "interval",
-        "interval": 60,
-        "run_on_startup": true
-      },
-      "execution": {
-        "type": "function",
-        "function": "orch_cleanup_main_workers"
-      }
-    },
-    {
-      "id": "orphan-detection",
-      "description": "Detect and re-track orphan workers",
-      "schedule": {
-        "type": "interval",
-        "interval": 60
-      },
-      "execution": {
-        "type": "function",
-        "function": "orch_detect_orphan_workers"
-      }
-    },
-    {
-      "id": "fix-worker-cleanup",
-      "description": "Clean up finished/timed-out fix workers",
-      "schedule": {
-        "type": "interval",
-        "interval": 60
-      },
-      "execution": {
-        "type": "function",
-        "function": "orch_cleanup_fix_workers"
-      }
-    },
-    {
-      "id": "resolve-worker-cleanup",
-      "description": "Clean up finished/timed-out resolve workers",
-      "schedule": {
-        "type": "interval",
-        "interval": 60
-      },
-      "execution": {
-        "type": "function",
-        "function": "orch_cleanup_resolve_workers"
+        "function": "svc_orch_cleanup_all_workers"
       }
     },
     {
@@ -186,7 +124,7 @@
       },
       "execution": {
         "type": "function",
-        "function": "orch_check_pr_optimizer"
+        "function": "svc_orch_check_pr_optimizer"
       }
     },
     {
@@ -199,19 +137,7 @@
       },
       "execution": {
         "type": "function",
-        "function": "orch_spawn_ready_tasks"
-      }
-    },
-    {
-      "id": "aging-update",
-      "description": "Update aging tracking after scheduling events",
-      "schedule": {
-        "type": "event",
-        "trigger": "scheduling_event"
-      },
-      "execution": {
-        "type": "function",
-        "function": "orch_update_aging"
+        "function": "svc_orch_spawn_ready_tasks"
       }
     },
     {
@@ -223,7 +149,7 @@
       },
       "execution": {
         "type": "function",
-        "function": "orch_display_status"
+        "function": "svc_orch_display_status"
       }
     }
   ]

@@ -370,37 +370,32 @@ service_load_builtin_defaults() {
     {
       "id": "pr-optimizer",
       "schedule": { "type": "interval", "interval": 900 },
-      "execution": { "type": "function", "function": "pr_merge_spawn_background" },
+      "execution": { "type": "function", "function": "svc_orch_spawn_pr_optimizer" },
       "concurrency": { "max_instances": 1, "if_running": "skip" }
     },
     {
       "id": "fix-workers",
       "schedule": { "type": "interval", "interval": 60 },
-      "execution": { "type": "function", "function": "spawn_fix_workers" }
+      "execution": { "type": "function", "function": "svc_orch_spawn_fix_workers" }
     },
     {
       "id": "resolve-workers",
       "schedule": { "type": "interval", "interval": 60 },
-      "execution": { "type": "function", "function": "spawn_resolve_workers" }
+      "execution": { "type": "function", "function": "svc_orch_spawn_resolve_workers" }
     },
     {
       "id": "task-spawner",
       "schedule": { "type": "interval", "interval": 60 },
-      "execution": { "type": "function", "function": "spawn_ready_tasks" }
+      "execution": { "type": "function", "function": "svc_orch_spawn_ready_tasks" }
     },
     {
       "id": "worker-cleanup",
       "schedule": { "type": "interval", "interval": 60 },
-      "execution": { "type": "function", "function": "cleanup_all_workers" }
-    },
-    {
-      "id": "scheduler-tick",
-      "schedule": { "type": "interval", "interval": 60, "run_on_startup": true },
-      "execution": { "type": "function", "function": "scheduler_tick" }
+      "execution": { "type": "function", "function": "svc_orch_cleanup_all_workers" }
     }
   ]
 }'
-    _SERVICE_COUNT=7
+    _SERVICE_COUNT=6
 
     log "Loaded built-in default services with $_SERVICE_COUNT services"
 }

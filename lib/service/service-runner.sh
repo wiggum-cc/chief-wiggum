@@ -163,6 +163,11 @@ _run_service_command() {
     return 0
 }
 
+# Required prefix for service handler functions
+# Only functions with this prefix can be invoked via services.json
+# This prevents arbitrary function execution if services.json is compromised
+_SERVICE_FUNCTION_PREFIX="svc_"
+
 # Run a function-type service
 #
 # Args:
@@ -178,6 +183,15 @@ _run_service_function() {
     local args_json="$4"
     shift 4
     local extra_args=("$@")
+
+    # Security: Validate function name starts with required prefix
+    # This ensures only explicitly registered service handlers can be called
+    if [[ "$func" != "${_SERVICE_FUNCTION_PREFIX}"* ]]; then
+        log_error "Service $id: function '$func' rejected - must start with '${_SERVICE_FUNCTION_PREFIX}'"
+        log_error "Service handlers must be defined in lib/services/ with svc_* prefix"
+        service_state_mark_failed "$id"
+        return 1
+    fi
 
     # Check if function exists
     if ! declare -F "$func" &>/dev/null; then
@@ -272,7 +286,11 @@ service_run_sync() {
             func=$(echo "$execution" | jq -r '.function // ""')
             args_json=$(echo "$execution" | jq -c '.args // []')
 
-            if ! declare -F "$func" &>/dev/null; then
+            # Security: Validate function name starts with required prefix
+            if [[ "$func" != "${_SERVICE_FUNCTION_PREFIX}"* ]]; then
+                log_error "Service $id: function '$func' rejected - must start with '${_SERVICE_FUNCTION_PREFIX}'"
+                exit_code=1
+            elif ! declare -F "$func" &>/dev/null; then
                 log_error "Function not found: $func"
                 exit_code=1
             else

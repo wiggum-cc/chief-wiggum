@@ -20,6 +20,137 @@ source "$WIGGUM_HOME/lib/scheduler/conflict-queue.sh"
 source "$WIGGUM_HOME/lib/scheduler/batch-coordination.sh"
 source "$WIGGUM_HOME/lib/tasks/task-parser.sh"
 source "$WIGGUM_HOME/lib/git/worktree-helpers.sh"
+source "$WIGGUM_HOME/lib/core/file-lock.sh"
+
+# =============================================================================
+# Priority Worker Capacity Management
+#
+# fix-workers and resolve-workers services share a capacity limit. Since these
+# services run in subshells (via service scheduler), they can race when checking
+# capacity. This uses file-based locking to ensure atomic capacity reservation.
+# =============================================================================
+
+# File storing current priority worker count (fix + resolve)
+# Format: single integer on one line
+_PRIORITY_CAPACITY_FILE=""
+
+# Initialize capacity tracking for a ralph directory
+#
+# Args:
+#   ralph_dir - Ralph directory path
+_priority_capacity_init() {
+    local ralph_dir="$1"
+    _PRIORITY_CAPACITY_FILE="$ralph_dir/.priority-worker-count"
+
+    # Create file if it doesn't exist
+    [ -f "$_PRIORITY_CAPACITY_FILE" ] || echo "0" > "$_PRIORITY_CAPACITY_FILE"
+}
+
+# Atomically try to reserve capacity for a priority worker
+#
+# Args:
+#   ralph_dir - Ralph directory path
+#   limit     - Maximum total priority workers allowed
+#
+# Returns: 0 if reservation succeeded, 1 if at capacity
+_priority_capacity_reserve() {
+    local ralph_dir="$1"
+    local limit="$2"
+
+    _priority_capacity_init "$ralph_dir"
+
+    # Use file locking to atomically check and increment
+    local result=1
+    (
+        flock -x -w 5 200 || exit 1
+
+        local current
+        current=$(cat "$_PRIORITY_CAPACITY_FILE" 2>/dev/null || echo "0")
+        current=${current:-0}
+
+        if (( current < limit )); then
+            echo "$((current + 1))" > "$_PRIORITY_CAPACITY_FILE"
+            exit 0  # Success - reserved
+        fi
+
+        exit 1  # At capacity
+    ) 200>"${_PRIORITY_CAPACITY_FILE}.lock"
+
+    return $?
+}
+
+# Release a priority worker capacity slot
+#
+# Args:
+#   ralph_dir - Ralph directory path
+_priority_capacity_release() {
+    local ralph_dir="$1"
+
+    _priority_capacity_init "$ralph_dir"
+
+    # Use file locking to atomically decrement
+    (
+        flock -x -w 5 200 || exit 1
+
+        local current
+        current=$(cat "$_PRIORITY_CAPACITY_FILE" 2>/dev/null || echo "0")
+        current=${current:-0}
+
+        if (( current > 0 )); then
+            echo "$((current - 1))" > "$_PRIORITY_CAPACITY_FILE"
+        fi
+    ) 200>"${_PRIORITY_CAPACITY_FILE}.lock"
+}
+
+# Sync file-based capacity with actual running priority workers
+#
+# Called at the start of spawn functions to ensure capacity file reflects reality.
+# Counts workers by scanning directories for running agent.pid files with
+# git_state = fixing, needs_fix, resolving, or needs_resolve.
+# This handles cases where workers exit unexpectedly without releasing.
+#
+# Args:
+#   ralph_dir - Ralph directory path
+_priority_capacity_sync() {
+    local ralph_dir="$1"
+
+    _priority_capacity_init "$ralph_dir"
+
+    [ -d "$ralph_dir/workers" ] || return 0
+
+    # Use file locking for atomic update
+    (
+        flock -x -w 5 200 || exit 1
+
+        # Count running priority workers by scanning directories
+        local actual_count=0
+        for worker_dir in "$ralph_dir/workers"/worker-*; do
+            [ -d "$worker_dir" ] || continue
+
+            # Check if this is a priority worker (fix or resolve)
+            local state=""
+            if [ -f "$worker_dir/git-state.json" ]; then
+                state=$(jq -r '.state // ""' "$worker_dir/git-state.json" 2>/dev/null || echo "")
+            fi
+
+            # Count only active fix/resolve workers
+            case "$state" in
+                fixing|resolving)
+                    # Check if agent.pid exists and process is running
+                    if [ -f "$worker_dir/agent.pid" ]; then
+                        local pid
+                        pid=$(cat "$worker_dir/agent.pid" 2>/dev/null || echo "")
+                        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+                            ((++actual_count))
+                        fi
+                    fi
+                    ;;
+            esac
+        done
+
+        echo "$actual_count" > "$_PRIORITY_CAPACITY_FILE"
+    ) 200>"${_PRIORITY_CAPACITY_FILE}.lock"
+}
 
 # Reconstruct workspace from PR branch if missing
 #
@@ -164,16 +295,9 @@ spawn_fix_workers() {
 
     [ -d "$ralph_dir/workers" ] || return 0
 
-    # Check total priority worker capacity (fix + resolve share the limit)
-    local fix_count resolve_count total_priority
-    fix_count=$(pool_count "fix")
-    resolve_count=$(pool_count "resolve")
-    total_priority=$((fix_count + resolve_count))
-
-    if [ "$total_priority" -ge "$limit" ]; then
-        log "Fix worker limit reached ($total_priority/$limit) - deferring new fixes"
-        return 0
-    fi
+    # Sync file-based capacity tracking with actual pool state
+    # This handles cases where workers exited unexpectedly
+    _priority_capacity_sync "$ralph_dir"
 
     # Collect tasks from both sources into a deduplicated list
     # Use associative array for deduplication
@@ -228,14 +352,6 @@ spawn_fix_workers() {
     for task_id in "${sorted_tasks[@]}"; do
         [ -z "$task_id" ] && continue
 
-        # Re-check capacity inside loop
-        fix_count=$(pool_count "fix")
-        resolve_count=$(pool_count "resolve")
-        total_priority=$((fix_count + resolve_count))
-        if [ "$total_priority" -ge "$limit" ]; then
-            break
-        fi
-
         local worker_dir
         worker_dir=$(find_worker_by_task_id "$ralph_dir" "$task_id" 2>/dev/null)
 
@@ -244,53 +360,63 @@ spawn_fix_workers() {
         fi
 
         # Verify needs_fix state (may have changed since collection)
-        if git_state_is "$worker_dir" "needs_fix"; then
-            # Guard: skip if agent is already running for this worker
-            if [ -f "$worker_dir/agent.pid" ]; then
-                local existing_pid
-                existing_pid=$(cat "$worker_dir/agent.pid")
-                if kill -0 "$existing_pid" 2>/dev/null; then
-                    log "Fix agent already running for $task_id (PID: $existing_pid) - skipping"
-                    continue
-                fi
-            fi
+        if ! git_state_is "$worker_dir" "needs_fix"; then
+            continue
+        fi
 
-            # Ensure workspace exists (reconstruct from PR branch if missing)
-            if ! ensure_workspace_from_pr "$worker_dir" "$project_dir" "$task_id"; then
-                log_error "Cannot spawn fix worker for $task_id: workspace missing and reconstruction failed"
+        # Guard: skip if agent is already running for this worker
+        if [ -f "$worker_dir/agent.pid" ]; then
+            local existing_pid
+            existing_pid=$(cat "$worker_dir/agent.pid")
+            if kill -0 "$existing_pid" 2>/dev/null; then
+                log "Fix agent already running for $task_id (PID: $existing_pid) - skipping"
                 continue
             fi
+        fi
 
-            # Transition state to fixing
-            git_state_set "$worker_dir" "fixing" "priority-workers.spawn_fix_workers" "Fix worker spawned"
+        # Atomically reserve capacity slot (prevents race with resolve-workers)
+        if ! _priority_capacity_reserve "$ralph_dir" "$limit"; then
+            log "Fix worker limit reached ($limit) - deferring remaining fixes"
+            break
+        fi
 
-            log "Spawning fix worker for $task_id..."
+        # Ensure workspace exists (reconstruct from PR branch if missing)
+        if ! ensure_workspace_from_pr "$worker_dir" "$project_dir" "$task_id"; then
+            log_error "Cannot spawn fix worker for $task_id: workspace missing and reconstruction failed"
+            _priority_capacity_release "$ralph_dir"
+            continue
+        fi
 
-            # Call wiggum-review task fix synchronously (it returns immediately after async launch)
-            (
-                cd "$project_dir" || exit 1
-                "$WIGGUM_HOME/bin/wiggum-review" task "$task_id" fix 2>&1 | \
-                    sed "s/^/  [fix-$task_id] /"
-            )
+        # Transition state to fixing
+        git_state_set "$worker_dir" "fixing" "priority-workers.spawn_fix_workers" "Fix worker spawned"
 
-            # Wait briefly for agent.pid to appear (async launch race condition)
-            local wait_count=0
-            while [ ! -f "$worker_dir/agent.pid" ] && [ $wait_count -lt 20 ]; do
-                sleep 0.1
-                ((++wait_count)) || true
-            done
+        log "Spawning fix worker for $task_id..."
 
-            # Read the agent PID from the worker directory
-            if [ -f "$worker_dir/agent.pid" ]; then
-                local agent_pid
-                agent_pid=$(cat "$worker_dir/agent.pid")
-                pool_add "$agent_pid" "fix" "$task_id"
-                log "Fix worker spawned for $task_id (PID: $agent_pid)"
-            else
-                log_warn "Fix agent for $task_id did not produce agent.pid after 2s wait"
-                # Revert state so it can be retried
-                git_state_set "$worker_dir" "needs_fix" "priority-workers.spawn_fix_workers" "Agent failed to start"
-            fi
+        # Call wiggum-review task fix synchronously (it returns immediately after async launch)
+        (
+            cd "$project_dir" || exit 1
+            "$WIGGUM_HOME/bin/wiggum-review" task "$task_id" fix 2>&1 | \
+                sed "s/^/  [fix-$task_id] /"
+        )
+
+        # Wait briefly for agent.pid to appear (async launch race condition)
+        local wait_count=0
+        while [ ! -f "$worker_dir/agent.pid" ] && [ $wait_count -lt 20 ]; do
+            sleep 0.1
+            ((++wait_count)) || true
+        done
+
+        # Read the agent PID from the worker directory
+        if [ -f "$worker_dir/agent.pid" ]; then
+            local agent_pid
+            agent_pid=$(cat "$worker_dir/agent.pid")
+            pool_add "$agent_pid" "fix" "$task_id"
+            log "Fix worker spawned for $task_id (PID: $agent_pid)"
+        else
+            log_warn "Fix agent for $task_id did not produce agent.pid after 2s wait"
+            # Revert state so it can be retried
+            git_state_set "$worker_dir" "needs_fix" "priority-workers.spawn_fix_workers" "Agent failed to start"
+            _priority_capacity_release "$ralph_dir"
         fi
     done
 
@@ -417,15 +543,9 @@ spawn_resolve_workers() {
 
     local kanban_file="$ralph_dir/kanban.md"
 
-    # Check total priority worker capacity
-    local fix_count resolve_count total_priority
-    fix_count=$(pool_count "fix")
-    resolve_count=$(pool_count "resolve")
-    total_priority=$((fix_count + resolve_count))
-
-    if [ "$total_priority" -ge "$limit" ]; then
-        return 0
-    fi
+    # Sync file-based capacity tracking with actual pool state
+    # This handles cases where workers exited unexpectedly
+    _priority_capacity_sync "$ralph_dir"
 
     # Build list of workers needing resolution, sorted by dependency depth
     local -a worker_scores=()
@@ -454,14 +574,6 @@ spawn_resolve_workers() {
 
     for worker_dir in "${sorted_workers[@]}"; do
         [ -d "$worker_dir" ] || continue
-
-        # Re-check capacity
-        fix_count=$(pool_count "fix")
-        resolve_count=$(pool_count "resolve")
-        total_priority=$((fix_count + resolve_count))
-        if [ "$total_priority" -ge "$limit" ]; then
-            break
-        fi
 
         local worker_id
         worker_id=$(basename "$worker_dir")
@@ -492,13 +604,21 @@ spawn_resolve_workers() {
             fi
         fi
 
+        # Atomically reserve capacity slot (prevents race with fix-workers)
+        if ! _priority_capacity_reserve "$ralph_dir" "$limit"; then
+            log "Resolve worker limit reached ($limit) - deferring remaining resolves"
+            break
+        fi
+
         # Ensure workspace exists (reconstruct from PR branch if missing)
         if ! ensure_workspace_from_pr "$worker_dir" "$project_dir" "$task_id"; then
             log_error "Cannot spawn resolver for $task_id: workspace missing and reconstruction failed"
+            _priority_capacity_release "$ralph_dir"
             continue
         fi
 
         # Check if this is a batch worker (part of multi-PR resolution)
+        local spawn_result=0
         if batch_coord_has_worker_context "$worker_dir"; then
             local batch_id
             batch_id=$(batch_coord_read_worker_context "$worker_dir" "batch_id")
@@ -508,9 +628,14 @@ spawn_resolve_workers() {
                 _advance_batch_past_merged_tasks "$ralph_dir" "$project_dir" "$batch_id"
             fi
 
-            _spawn_batch_resolve_worker "$ralph_dir" "$project_dir" "$worker_dir" "$task_id"
+            _spawn_batch_resolve_worker "$ralph_dir" "$project_dir" "$worker_dir" "$task_id" || spawn_result=$?
         else
-            _spawn_simple_resolve_worker "$ralph_dir" "$project_dir" "$worker_dir" "$task_id"
+            _spawn_simple_resolve_worker "$ralph_dir" "$project_dir" "$worker_dir" "$task_id" || spawn_result=$?
+        fi
+
+        # If spawn failed, release the capacity slot
+        if [ "$spawn_result" -ne 0 ]; then
+            _priority_capacity_release "$ralph_dir"
         fi
     done
 }
