@@ -548,10 +548,15 @@ spawn_resolve_workers() {
     _priority_capacity_sync "$ralph_dir"
 
     # Build list of workers needing resolution, sorted by dependency depth
+    # Check both needs_resolve (single-PR) and needs_multi_resolve (multi-PR) states
     local -a worker_scores=()
     for worker_dir in "$ralph_dir/workers"/worker-*; do
         [ -d "$worker_dir" ] || continue
-        git_state_is "$worker_dir" "needs_resolve" || continue
+        local git_state
+        git_state=$(git_state_get "$worker_dir" 2>/dev/null || echo "")
+        if [[ "$git_state" != "needs_resolve" && "$git_state" != "needs_multi_resolve" ]]; then
+            continue
+        fi
 
         local worker_id
         worker_id=$(basename "$worker_dir")
@@ -571,6 +576,11 @@ spawn_resolve_workers() {
         [ -n "$entry" ] || continue
         sorted_workers+=("${entry#*|}")
     done < <(printf '%s\n' "${worker_scores[@]}" | sort -t'|' -k1 -rn)
+
+    local worker_count=${#sorted_workers[@]}
+    if [ "$worker_count" -gt 0 ]; then
+        log "Found $worker_count worker(s) needing conflict resolution"
+    fi
 
     for worker_dir in "${sorted_workers[@]}"; do
         [ -d "$worker_dir" ] || continue
@@ -753,8 +763,18 @@ _spawn_batch_resolve_worker() {
     total=$(batch_coord_read_worker_context "$worker_dir" "total")
 
     # Only spawn if it's this worker's turn in the batch sequence
-    if ! batch_coord_is_my_turn "$batch_id" "$task_id" "$project_dir"; then
-        return 0  # Not my turn yet, skip spawning
+    local turn_result=0
+    batch_coord_is_my_turn "$batch_id" "$task_id" "$project_dir" || turn_result=$?
+    if [ "$turn_result" -ne 0 ]; then
+        if [ "$turn_result" -eq 2 ]; then
+            log "Batch resolver for $task_id: batch $batch_id failed - cleaning up"
+            rm -f "$worker_dir/batch-context.json"
+            # Re-categorize this task on next cycle
+            git_state_set "$worker_dir" "needs_resolve" "priority-workers._spawn_batch_resolve_worker" "Batch failed, needs re-evaluation"
+        else
+            log "Batch resolver for $task_id: waiting for turn (batch: $batch_id, position $((position + 1)) of $total)"
+        fi
+        return 1  # Not my turn - return 1 so capacity is released
     fi
 
     # Transition state
