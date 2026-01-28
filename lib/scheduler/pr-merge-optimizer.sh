@@ -1664,6 +1664,140 @@ _create_multi_resolve_batch() {
 }
 
 # =============================================================================
+# PHASE 0: QUICK MERGE - Fast deterministic merges before full analysis
+# =============================================================================
+#
+# This phase runs FIRST to immediately merge PRs that are obviously ready.
+# It's fast because it only does quick checks (no full data gathering).
+# This ensures ready PRs like "GRAPH-002" get merged before we spend time
+# analyzing the full PR graph.
+
+# Quick-merge obviously ready PRs before full analysis
+#
+# Criteria for "obviously ready":
+# - Task is [P] (pending approval)
+# - PR is OPEN on GitHub
+# - GitHub says PR is mergeable (no conflicts)
+# - No task-comments.md file OR comments were already addressed (## Commit section)
+#
+# Args:
+#   ralph_dir   - Ralph directory path
+#   project_dir - Project directory path
+#
+# Returns: Number of PRs merged (echoed to stdout)
+_quick_merge_ready_prs() {
+    local ralph_dir="$1"
+    local project_dir="$2"
+
+    [ -d "$ralph_dir/workers" ] || { echo "0"; return 0; }
+
+    local merged_count=0
+    local gh_timeout="${WIGGUM_GH_TIMEOUT:-30}"
+
+    log "Phase 0: Quick-merging ready PRs..."
+
+    for worker_dir in "$ralph_dir/workers"/worker-*; do
+        [ -d "$worker_dir" ] || continue
+
+        # Skip plan workers
+        [[ "$(basename "$worker_dir")" == *"-plan-"* ]] && continue
+
+        # Must have workspace
+        [ -d "$worker_dir/workspace" ] || continue
+
+        # Skip if worker is running
+        if [ -f "$worker_dir/agent.pid" ]; then
+            local pid
+            pid=$(cat "$worker_dir/agent.pid" 2>/dev/null || true)
+            if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+                continue
+            fi
+        fi
+
+        local task_id
+        task_id=$(basename "$worker_dir" | sed 's/worker-\([A-Za-z]*-[0-9]*\)-.*/\1/')
+
+        # Check if task is pending approval [P]
+        local task_status
+        task_status=$(grep -E "^\- \[.\] \*\*\[$task_id\]" "$ralph_dir/kanban.md" 2>/dev/null | \
+            sed 's/^- \[\(.\)\].*/\1/' || echo "")
+        [ "$task_status" = "P" ] || continue
+
+        # Get PR number
+        local pr_number
+        pr_number=$(git_state_get_pr "$worker_dir" 2>/dev/null || echo "")
+        if { [ -z "$pr_number" ] || [ "$pr_number" = "null" ]; } && [ -f "$worker_dir/pr_url.txt" ]; then
+            local pr_url
+            pr_url=$(cat "$worker_dir/pr_url.txt")
+            pr_number=$(echo "$pr_url" | grep -oE '[0-9]+$' || true)
+        fi
+        [ -n "$pr_number" ] && [ "$pr_number" != "null" ] || continue
+
+        # Quick check: Get PR state and mergeable status from GitHub in one call
+        local pr_info
+        pr_info=$(timeout "$gh_timeout" gh pr view "$pr_number" --json state,mergeable,mergeStateStatus 2>/dev/null || echo "{}")
+
+        local pr_state
+        pr_state=$(echo "$pr_info" | jq -r '.state // "UNKNOWN"')
+
+        # Already merged? Update kanban and continue
+        if [ "$pr_state" = "MERGED" ]; then
+            log "  $task_id (PR #$pr_number): Already merged - updating kanban"
+            update_kanban_status "$ralph_dir/kanban.md" "$task_id" "x" 2>/dev/null || true
+            _cleanup_merged_worktree "$worker_dir"
+            ((++merged_count))
+            continue
+        fi
+
+        # Must be OPEN
+        [ "$pr_state" = "OPEN" ] || continue
+
+        # Check GitHub's mergeable status (fast - no local git operations)
+        local mergeable merge_state
+        mergeable=$(echo "$pr_info" | jq -r '.mergeable // "UNKNOWN"')
+        merge_state=$(echo "$pr_info" | jq -r '.mergeStateStatus // "UNKNOWN"')
+
+        # Skip if GitHub says it's not mergeable
+        if [ "$mergeable" != "MERGEABLE" ]; then
+            log_debug "  $task_id: GitHub says not mergeable ($mergeable, $merge_state) - deferring to full analysis"
+            continue
+        fi
+
+        # Check for unaddressed comments (quick file check, no sync needed)
+        if [ -f "$worker_dir/task-comments.md" ]; then
+            local has_comments
+            has_comments=$(grep -c '^### ' "$worker_dir/task-comments.md" 2>/dev/null | head -1 || echo "0")
+            has_comments="${has_comments:-0}"
+            if [[ "$has_comments" =~ ^[0-9]+$ ]] && [ "$has_comments" -gt 0 ]; then
+                # Check if comments were addressed (## Commit section exists)
+                if ! grep -q '^## Commit$' "$worker_dir/task-comments.md" 2>/dev/null; then
+                    # Also check if pr-comment-fix agent reported PASS
+                    if ! _check_fix_agent_passed "$worker_dir"; then
+                        log_debug "  $task_id: has unaddressed comments - deferring to full analysis"
+                        continue
+                    fi
+                fi
+            fi
+        fi
+
+        # PR is ready - merge immediately
+        log "  $task_id (PR #$pr_number): Ready - merging now"
+
+        if timeout "$gh_timeout" gh pr merge "$pr_number" --merge 2>/dev/null; then
+            log "    ✓ Merged"
+            update_kanban_status "$ralph_dir/kanban.md" "$task_id" "x" 2>/dev/null || true
+            _cleanup_merged_worktree "$worker_dir"
+            ((++merged_count))
+        else
+            log "    ✗ Merge failed - will retry in full analysis"
+        fi
+    done
+
+    log "  Quick-merged $merged_count PR(s)"
+    echo "$merged_count"
+}
+
+# =============================================================================
 # MAIN ORCHESTRATION
 # =============================================================================
 
@@ -1683,7 +1817,13 @@ pr_merge_optimize_and_execute() {
     log "Starting PR merge optimization..."
     echo ""
 
-    # Phase 1: Gather
+    # Phase 0: Quick-merge obviously ready PRs (fast, deterministic)
+    # This runs FIRST before any expensive analysis to maximize throughput
+    local quick_merged
+    quick_merged=$(_quick_merge_ready_prs "$ralph_dir" "$project_dir")
+    echo ""
+
+    # Phase 1: Gather (full data collection for remaining PRs)
     pr_merge_gather_all "$ralph_dir" "$project_dir"
     echo ""
 
@@ -1692,10 +1832,10 @@ pr_merge_optimize_and_execute() {
     pr_count=$(jq '.prs | length' "$(_pr_merge_state_file "$ralph_dir")")
 
     if [ "$pr_count" -eq 0 ]; then
-        log "No pending PRs to process"
-        # Mark completed in background mode (0 PRs merged)
+        log "No pending PRs to process (quick-merged $quick_merged)"
+        # Mark completed in background mode (include quick-merged count)
         if [ "$background" = "true" ]; then
-            pr_optimizer_mark_completed "$ralph_dir" 0
+            pr_optimizer_mark_completed "$ralph_dir" "$quick_merged"
         fi
         return 0
     fi
@@ -1717,11 +1857,15 @@ pr_merge_optimize_and_execute() {
     pr_merge_handle_remaining "$ralph_dir"
     echo ""
 
-    log "PR merge optimization complete (merged $merged PRs)"
+    # Total merged = quick-merged (Phase 0) + optimized merges (Phase 4)
+    local total_merged
+    total_merged=$((quick_merged + merged))
+
+    log "PR merge optimization complete (merged $total_merged PRs: $quick_merged quick + $merged optimized)"
 
     # Mark completed in background mode
     if [ "$background" = "true" ]; then
-        pr_optimizer_mark_completed "$ralph_dir" "$merged"
+        pr_optimizer_mark_completed "$ralph_dir" "$total_merged"
     fi
 }
 
