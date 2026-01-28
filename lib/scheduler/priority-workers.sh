@@ -60,7 +60,6 @@ _priority_capacity_reserve() {
     _priority_capacity_init "$ralph_dir"
 
     # Use file locking to atomically check and increment
-    local result=1
     (
         flock -x -w 5 200 || exit 1
 

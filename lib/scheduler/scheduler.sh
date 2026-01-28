@@ -368,12 +368,20 @@ scheduler_detect_orphan_workers() {
 
         # Check if this PID is already tracked
         if ! pool_get "$worker_pid" > /dev/null 2>&1; then
-            # Determine worker type from worker_id pattern
+            # Determine worker type from git-state
             local type="main"
-            if [[ "$worker_id" == *"-fix-"* ]]; then
-                type="fix"
-            elif [[ "$worker_id" == *"-resolve-"* ]]; then
-                type="resolve"
+            local worker_dir="$_SCHED_RALPH_DIR/workers/$worker_id"
+            if [ -f "$worker_dir/git-state.json" ]; then
+                local git_state
+                git_state=$(jq -r '.state // ""' "$worker_dir/git-state.json" 2>/dev/null)
+                case "$git_state" in
+                    resolving|needs_resolve|needs_multi_resolve)
+                        type="resolve"
+                        ;;
+                    fixing|needs_fix)
+                        type="fix"
+                        ;;
+                esac
             fi
 
             # Check if a different PID for this task is already tracked

@@ -536,7 +536,7 @@ JSON
 test_builtin_defaults_loads_services() {
     service_load_builtin_defaults
 
-    assert_equals "7" "$(service_count)" "Built-in defaults should have 7 services"
+    assert_equals "6" "$(service_count)" "Built-in defaults should have 6 services"
     assert_equals "1.0" "$(service_version)" "Built-in version should be 1.0"
 }
 
@@ -548,7 +548,10 @@ test_builtin_defaults_has_expected_services() {
 
     assert_output_contains "$enabled" "pr-sync" "Should have pr-sync service"
     assert_output_contains "$enabled" "pr-optimizer" "Should have pr-optimizer service"
-    assert_output_contains "$enabled" "scheduler-tick" "Should have scheduler-tick service"
+    assert_output_contains "$enabled" "fix-workers" "Should have fix-workers service"
+    assert_output_contains "$enabled" "resolve-workers" "Should have resolve-workers service"
+    assert_output_contains "$enabled" "task-spawner" "Should have task-spawner service"
+    assert_output_contains "$enabled" "worker-cleanup" "Should have worker-cleanup service"
 }
 
 test_builtin_pr_sync_runs_on_startup() {
