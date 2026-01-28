@@ -151,6 +151,93 @@ spawn_fix_workers() {
     : > "$tasks_needing_fix"
 }
 
+# Auto-advance a batch past any tasks that are already merged
+#
+# Checks if the task at the batch's current position is already complete
+# (marked [x] in kanban or has merged git state). If so, advances the batch
+# and repeats until finding an incomplete task or reaching the end.
+#
+# This handles cases where PRs get merged through other code paths
+# (e.g., PR merge optimizer) without updating batch coordination.
+#
+# Args:
+#   ralph_dir   - Ralph directory path
+#   project_dir - Project directory path
+#   batch_id    - Batch identifier
+#
+# Returns: 0 if batch was advanced or already correct, 1 on error
+_advance_batch_past_merged_tasks() {
+    local ralph_dir="$1"
+    local project_dir="$2"
+    local batch_id="$3"
+
+    local kanban_file="$ralph_dir/kanban.md"
+    local coord_file
+    coord_file=$(batch_coord_get_path "$batch_id" "$project_dir")
+
+    [ -f "$coord_file" ] || return 1
+
+    local max_advances=10  # Prevent infinite loop
+    local advances=0
+
+    while [ $advances -lt $max_advances ]; do
+        local status current_pos total order
+        status=$(jq -r '.status' "$coord_file")
+
+        # Stop if batch is already complete or failed
+        if [ "$status" = "complete" ] || [ "$status" = "failed" ]; then
+            return 0
+        fi
+
+        current_pos=$(jq -r '.current_position' "$coord_file")
+        total=$(jq -r '.total' "$coord_file")
+
+        # Stop if we've reached the end
+        if [ "$current_pos" -ge "$total" ]; then
+            return 0
+        fi
+
+        # Get the task at current position
+        local current_task_id
+        current_task_id=$(jq -r ".order[$current_pos]" "$coord_file")
+
+        [ -n "$current_task_id" ] && [ "$current_task_id" != "null" ] || return 0
+
+        # Check if task is already complete in kanban
+        local task_status=""
+        if [ -f "$kanban_file" ]; then
+            task_status=$(grep -E "^\- \[.\] \*\*\[$current_task_id\]" "$kanban_file" 2>/dev/null | \
+                sed 's/^- \[\(.\)\].*/\1/' | head -1 || echo "")
+        fi
+
+        # Also check git state of the worker
+        local worker_dir git_state=""
+        worker_dir=$(find_worker_by_task_id "$ralph_dir" "$current_task_id" 2>/dev/null)
+        if [ -n "$worker_dir" ] && [ -d "$worker_dir" ]; then
+            git_state=$(git_state_get "$worker_dir" 2>/dev/null || echo "")
+        fi
+
+        # If task is complete ([x] in kanban) or merged (git state), advance
+        if [ "$task_status" = "x" ] || [ "$git_state" = "merged" ]; then
+            log "Batch $batch_id: auto-advancing past already-merged $current_task_id"
+            batch_coord_mark_complete "$batch_id" "$current_task_id" "$project_dir"
+
+            # Clean up batch context from worker if present
+            if [ -n "$worker_dir" ] && [ -f "$worker_dir/batch-context.json" ]; then
+                rm -f "$worker_dir/batch-context.json"
+            fi
+
+            ((++advances))
+        else
+            # Current task is not merged, stop advancing
+            return 0
+        fi
+    done
+
+    log_warn "Batch $batch_id: hit max auto-advances ($max_advances)"
+    return 0
+}
+
 # Check for workers needing conflict resolution and spawn resolver workers
 #
 # Scans worker directories for needs_resolve state and spawns resolver
@@ -260,6 +347,14 @@ spawn_resolve_workers() {
 
         # Check if this is a batch worker (part of multi-PR resolution)
         if batch_coord_has_worker_context "$worker_dir"; then
+            local batch_id
+            batch_id=$(batch_coord_read_worker_context "$worker_dir" "batch_id")
+
+            # Auto-advance batch past any already-merged tasks (defense in depth)
+            if [ -n "$batch_id" ]; then
+                _advance_batch_past_merged_tasks "$ralph_dir" "$project_dir" "$batch_id"
+            fi
+
             _spawn_batch_resolve_worker "$ralph_dir" "$project_dir" "$worker_dir" "$task_id"
         else
             _spawn_simple_resolve_worker "$ralph_dir" "$project_dir" "$worker_dir" "$task_id"

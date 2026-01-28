@@ -45,6 +45,7 @@ source "$WIGGUM_HOME/lib/core/file-lock.sh"
 source "$WIGGUM_HOME/lib/worker/git-state.sh"
 source "$WIGGUM_HOME/lib/scheduler/conflict-queue.sh"
 source "$WIGGUM_HOME/lib/scheduler/conflict-registry.sh"
+source "$WIGGUM_HOME/lib/scheduler/batch-coordination.sh"
 source "$WIGGUM_HOME/lib/tasks/task-parser.sh"
 
 # State file path
@@ -1324,6 +1325,22 @@ _attempt_merge() {
         worker_dir=$(jq -r --arg t "$task_id" '.prs[$t].worker_dir' "$state_file")
         if [ -n "$worker_dir" ] && [ -d "$worker_dir/workspace" ]; then
             _cleanup_merged_worktree "$worker_dir"
+        fi
+
+        # Clean up batch coordination if this worker was part of a batch
+        # This advances the batch to the next task so other workers aren't blocked
+        if [ -n "$worker_dir" ] && [ -d "$worker_dir" ]; then
+            if batch_coord_has_worker_context "$worker_dir"; then
+                local batch_id
+                batch_id=$(batch_coord_read_worker_context "$worker_dir" "batch_id")
+                if [ -n "$batch_id" ]; then
+                    local project_dir
+                    project_dir=$(dirname "$ralph_dir")
+                    batch_coord_mark_complete "$batch_id" "$task_id" "$project_dir"
+                    log "      Batch: advanced $batch_id past $task_id"
+                fi
+                rm -f "$worker_dir/batch-context.json"
+            fi
         fi
 
         return 0
