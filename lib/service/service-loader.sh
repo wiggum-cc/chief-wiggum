@@ -75,9 +75,9 @@ service_load() {
     # Read version
     _SERVICE_VERSION=$(jq -r '.version // "1.0"' "$file")
 
-    # Get service count
+    # Get service count (excluding disabled services)
     local service_count
-    service_count=$(jq '.services | length' "$file")
+    service_count=$(jq '[.services[] | select(.enabled != false)] | length' "$file")
 
     if [ "$service_count" -eq 0 ]; then
         log_error "Service config has no services: $file"

@@ -863,6 +863,14 @@ _main_loop_service_based() {
         # The task-spawner service is disabled/no-op because services run in subshells.
         scheduler_tick
 
+        # Debug: show what scheduler_tick found
+        if [ -n "$SCHED_READY_TASKS" ]; then
+            log_debug "Ready tasks: $SCHED_READY_TASKS"
+        fi
+        if [ -n "$SCHED_BLOCKED_TASKS" ]; then
+            log_debug "Blocked tasks: $SCHED_BLOCKED_TASKS"
+        fi
+
         # Spawn workers for ready tasks (directly in main process, not via service)
         for task_id in $SCHED_READY_TASKS; do
             # Check if we can spawn this task
