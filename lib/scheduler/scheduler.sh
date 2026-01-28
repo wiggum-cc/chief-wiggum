@@ -310,15 +310,44 @@ scheduler_remove_from_aging() {
 
 # Check if all tasks are complete
 #
-# Returns: 0 if complete (no pending tasks and no workers), 1 otherwise
+# Returns: 0 if complete (no pending tasks, no workers, no pending fixes), 1 otherwise
 scheduler_is_complete() {
-    if [ -z "$SCHED_PENDING_TASKS" ]; then
-        local worker_count
-        worker_count=$(pool_count)
-        [ "$worker_count" -eq 0 ]
-    else
+    # Check for pending tasks ([ ] status)
+    if [ -n "$SCHED_PENDING_TASKS" ]; then
         return 1
     fi
+
+    # Check for running workers
+    local worker_count
+    worker_count=$(pool_count)
+    if [ "$worker_count" -gt 0 ]; then
+        return 1
+    fi
+
+    # Check for tasks needing fixes (populated by PR optimization)
+    local tasks_needing_fix="$_SCHED_RALPH_DIR/.tasks-needing-fix.txt"
+    if [ -s "$tasks_needing_fix" ]; then
+        return 1
+    fi
+
+    # Check for workers in needs_fix or needs_resolve state
+    for worker_dir in "$_SCHED_RALPH_DIR/workers"/worker-*; do
+        [ -d "$worker_dir" ] || continue
+        # Skip plan workers
+        [[ "$(basename "$worker_dir")" == *"-plan-"* ]] && continue
+
+        if [ -f "$worker_dir/git-state.json" ]; then
+            local git_state
+            git_state=$(jq -r '.state // ""' "$worker_dir/git-state.json" 2>/dev/null)
+            case "$git_state" in
+                needs_fix|needs_resolve|needs_multi_resolve|fixing|resolving)
+                    return 1
+                    ;;
+            esac
+        fi
+    done
+
+    return 0
 }
 
 # Detect orphan workers (running PIDs not tracked in pool)

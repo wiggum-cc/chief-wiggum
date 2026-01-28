@@ -1146,7 +1146,9 @@ pr_merge_execute() {
     local state_file
     state_file=$(_pr_merge_state_file "$ralph_dir")
 
-    log "Phase 4: Executing merges..."
+    # Note: All log messages in this function go to stderr so they don't
+    # interfere with the return value (echo to stdout at the end)
+    log "Phase 4: Executing merges..." >&2
 
     # Reset merged list
     jq '.merged_this_cycle = []' "$state_file" > "$state_file.tmp"
@@ -1160,7 +1162,7 @@ pr_merge_execute() {
         ((++pass))
         local merged_this_pass=0
 
-        log "  Pass $pass:"
+        log "  Pass $pass:" >&2
 
         # Get merge order
         local merge_order
@@ -1178,7 +1180,7 @@ pr_merge_execute() {
             local has_comments
             has_comments=$(jq -r --arg t "$task_id" '.prs[$t].has_new_comments' "$state_file")
             if [ "$has_comments" = "true" ]; then
-                log "    $task_id: Skipped (has new comments)"
+                log "    $task_id: Skipped (has new comments)" >&2
                 continue
             fi
 
@@ -1186,7 +1188,7 @@ pr_merge_execute() {
             local reviewed
             reviewed=$(jq -r --arg t "$task_id" '.prs[$t].copilot_reviewed' "$state_file")
             if [ "$reviewed" != "true" ]; then
-                log "    $task_id: Skipped (has unaddressed review requests)"
+                log "    $task_id: Skipped (has unaddressed review requests)" >&2
                 continue
             fi
 
@@ -1195,7 +1197,7 @@ pr_merge_execute() {
             mergeable=$(jq -r --arg t "$task_id" '.prs[$t].mergeable_to_main' "$state_file")
 
             if [ "$mergeable" = "true" ]; then
-                log "    $task_id: Attempting merge..."
+                log "    $task_id: Attempting merge..." >&2
 
                 if _attempt_merge "$ralph_dir" "$task_id"; then
                     # Mark as merged
@@ -1209,20 +1211,20 @@ pr_merge_execute() {
                     _refresh_merge_status "$ralph_dir"
                 fi
             else
-                log "    $task_id: Not mergeable (has conflicts with main)"
+                log "    $task_id: Not mergeable (has conflicts with main)" >&2
             fi
         done <<< "$merge_order"
 
         # If no merges this pass, we're done
         if [ $merged_this_pass -eq 0 ]; then
-            log "  No more PRs mergeable"
+            log "  No more PRs mergeable" >&2
             break
         fi
 
-        log "  Merged $merged_this_pass PR(s) this pass, refreshing..."
+        log "  Merged $merged_this_pass PR(s) this pass, refreshing..." >&2
     done
 
-    log "  Total merged: $merged_count PR(s)"
+    log "  Total merged: $merged_count PR(s)" >&2
     echo "$merged_count"
 }
 

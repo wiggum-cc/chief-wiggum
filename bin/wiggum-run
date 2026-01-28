@@ -1029,6 +1029,10 @@ main() {
             # Queue pending tasks with existing PRs for fix pipeline (sync→fix→push→merge)
             _schedule_pending_pr_fixes
 
+            # Spawn fix workers for tasks identified by PR optimization
+            # (PR optimization populates .tasks-needing-fix.txt which spawn_fix_workers reads)
+            spawn_fix_workers "$RALPH_DIR" "$PROJECT_DIR" "$FIX_WORKER_LIMIT"
+
             # Check for conflict batches and spawn multi-PR planner if needed
             _check_and_spawn_multi_pr_planner
 
