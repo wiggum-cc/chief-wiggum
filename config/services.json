@@ -129,7 +129,9 @@
     },
     {
       "id": "task-spawner",
-      "description": "Spawn workers for ready tasks",
+      "description": "Spawn workers for ready tasks (DISABLED - runs in main process)",
+      "enabled": false,
+      "_comment": "Task spawning must run in the main process because it depends on in-memory scheduler state (SCHED_READY_TASKS) which is not accessible from subshells. The spawning logic is now inline in _main_loop_service_based.",
       "schedule": {
         "type": "interval",
         "interval": 60,
