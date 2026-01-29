@@ -93,7 +93,7 @@ _load_config_cache() {
     fi
 
     # Single jq call extracts all values (performance optimization)
-    # Format: approved_authors|fix_max_iter|fix_max_turns|auto_commit|rate_limit|git_name|git_email
+    # Format: approved_authors|fix_max_iter|fix_max_turns|auto_commit|rate_limit|git_name|git_email|fix_worker_limit
     local extracted
     extracted=$(jq -r '[
         (.review.approved_authors // [] | join(",")),
@@ -102,12 +102,14 @@ _load_config_cache() {
         (.review.auto_commit_after_fix // true),
         (.rate_limit.threshold_prompts // 900),
         (.git.author_name // "Ralph Wiggum"),
-        (.git.author_email // "ralph@wiggum.cc")
+        (.git.author_email // "ralph@wiggum.cc"),
+        (.workers.fix_worker_limit // 2)
     ] | @tsv' "$config_file" 2>/dev/null) || true
 
     if [ -n "$extracted" ]; then
         IFS=$'\t' read -r _CACHE_APPROVED_AUTHORS _CACHE_FIX_MAX_ITER _CACHE_FIX_MAX_TURNS \
                          _CACHE_AUTO_COMMIT _CACHE_RATE_LIMIT _CACHE_GIT_NAME _CACHE_GIT_EMAIL \
+                         _CACHE_FIX_WORKER_LIMIT \
                          <<< "$extracted"
     fi
 
@@ -157,4 +159,14 @@ load_git_config() {
     WIGGUM_GIT_AUTHOR_EMAIL="${WIGGUM_GIT_AUTHOR_EMAIL:-ralph@wiggum.cc}"
     export WIGGUM_GIT_AUTHOR_NAME
     export WIGGUM_GIT_AUTHOR_EMAIL
+}
+
+# Load workers config from config.json (with env var overrides)
+# Sets WIGGUM_FIX_WORKER_LIMIT
+load_workers_config() {
+    _load_config_cache
+
+    WIGGUM_FIX_WORKER_LIMIT="${WIGGUM_FIX_WORKER_LIMIT:-${_CACHE_FIX_WORKER_LIMIT:-}}"
+    WIGGUM_FIX_WORKER_LIMIT="${WIGGUM_FIX_WORKER_LIMIT:-2}"
+    export WIGGUM_FIX_WORKER_LIMIT
 }

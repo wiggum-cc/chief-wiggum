@@ -11,7 +11,8 @@
   },
   "workers": {
     "max_iterations": 50,
-    "sleep_seconds": 2
+    "sleep_seconds": 2,
+    "fix_worker_limit": 4
   },
   "hooks": {
     "enabled": true,

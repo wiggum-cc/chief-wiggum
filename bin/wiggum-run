@@ -46,7 +46,7 @@ PID_WAIT_TIMEOUT=300   # Deciseconds to wait for agent.pid (30 seconds)
 FORCE_LOCK=false       # --force flag state for lock override
 MAX_SKIP_RETRIES=3     # Kanban update failures before permanent skip
 FIX_WORKER_TIMEOUT=1800  # Fix worker max runtime (seconds)
-FIX_WORKER_LIMIT=2     # Max concurrent fix workers
+FIX_WORKER_LIMIT=""    # Max concurrent fix workers (loaded from config or CLI)
 RESOLVE_WORKER_TIMEOUT=1800  # Resolve worker max runtime (seconds)
 AGING_FACTOR=7         # Scheduling events per priority level promotion
 SIBLING_WIP_PENALTY=20000  # Fixed-point penalty when sibling is WIP (20000 = 2.0)
@@ -68,6 +68,7 @@ Options:
   --max-workers N      Maximum concurrent workers (default: 4)
   --max-iters N        Maximum iterations per worker (default: 20)
   --max-turns N        Maximum turns per Claude session (default: 50)
+  --fix-agents N       Maximum concurrent fix/resolve workers (default: 2, or config)
   --pipeline NAME      Pipeline config to use (from config/pipelines/ or config/)
   --force              Override stale orchestrator lock
   -v, --verbose        Verbose output (same as default)
@@ -1004,6 +1005,14 @@ main() {
                 MAX_TURNS="$2"
                 shift 2
                 ;;
+            --fix-agents)
+                if [[ -z "${2:-}" ]] || [[ "${2:-}" =~ ^- ]]; then
+                    echo "Error: --fix-agents requires a number argument"
+                    exit $EXIT_USAGE
+                fi
+                FIX_WORKER_LIMIT="$2"
+                shift 2
+                ;;
             --pipeline)
                 if [[ -z "${2:-}" ]] || [[ "${2:-}" =~ ^- ]]; then
                     echo "Error: --pipeline requires a name argument"
@@ -1048,6 +1057,11 @@ main() {
 
     # Load rate limit configuration
     load_rate_limit_config
+
+    # Load workers configuration (fix_worker_limit)
+    load_workers_config
+    # CLI --fix-agents takes precedence over config
+    FIX_WORKER_LIMIT="${FIX_WORKER_LIMIT:-$WIGGUM_FIX_WORKER_LIMIT}"
 
     # Initialize activity log
     activity_init "$PROJECT_DIR"
