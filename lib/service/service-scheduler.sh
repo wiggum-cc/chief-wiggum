@@ -255,7 +255,12 @@ service_is_due() {
         effective_interval=$((interval + random_jitter))
     fi
 
-    [ "$elapsed" -ge "$effective_interval" ]
+    local is_due=false
+    [ "$elapsed" -ge "$effective_interval" ] && is_due=true
+
+    log_debug "Service $id tick: elapsed=${elapsed}s interval=${effective_interval}s due=$is_due"
+
+    [ "$is_due" = "true" ]
 }
 
 # Check if a cron-scheduled service is due to run

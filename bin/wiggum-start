@@ -202,6 +202,8 @@ do_start() {
     export _WORKER_MAX_ITERATIONS="$MAX_ITERATIONS"
     export _WORKER_MAX_TURNS="$MAX_TURNS"
     export _WORKER_PIPELINE="${WIGGUM_PIPELINE:-}"
+    export _WORKER_RALPH_DIR="$RALPH_DIR"
+    export _WORKER_TASK_ID="$task_id"
 
     if [ "$FOREGROUND_MODE" = "true" ]; then
         # Run in foreground (blocking) - used by orchestrator for proper PID tracking
@@ -221,28 +223,38 @@ do_start() {
         # shellcheck disable=SC2016
         setsid bash -c '
             set -euo pipefail
-            _log_ts() { echo "[$(date -Iseconds)] $*"; }
-            _log_ts "INFO: Worker subprocess starting"
-            _log_ts "INFO: WIGGUM_HOME=$_WORKER_WIGGUM_HOME"
-            _log_ts "INFO: worker_dir=$_WORKER_DIR"
-            _log_ts "INFO: AGENT_TYPE=$_WORKER_AGENT_TYPE"
-            _log_ts "INFO: PIPELINE=${_WORKER_PIPELINE:-default}"
 
+            # Initialize logging early using proper logger infrastructure
             export WIGGUM_HOME="$_WORKER_WIGGUM_HOME"
+            export LOG_FILE="$_WORKER_RALPH_DIR/logs/worker-bootstrap.log"
+            source "$WIGGUM_HOME/lib/core/logger.sh"
+            source "$WIGGUM_HOME/lib/utils/activity-log.sh"
+            activity_init "$_WORKER_PROJECT_DIR"
+
+            log "Worker bootstrap starting for task $_WORKER_TASK_ID"
+            log_debug "worker_dir=$_WORKER_DIR"
+            log_debug "agent_type=$_WORKER_AGENT_TYPE"
+            log_debug "pipeline=${_WORKER_PIPELINE:-default}"
+            log_debug "max_iterations=$_WORKER_MAX_ITERATIONS"
+            log_debug "max_turns=$_WORKER_MAX_TURNS"
+
+            activity_log "worker.bootstrap" "" "$_WORKER_TASK_ID" "agent=$_WORKER_AGENT_TYPE"
+
             [ -n "$_WORKER_PIPELINE" ] && export WIGGUM_PIPELINE="$_WORKER_PIPELINE"
 
             if ! source "$WIGGUM_HOME/lib/worker/agent-registry.sh" 2>&1; then
-                _log_ts "ERROR: Failed to source agent-registry.sh"
+                log_error "Failed to source agent-registry.sh"
                 exit 1
             fi
 
-            _log_ts "INFO: Running agent $_WORKER_AGENT_TYPE"
+            log "Running agent $_WORKER_AGENT_TYPE"
             run_agent "$_WORKER_AGENT_TYPE" "$_WORKER_DIR" "$_WORKER_PROJECT_DIR" 30 "$_WORKER_MAX_ITERATIONS" "$_WORKER_MAX_TURNS"
             _exit_code=$?
             if [ $_exit_code -ne 0 ]; then
-                _log_ts "ERROR: run_agent failed with exit code $_exit_code"
+                log_error "run_agent failed with exit code $_exit_code"
                 exit 1
             fi
+            log "Worker bootstrap completed successfully"
         ' >> "$RALPH_DIR/logs/workers.log" 2>&1 &
 
         # Wait briefly for agent.pid to be created

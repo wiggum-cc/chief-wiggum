@@ -207,6 +207,8 @@ _resolve_jump_target() {
             fi
             ;;
     esac
+
+    log_debug "Jump: '$target' from step $current_idx -> $_PIPELINE_NEXT_IDX"
 }
 
 # Dispatch on a gate result using the step's on_result handlers
@@ -226,16 +228,23 @@ _dispatch_on_result() {
     local project_dir="$4"
     local workspace="$5"
 
+    local step_id
+    step_id=$(pipeline_get "$idx" ".id")
+    local step_agent
+    step_agent=$(pipeline_get "$idx" ".agent")
+
+    log_debug "Step '$step_id' result: $gate_result"
+
     local handler
     handler=$(pipeline_get_on_result "$idx" "$gate_result")
 
     if [ -z "$handler" ]; then
         # No explicit handler - use config-driven default_jump from result_mappings
         # Resolution order: pipeline -> agent -> defaults
-        local step_agent
-        step_agent=$(pipeline_get "$idx" ".agent")
         local default_jump
         default_jump=$(pipeline_get_result_mapping "$gate_result" "default_jump" "$step_agent")
+
+        log_debug "Result mapping: step=$step_id agent=$step_agent result=$gate_result -> default_jump=${default_jump:-none}"
 
         if [ -n "$default_jump" ]; then
             _resolve_jump_target "$default_jump" "$idx"
@@ -449,6 +458,8 @@ pipeline_run_all() {
         local max_visits
         max_visits=$(pipeline_get_max "$current_idx")
         local visit_count="${_PIPELINE_VISITS[$step_id]:-0}"
+
+        log_debug "Step '$step_id' visits: $visit_count/${max_visits:-unlimited}"
 
         if [ "$max_visits" -gt 0 ] && [ "$visit_count" -ge "$max_visits" ]; then
             log "Step '$step_id' max visits ($max_visits) exceeded"

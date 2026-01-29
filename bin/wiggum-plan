@@ -107,6 +107,16 @@ do_plan() {
     mkdir -p "$RALPH_DIR/logs"
     mkdir -p "$RALPH_DIR/plans"
 
+    # Initialize logging for plan command
+    export LOG_FILE="$RALPH_DIR/logs/plan.log"
+    source "$WIGGUM_HOME/lib/utils/activity-log.sh"
+    activity_init "$PROJECT_DIR"
+
+    log "Planning task $task_id"
+    log_debug "worker_id=$worker_id"
+    log_debug "worker_dir=$worker_dir"
+    activity_log "plan.started" "$worker_id" "$task_id"
+
     # Extract task from kanban and create worker PRD
     extract_task "$task_id" "$RALPH_DIR/kanban.md" > "$worker_dir/prd.md"
 
@@ -120,6 +130,8 @@ do_plan() {
     # Report result
     local plan_file="$RALPH_DIR/plans/${task_id}.md"
     if [ $result -eq 0 ] && [ -f "$plan_file" ]; then
+        log "Planning completed successfully for task $task_id"
+        activity_log "plan.completed" "$worker_id" "$task_id" "exit_code=$result"
         echo ""
         echo "Plan saved to: .ralph/plans/${task_id}.md"
         echo ""
@@ -127,6 +139,8 @@ do_plan() {
         echo "  cat .ralph/plans/${task_id}.md  # Review the plan"
         echo "  wiggum start $task_id           # Start task execution"
     else
+        log_error "Planning failed for task $task_id (exit_code=$result)"
+        activity_log "plan.failed" "$worker_id" "$task_id" "exit_code=$result"
         echo ""
         echo "Planning did not complete successfully (exit: $result)"
         if [ -f "$worker_dir/plan-output.md" ]; then

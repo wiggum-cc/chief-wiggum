@@ -129,6 +129,18 @@ do_resume() {
     # Match any task prefix format: TASK-001, PIPELINE-001, etc.
     task_id=$(echo "$worker_id" | sed -E 's/worker-([A-Za-z]{2,10}-[0-9]{1,4})-.*/\1/')
 
+    # Initialize logging for resume command
+    mkdir -p "$RALPH_DIR/logs"
+    export LOG_FILE="$RALPH_DIR/logs/resume.log"
+    source "$WIGGUM_HOME/lib/utils/activity-log.sh"
+    activity_init "$PROJECT_DIR"
+
+    log "Resuming worker $worker_id"
+    log_debug "worker_dir=$worker_dir"
+    log_debug "task_id=$task_id"
+    log_debug "force_mode=$force_mode"
+    activity_log "resume.started" "$worker_id" "$task_id"
+
     # Check if already running
     if [ -f "$worker_dir/agent.pid" ]; then
         local existing_pid
@@ -293,6 +305,10 @@ do_resume() {
         _msg "Valid steps from pipeline '$PIPELINE_NAME': $valid_steps"
         exit $EXIT_ERROR
     fi
+
+    log "Resume decision: start from '$resume_step' step (index $step_idx)"
+    log_debug "needs_resume_decide=$needs_resume_decide"
+    activity_log "resume.decision" "$worker_id" "$task_id" "resume_step=$resume_step" "step_idx=$step_idx"
 
     _msg "Resume decision: start from '$resume_step' step (index $step_idx)"
     _msg ""

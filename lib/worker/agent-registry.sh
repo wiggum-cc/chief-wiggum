@@ -155,13 +155,13 @@ load_agent() {
         log_debug "Agent $agent_type has no agent_output_files (outputs not validated)"
     fi
 
-    # Log what was loaded
+    # Log what was loaded (INFO level for visibility)
     if [ "$has_md" = true ] && [ "$has_sh" = true ]; then
-        log_debug "Loaded hybrid agent: $agent_type (markdown + shell overrides)"
+        log "Loading hybrid agent: $agent_type (MD + SH)"
     elif [ "$has_md" = true ]; then
-        log_debug "Loaded markdown agent: $agent_type"
+        log "Loading markdown agent: $agent_type"
     else
-        log_debug "Loaded shell agent: $agent_type"
+        log "Loading shell agent: $agent_type"
     fi
 
     return 0
@@ -317,14 +317,15 @@ run_agent() {
 
     # Call on_init hook before PID file creation
     if type agent_on_init &>/dev/null; then
-        log_debug "Calling agent_on_init hook"
+        log_debug "Calling agent_on_init hook for $agent_type"
         if ! agent_on_init "$worker_dir" "$project_dir"; then
-            log_error "agent_on_init hook failed"
+            log_error "agent_on_init hook failed for $agent_type"
             if type agent_on_error &>/dev/null; then
                 agent_on_error "$worker_dir" "$EXIT_AGENT_INIT_FAILED" "init"
             fi
             return "$EXIT_AGENT_INIT_FAILED"
         fi
+        log_debug "agent_on_init completed for $agent_type"
     fi
 
     # Initialize agent lifecycle (PID, signals)
@@ -480,9 +481,10 @@ run_sub_agent() {
         is_readonly=true
     fi
     if [ "$is_readonly" = true ] && [ -d "$workspace" ]; then
-        log_debug "Creating git safety checkpoint for read-only agent: $agent_type"
+        log_debug "Creating git checkpoint before sub-agent: $agent_type (readonly=$is_readonly)"
         if git_safety_checkpoint "$workspace"; then
             git_checkpoint="$GIT_SAFETY_CHECKPOINT_SHA"
+            log_debug "Git checkpoint created: ${git_checkpoint:0:8}"
         else
             log_warn "Failed to create git checkpoint, proceeding without safety net"
         fi
@@ -547,7 +549,8 @@ run_sub_agent() {
 
     # For read-only agents, restore to checkpoint (discard any changes)
     if [ -n "$git_checkpoint" ] && [ -d "$workspace" ]; then
-        log_debug "Restoring git safety checkpoint for read-only agent: $agent_type"
+        log_debug "Sub-agent $agent_type completed, restoring checkpoint (readonly=$is_readonly)"
+        log_debug "Restoring git checkpoint: ${git_checkpoint:0:8}"
         git_safety_restore "$workspace" "$git_checkpoint"
     fi
 

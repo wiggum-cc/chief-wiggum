@@ -239,6 +239,16 @@ _run_service_command() {
     (
         cd "$dir" || exit 1
 
+        # Initialize logging for service
+        export LOG_FILE="$_RUNNER_RALPH_DIR/logs/service-${id}.log"
+        source "$WIGGUM_HOME/lib/core/logger.sh"
+        source "$WIGGUM_HOME/lib/utils/activity-log.sh"
+        activity_init "$_RUNNER_PROJECT_DIR"
+
+        log "Service $id starting (type: command)"
+        log_debug "command=$command"
+        log_debug "working_dir=$dir"
+
         # Add WIGGUM_HOME to path for commands
         export PATH="$WIGGUM_HOME/bin:$PATH"
         export RALPH_DIR="$_RUNNER_RALPH_DIR"
@@ -246,12 +256,19 @@ _run_service_command() {
         export SERVICE_ID="$id"
         export SERVICE_START_TIME="$start_time"
 
+        activity_log "service.started" "" "" "service=$id" "type=command"
+
         # Run with limits prefix
+        local _exit_code=0
         if [ -n "$limits_prefix" ]; then
-            eval "${limits_prefix}bash -c $(printf '%q' "$command")"
+            eval "${limits_prefix}bash -c $(printf '%q' "$command")" || _exit_code=$?
         else
-            bash -c "$command"
+            bash -c "$command" || _exit_code=$?
         fi
+
+        log "Service $id completed (exit_code=$_exit_code)"
+        activity_log "service.completed" "" "" "service=$id" "exit_code=$_exit_code"
+        exit $_exit_code
     ) &
 
     local pid=$!
@@ -323,10 +340,22 @@ _run_service_function() {
 
     # Run in background
     (
+        # Initialize logging for service
+        export LOG_FILE="$_RUNNER_RALPH_DIR/logs/service-${id}.log"
+        source "$WIGGUM_HOME/lib/core/logger.sh"
+        source "$WIGGUM_HOME/lib/utils/activity-log.sh"
+        activity_init "$_RUNNER_PROJECT_DIR"
+
+        log "Service $id starting (type: function)"
+        log_debug "function=$func"
+        log_debug "args=${func_args[*]:-}"
+
         export RALPH_DIR="$_RUNNER_RALPH_DIR"
         export PROJECT_DIR="$_RUNNER_PROJECT_DIR"
         export SERVICE_ID="$id"
         export SERVICE_START_TIME="$start_time"
+
+        activity_log "service.started" "" "" "service=$id" "type=function"
 
         # Apply nice if configured
         if [ -n "$nice_value" ]; then
@@ -338,6 +367,7 @@ _run_service_function() {
         # access to all inherited function definitions from the parent shell.
         # For timeout, we use background process monitoring instead of the
         # 'timeout' command which would spawn a new bash losing context.
+        local _exit_code=0
         if [ "$timeout" -gt 0 ]; then
             # Run function in nested background for timeout handling
             "$func" "${func_args[@]}" &
@@ -355,13 +385,20 @@ _run_service_function() {
                 kill -TERM "$func_pid" 2>/dev/null || true
                 sleep 1
                 kill -9 "$func_pid" 2>/dev/null || true
+                log "Service $id timed out after ${timeout}s"
+                activity_log "service.completed" "" "" "service=$id" "exit_code=124" "timeout=true"
                 exit 124  # Standard timeout exit code
             fi
 
             wait "$func_pid"
+            _exit_code=$?
         else
-            "$func" "${func_args[@]}"
+            "$func" "${func_args[@]}" || _exit_code=$?
         fi
+
+        log "Service $id completed (exit_code=$_exit_code)"
+        activity_log "service.completed" "" "" "service=$id" "exit_code=$_exit_code"
+        exit $_exit_code
     ) &
 
     local pid=$!
@@ -428,20 +465,37 @@ _run_service_pipeline() {
 
     # Run pipeline in background
     (
+        # Initialize logging for service
+        export LOG_FILE="$_RUNNER_RALPH_DIR/logs/service-${id}.log"
+        source "$WIGGUM_HOME/lib/core/logger.sh"
+        source "$WIGGUM_HOME/lib/utils/activity-log.sh"
+        activity_init "$_RUNNER_PROJECT_DIR"
+
+        log "Service $id starting (type: pipeline)"
+        log_debug "pipeline=$pipeline_name"
+        log_debug "config=$pipeline_config"
+
         export RALPH_DIR="$_RUNNER_RALPH_DIR"
         export PROJECT_DIR="$_RUNNER_PROJECT_DIR"
         export SERVICE_ID="$id"
         export SERVICE_START_TIME="$start_time"
 
+        activity_log "service.started" "" "" "service=$id" "type=pipeline" "pipeline=$pipeline_name"
+
         # Source pipeline runner
         source "$WIGGUM_HOME/lib/pipeline/pipeline-runner.sh"
 
         # Run the pipeline
+        local _exit_code=0
         if [ -n "$limits_prefix" ]; then
-            eval "${limits_prefix}pipeline_run '$pipeline_config' '${extra_args[*]}'"
+            eval "${limits_prefix}pipeline_run '$pipeline_config' '${extra_args[*]}'" || _exit_code=$?
         else
-            pipeline_run "$pipeline_config" "${extra_args[@]}"
+            pipeline_run "$pipeline_config" "${extra_args[@]}" || _exit_code=$?
         fi
+
+        log "Service $id completed (exit_code=$_exit_code)"
+        activity_log "service.completed" "" "" "service=$id" "exit_code=$_exit_code"
+        exit $_exit_code
     ) &
 
     local pid=$!
@@ -496,21 +550,40 @@ _run_service_agent() {
 
     # Run agent in background
     (
+        # Initialize logging for service
+        export LOG_FILE="$_RUNNER_RALPH_DIR/logs/service-${id}.log"
+        source "$WIGGUM_HOME/lib/core/logger.sh"
+        source "$WIGGUM_HOME/lib/utils/activity-log.sh"
+        activity_init "$_RUNNER_PROJECT_DIR"
+
+        log "Service $id starting (type: agent)"
+        log_debug "agent=$agent_type"
+        log_debug "worker_dir=$worker_dir"
+        log_debug "max_iterations=$max_iterations"
+        log_debug "max_turns=$max_turns"
+
         export RALPH_DIR="$_RUNNER_RALPH_DIR"
         export PROJECT_DIR="$_RUNNER_PROJECT_DIR"
         export SERVICE_ID="$id"
         export SERVICE_START_TIME="$start_time"
         export WIGGUM_HOME
 
+        activity_log "service.started" "" "" "service=$id" "type=agent" "agent=$agent_type"
+
         # Source agent registry
         source "$WIGGUM_HOME/lib/worker/agent-registry.sh"
 
         # Run the agent
+        local _exit_code=0
         if [ -n "$limits_prefix" ]; then
-            eval "${limits_prefix}run_agent '$agent_type' '$worker_dir' '$_RUNNER_PROJECT_DIR' '$monitor_interval' '$max_iterations' '$max_turns' ${extra_args[*]}"
+            eval "${limits_prefix}run_agent '$agent_type' '$worker_dir' '$_RUNNER_PROJECT_DIR' '$monitor_interval' '$max_iterations' '$max_turns' ${extra_args[*]}" || _exit_code=$?
         else
-            run_agent "$agent_type" "$worker_dir" "$_RUNNER_PROJECT_DIR" "$monitor_interval" "$max_iterations" "$max_turns" "${extra_args[@]}"
+            run_agent "$agent_type" "$worker_dir" "$_RUNNER_PROJECT_DIR" "$monitor_interval" "$max_iterations" "$max_turns" "${extra_args[@]}" || _exit_code=$?
         fi
+
+        log "Service $id completed (exit_code=$_exit_code)"
+        activity_log "service.completed" "" "" "service=$id" "exit_code=$_exit_code"
+        exit $_exit_code
     ) &
 
     local pid=$!
