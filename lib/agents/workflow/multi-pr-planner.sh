@@ -26,6 +26,7 @@ agent_required_paths() {
 # Source dependencies
 agent_source_core
 agent_source_once
+source "$WIGGUM_HOME/lib/core/platform.sh"
 
 # Source batch coordination for multi-PR workflow
 source "$WIGGUM_HOME/lib/scheduler/batch-coordination.sh"
@@ -358,7 +359,7 @@ _setup_batch_coordination() {
                 local position="${BASH_REMATCH[1]}"
                 # Get the task_id from the most recent plan tag
                 local recent_task
-                recent_task=$(echo "$text_content" | grep -oP '<plan task_id="\K[^"]+' | tail -1) || true
+                recent_task=$(echo "$text_content" | grep_pcre_match '<plan task_id="\K[^"]+' | tail -1) || true
                 if [ -n "$recent_task" ] && [ -z "${task_positions[$recent_task]:-}" ]; then
                     task_positions[$recent_task]=$((position - 1))  # 0-indexed
                 fi

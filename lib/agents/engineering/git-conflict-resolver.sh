@@ -55,7 +55,10 @@ agent_run() {
 
     # Pre-flight: Commit any uncommitted changes before attempting resolution
     # This prevents "Your local changes would be overwritten" errors during merge
-    if ! git -C "$workspace" diff --quiet || ! git -C "$workspace" diff --cached --quiet; then
+    # IMPORTANT: Skip this if a merge is in progress - we must not stage conflicted files
+    # as that would mark them as "resolved" even though they still have conflict markers
+    if [ ! -f "$workspace/.git/MERGE_HEAD" ] && \
+       { ! git -C "$workspace" diff --quiet || ! git -C "$workspace" diff --cached --quiet; }; then
         log "Working tree has uncommitted changes - committing before conflict resolution"
         git -C "$workspace" add -A
         git -C "$workspace" commit -m "chore: auto-commit before conflict resolution" 2>/dev/null || true
@@ -73,6 +76,44 @@ agent_run() {
     # Check for conflicts
     local conflicted_files
     conflicted_files=$(git -C "$workspace" diff --name-only --diff-filter=U 2>/dev/null)
+
+    # Check if merge is in progress but files were already staged (edge case)
+    if [ -f "$workspace/.git/MERGE_HEAD" ] && [ -z "$conflicted_files" ]; then
+        # MERGE_HEAD exists but no unmerged files - check if working tree has conflict markers
+        local has_markers=false
+        if grep -rq '^<<<<<<< ' "$workspace" --include='*.ts' --include='*.js' --include='*.json' \
+             --include='*.py' --include='*.sh' --include='*.md' --include='*.rs' --include='*.go' \
+             --include='*.java' --include='*.svelte' --include='*.vue' 2>/dev/null; then
+            has_markers=true
+        fi
+
+        if [ "$has_markers" = true ]; then
+            log_warn "Merge in progress with staged files containing conflict markers - aborting merge"
+            # Abort the bad merge state and report failure
+            git -C "$workspace" merge --abort 2>/dev/null || true
+            agent_setup_context "$worker_dir" "$workspace" "$project_dir"
+            agent_write_report "$worker_dir" "# Conflict Resolution Summary
+
+**Status:** Merge aborted
+
+A merge was in progress but files were improperly staged with conflict markers still present.
+The merge has been aborted. Re-run the sync-main step to retry."
+            agent_write_result "$worker_dir" "FAIL" '{"error":"staged_conflict_markers"}'
+            return 0
+        else
+            # Staged files don't have markers - merge was resolved, just need to commit
+            log "Merge in progress with resolved conflicts - completing merge"
+            git -C "$workspace" commit --no-edit 2>/dev/null || true
+            agent_setup_context "$worker_dir" "$workspace" "$project_dir"
+            agent_write_report "$worker_dir" "# Conflict Resolution Summary
+
+**Status:** Merge completed
+
+A merge was in progress with already-resolved conflicts. The merge has been committed."
+            agent_write_result "$worker_dir" "PASS"
+            return 0
+        fi
+    fi
 
     if [ -z "$conflicted_files" ]; then
         log "No merge conflicts detected in workspace"

@@ -97,7 +97,7 @@ work_log_write_iteration() {
     # Extract files changed from log file if available
     local files_changed=""
     if [ -n "$log_file" ] && [ -f "$log_file" ]; then
-        files_changed=$(grep_pcre_match '"file_path"\s*:\s*"\K[^"]+' "$log_file" | sort -u | head -20)
+        files_changed=$(grep_pcre_match '"file_path"\s*:\s*"\K[^"]+' "$log_file" | sort -u | head -20) || true
     fi
 
     # Write iteration markdown

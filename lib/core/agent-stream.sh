@@ -13,6 +13,9 @@ set -euo pipefail
 [ -n "${_AGENT_STREAM_LOADED:-}" ] && return 0
 _AGENT_STREAM_LOADED=1
 
+# Source platform helpers for portable grep
+source "${WIGGUM_HOME:-$(dirname "$(dirname "$(dirname "${BASH_SOURCE[0]}")")")}/lib/core/platform.sh"
+
 # =============================================================================
 # STREAM-JSON EXTRACTION UTILITIES
 # =============================================================================
@@ -74,7 +77,7 @@ _extract_session_id_from_log() {
 
     # Look for session_id in iteration_start JSON object (typically first line)
     # Pattern matches: "session_id":"<uuid>" where uuid is hex with dashes
-    grep -oP '"session_id"\s*:\s*"\K[a-f0-9-]+(?=")' "$log_file" 2>/dev/null | head -1 || true
+    grep_pcre_match '"session_id"\s*:\s*"\K[a-f0-9-]+(?=")' "$log_file" | head -1 || true
 }
 
 # Resume session with focused prompt to extract result (backup mechanism)
