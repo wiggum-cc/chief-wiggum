@@ -334,8 +334,31 @@ _run_service_function() {
         fi
 
         # Call the function with args
-        if [ "$timeout" -gt 0 ] && command -v timeout &>/dev/null; then
-            timeout "$timeout" bash -c "$(declare -f "$func"); $func $(printf '%q ' "${func_args[@]}")"
+        # Note: We run the function directly (not via bash -c) to preserve
+        # access to all inherited function definitions from the parent shell.
+        # For timeout, we use background process monitoring instead of the
+        # 'timeout' command which would spawn a new bash losing context.
+        if [ "$timeout" -gt 0 ]; then
+            # Run function in nested background for timeout handling
+            "$func" "${func_args[@]}" &
+            local func_pid=$!
+
+            # Monitor for timeout
+            local waited=0
+            while kill -0 "$func_pid" 2>/dev/null && [ "$waited" -lt "$timeout" ]; do
+                sleep 1
+                ((++waited))
+            done
+
+            if kill -0 "$func_pid" 2>/dev/null; then
+                # Timed out - kill the process
+                kill -TERM "$func_pid" 2>/dev/null || true
+                sleep 1
+                kill -9 "$func_pid" 2>/dev/null || true
+                exit 124  # Standard timeout exit code
+            fi
+
+            wait "$func_pid"
         else
             "$func" "${func_args[@]}"
         fi
@@ -587,9 +610,27 @@ service_run_sync() {
                 export PROJECT_DIR="$_RUNNER_PROJECT_DIR"
                 export SERVICE_ID="$id"
 
-                if [ "$timeout" -gt 0 ] && command -v timeout &>/dev/null; then
-                    timeout "$timeout" bash -c "$(declare -f "$func"); $func $(printf '%q ' "${func_args[@]}")"
-                    exit_code=$?
+                # Run function directly to preserve inherited function definitions.
+                # For timeout, use background process monitoring.
+                if [ "$timeout" -gt 0 ]; then
+                    "$func" "${func_args[@]}" &
+                    local func_pid=$!
+
+                    local waited=0
+                    while kill -0 "$func_pid" 2>/dev/null && [ "$waited" -lt "$timeout" ]; do
+                        sleep 1
+                        ((++waited))
+                    done
+
+                    if kill -0 "$func_pid" 2>/dev/null; then
+                        kill -TERM "$func_pid" 2>/dev/null || true
+                        sleep 1
+                        kill -9 "$func_pid" 2>/dev/null || true
+                        exit_code=124
+                    else
+                        wait "$func_pid"
+                        exit_code=$?
+                    fi
                 else
                     "$func" "${func_args[@]}"
                     exit_code=$?
