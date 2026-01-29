@@ -14,6 +14,7 @@ from ..data.conversation_parser import (
     get_conversation_summary,
     truncate_text,
     format_tool_result,
+    has_logs_changed,
 )
 from ..data.worker_scanner import scan_workers
 from ..data.models import Conversation, ConversationTurn, ToolCall
@@ -170,6 +171,7 @@ class ConversationPanel(Widget):
         self.current_worker: str | None = None
         self.conversation: Conversation | None = None
         self._last_data_hash: str = ""
+        self._last_workers_dir_mtime: float = 0.0
 
     def _compute_data_hash(self, conversation: Conversation | None) -> str:
         """Compute a hash of conversation data for change detection."""
@@ -220,13 +222,17 @@ class ConversationPanel(Widget):
             worker_dir = self.ralph_dir / "workers" / worker.id
             logs_dir = worker_dir / "logs"
             if logs_dir.is_dir():
-                # Use **/*.log to find logs in nested subdirectories
-                log_files = list(logs_dir.glob("**/*.log"))
-                if log_files:
-                    # Get the earliest log creation time
-                    min_mtime = min(f.stat().st_mtime for f in log_files)
-                    label = f"{worker.task_id} - {worker.status.value}"
-                    workers_with_mtime.append((worker.id, label, min_mtime))
+                # Quick check: if logs dir exists, use worker timestamp for ordering
+                # This avoids expensive glob/stat on all log files
+                try:
+                    # Check if there are any log files (quick existence check)
+                    has_logs = any(logs_dir.glob("*.log")) or any(logs_dir.glob("*/*.log"))
+                    if has_logs:
+                        # Use worker timestamp from scanner for ordering
+                        label = f"{worker.task_id} - {worker.status.value}"
+                        workers_with_mtime.append((worker.id, label, worker.timestamp))
+                except OSError:
+                    continue
 
         # Sort by creation time ascending (oldest first)
         workers_with_mtime.sort(key=lambda x: x[2])
@@ -234,6 +240,16 @@ class ConversationPanel(Widget):
 
     def _refresh_workers_list(self) -> None:
         """Periodically refresh the worker dropdown options."""
+        # Quick check: has workers directory changed?
+        workers_dir = self.ralph_dir / "workers"
+        try:
+            current_mtime = workers_dir.stat().st_mtime
+            if current_mtime == self._last_workers_dir_mtime:
+                return  # No change, skip refresh
+            self._last_workers_dir_mtime = current_mtime
+        except OSError:
+            return
+
         old_list = self._workers_list[:]
         self._load_workers()
         if old_list != self._workers_list:
@@ -662,9 +678,15 @@ class ConversationPanel(Widget):
             return
 
         worker_dir = self.ralph_dir / "workers" / self.current_worker
+
+        # Quick mtime check - skip parsing if logs haven't changed
+        if not has_logs_changed(worker_dir):
+            return
+
+        # Logs changed, re-parse (will use cache if mtime matches)
         new_conversation = parse_iteration_logs(worker_dir)
 
-        # Check if data actually changed
+        # Check if data actually changed (in case cache returned same data)
         new_hash = self._compute_data_hash(new_conversation)
         if new_hash == self._last_data_hash:
             return  # No change, skip refresh

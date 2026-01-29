@@ -131,14 +131,28 @@ git diff                # Actual changes
 
 Read @../prd.md to understand what SHOULD have been built.
 
-## Step 2: Verify Build
+## Step 2: Verify Build (ALL Languages)
 
-Run the project's build command:
-- Rust: `cargo check` or `cargo build`
-- TypeScript: `tsc` or `npm run build`
-- Go: `go build ./...`
+**CRITICAL: Run ALL applicable build commands for polyglot projects.**
 
-**If build fails → immediate FAIL.** Report the build errors clearly.
+First, detect which package managers/build systems are present:
+```bash
+ls package.json Cargo.toml go.mod pyproject.toml pom.xml 2>/dev/null
+```
+
+Then run ALL applicable build commands:
+
+| If Present | Build Command | Type Check Command |
+|------------|---------------|-------------------|
+| Cargo.toml | `cargo build` | `cargo check` |
+| package.json | `npm run build` | `npm run check` or `npx tsc --noEmit` |
+| go.mod | `go build ./...` | `go vet ./...` |
+| pyproject.toml | - | `mypy .` or `pyright` |
+
+**For polyglot projects (e.g., Rust backend + TypeScript frontend):**
+- Run BOTH `cargo check` AND `npm run check`
+- Run BOTH `cargo build` AND `npm run build`
+- **ANY build failure → immediate FIX.** Report ALL build errors clearly.
 
 ## Step 3: Verify Each Requirement (RIGOROUS)
 
@@ -182,7 +196,23 @@ For each new feature, trace the path:
 - New code is properly imported?
 - Dependencies are satisfied?
 
-## Step 6: Verify Test Scope
+## Step 6: Run Tests (ALL Languages)
+
+**CRITICAL: Run ALL applicable test commands for polyglot projects.**
+
+```bash
+# Run ALL test suites that exist
+[ -f Cargo.toml ] && cargo test
+[ -f package.json ] && npm test
+[ -f go.mod ] && go test ./...
+[ -f pyproject.toml ] && pytest
+```
+
+**For polyglot projects:**
+- Run BOTH `cargo test` AND `npm test`
+- **ANY test failure → FIX.** Report ALL failing tests clearly.
+
+## Step 7: Verify Test Scope
 
 Check that the right types of tests exist:
 

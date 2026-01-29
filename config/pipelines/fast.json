@@ -43,7 +43,11 @@
           "id": "validation-fix",
           "agent": "engineering.generic-fix",
           "max": 2,
-          "commit_after": true
+          "commit_after": true,
+          "on_result": {
+            "PASS": { "jump": "master-followup" },
+            "FIX": { "jump": "master-followup" }
+          }
         }
       }
     }

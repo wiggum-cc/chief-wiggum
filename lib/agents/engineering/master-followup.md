@@ -120,13 +120,27 @@ Scan the codebase for security vulnerabilities, focusing on the code that was im
 
 Write tests for code changes using the project's existing test framework.
 
-### Step 2.1: Discover Test Framework
+### Step 2.1: Discover ALL Test Frameworks (CRITICAL)
 
-Find what the project uses:
-- `package.json` -> jest, mocha, vitest in devDependencies
-- `pytest.ini`, `pyproject.toml` -> pytest
-- `*_test.go` files -> go test
-- Existing test files -> follow their patterns
+**CRITICAL: Polyglot projects have MULTIPLE test frameworks. You MUST identify ALL of them.**
+
+Check for ALL of these:
+```bash
+ls package.json Cargo.toml go.mod pyproject.toml pom.xml tests/test-runner.sh 2>/dev/null
+```
+
+| If Present | Test Framework |
+|------------|---------------|
+| package.json | jest, mocha, vitest (check devDependencies) |
+| Cargo.toml | cargo test |
+| go.mod | go test |
+| pyproject.toml | pytest |
+| pom.xml | maven test |
+| tests/test-runner.sh | custom bash tests |
+
+**For polyglot projects (e.g., Rust backend + TypeScript frontend):**
+- Write tests using BOTH frameworks where appropriate
+- Run BOTH test suites
 
 **If no test framework exists -> SKIP this phase**
 
@@ -136,12 +150,22 @@ Read the spec FIRST (docs/ and @../prd.md):
 - What behavior does the spec require?
 - What edge cases does the spec define?
 
-### Step 2.3: Write and Run Tests
+### Step 2.3: Write and Run Tests (ALL LANGUAGES)
 
 - Place tests in correct location following project structure
 - Use existing assertion patterns
-- Run tests: `npm test`, `pytest`, `go test`, `cargo test`, etc.
+
+**CRITICAL: Run ALL applicable test suites for polyglot projects:**
+```bash
+# Run ALL test suites that exist
+[ -f Cargo.toml ] && cargo test
+[ -f package.json ] && npm test
+[ -f go.mod ] && go test ./...
+[ -f pyproject.toml ] && pytest
+```
+
 - Fix test bugs yourself; report implementation bugs as FIX
+- **ANY test failure in ANY suite requires resolution**
 
 ### Test Result Criteria
 * **PASS**: Tests written and passing

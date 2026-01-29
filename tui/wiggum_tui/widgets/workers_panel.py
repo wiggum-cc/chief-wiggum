@@ -1,5 +1,6 @@
 """Workers panel widget with DataTable."""
 
+import time
 from pathlib import Path
 from datetime import datetime
 from textual.app import ComposeResult
@@ -11,6 +12,27 @@ from textual.message import Message
 from ..data.worker_scanner import scan_workers, get_worker_counts
 from ..data.models import Worker, WorkerStatus
 from ..actions.worker_control import stop_worker, kill_worker
+
+
+def format_duration(seconds: int) -> str:
+    """Format duration in human-readable format.
+
+    Args:
+        seconds: Duration in seconds.
+
+    Returns:
+        Formatted string like "2h 15m" or "45m 30s" or "10s".
+    """
+    if seconds < 0:
+        return "-"
+    hours, remainder = divmod(seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours > 0:
+        return f"{hours}h {minutes}m"
+    elif minutes > 0:
+        return f"{minutes}m {secs}s"
+    else:
+        return f"{secs}s"
 
 
 class WorkersPanel(Widget):
@@ -104,7 +126,7 @@ class WorkersPanel(Widget):
             return
         try:
             table = self.query_one("#workers-table", DataTable)
-            table.add_columns("Status", "Worker ID", "Task", "PID", "Started", "PR URL")
+            table.add_columns("Status", "Worker ID", "Task", "PID", "Duration", "PR URL")
             self._populate_table(table)
         except Exception as e:
             self.log.error(f"Failed to populate workers table: {e}")
@@ -125,16 +147,17 @@ class WorkersPanel(Widget):
                 pass
 
         table.clear()
+        now_ts = int(time.time())
         for worker in self._workers_list:
             status_style = self._get_status_style(worker.status)
             status_text = f"[{status_style}]{worker.status.value.upper()}[/]"
 
-            # Format timestamp
+            # Format duration from start timestamp
             try:
-                dt = datetime.fromtimestamp(worker.timestamp)
-                started = dt.strftime("%H:%M:%S")
+                duration_secs = now_ts - worker.timestamp
+                duration = format_duration(duration_secs)
             except (ValueError, OSError):
-                started = "Unknown"
+                duration = "-"
 
             # Format PID
             pid_str = str(worker.pid) if worker.pid else "-"
@@ -153,7 +176,7 @@ class WorkersPanel(Widget):
                 worker_id,
                 worker.task_id,
                 pid_str,
-                started,
+                duration,
                 pr_url,
                 key=worker.id,
             )
@@ -287,28 +310,29 @@ class WorkersPanel(Widget):
             pass
 
     def refresh_data(self) -> None:
-        """Refresh worker data and re-render only if data changed."""
+        """Refresh worker data and re-render."""
         self._load_workers()
 
-        # Check if data actually changed
+        # Check if worker state (not duration) actually changed
         new_hash = self._compute_data_hash(self._workers_list)
-        if new_hash == self._last_data_hash:
-            return  # No change, skip refresh
-        self._last_data_hash = new_hash
+        state_changed = new_hash != self._last_data_hash
+        if state_changed:
+            self._last_data_hash = new_hash
 
-        # Update header
-        try:
-            counts = get_worker_counts(self._workers_list)
-            header = self.query_one(".workers-header", Static)
-            header.update(
-                f"[bold]Workers[/] │ "
-                f"[#a6e3a1]Running: {counts['running']}[/] │ "
-                f"[#89b4fa]Completed: {counts['completed']}[/] │ "
-                f"[#f38ba8]Failed: {counts['failed']}[/] │ "
-                f"Total: {counts['total']}"
-            )
-        except Exception:
-            pass
+        # Update header only when worker state changes (not duration)
+        if state_changed:
+            try:
+                counts = get_worker_counts(self._workers_list)
+                header = self.query_one(".workers-header", Static)
+                header.update(
+                    f"[bold]Workers[/] │ "
+                    f"[#a6e3a1]Running: {counts['running']}[/] │ "
+                    f"[#89b4fa]Completed: {counts['completed']}[/] │ "
+                    f"[#f38ba8]Failed: {counts['failed']}[/] │ "
+                    f"Total: {counts['total']}"
+                )
+            except Exception:
+                pass
 
         # Update table while preserving cursor position
         try:

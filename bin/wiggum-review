@@ -38,8 +38,8 @@ Commands:
   cleanup                   Delete merged branches
   status                    Show integration status
   task <patterns> sync      Sync PR comments for tasks matching patterns
-  task <patterns> fix       Fix PR comments using ralph loop
-  task <patterns> fix --pipeline  Full fix workflow: fix -> sync -> resolve -> push -> merge
+  task <patterns> fix       Full fix workflow: fix -> test -> push -> merge (default)
+  task <patterns> fix --quick  Quick fix without test verification (use with caution)
   task <pattern> resolve    Sync with main and resolve merge conflicts
   task <pattern> commit     Create commit in worker workspace
   task <pattern> push       Push worker branch to remote
@@ -79,7 +79,8 @@ Examples:
   wiggum review cleanup                 # Delete merged branches
   wiggum review task TASK-030 sync      # Sync comments for TASK-030
   wiggum review task TASK-030,TASK-031 sync  # Sync multiple tasks
-  wiggum review task TASK-030 fix       # Fix synced comments
+  wiggum review task TASK-030 fix       # Fix comments with test verification (default)
+  wiggum review task TASK-030 fix --quick  # Fix comments without tests (faster)
   wiggum review task TASK-030 resolve   # Sync main & resolve conflicts
   wiggum review task TASK-030 resolve --no-fetch  # Resolve without syncing
   wiggum review task TASK-030 commit    # Create commit for task
@@ -463,14 +464,15 @@ cmd_task_sync() {
 }
 
 # Fix PR comments for a task (async launch)
-# Supports --pipeline flag to use fix pipeline for full workflow
+# Uses fix pipeline by default (with test verification)
+# Pass --quick to skip test verification (use with caution)
 cmd_task_fix() {
     local pattern="$1"
-    local use_pipeline="${2:-false}"
+    local quick_mode="${2:-false}"
 
     if [ -z "$pattern" ]; then
         error "Task pattern required"
-        echo "Usage: wiggum review task <pattern> fix [--pipeline]"
+        echo "Usage: wiggum review task <pattern> fix [--quick]"
         return 1
     fi
 
@@ -513,14 +515,16 @@ cmd_task_fix() {
     mkdir -p "$RALPH_DIR/logs"
 
     # Determine which agent/pipeline to use
-    local agent_type="engineering.pr-comment-fix"
-    local pipeline_export=""
-    if [ "$use_pipeline" = "true" ]; then
-        agent_type="system.task-worker"
-        pipeline_export='export WIGGUM_PIPELINE="fix"'
-        log "Launching fix pipeline for $(basename "$worker_dir")"
+    # Default: use full fix pipeline with test verification
+    # --quick: use standalone agent without tests (faster but risky)
+    local agent_type="system.task-worker"
+    local pipeline_export='export WIGGUM_PIPELINE="fix"'
+    if [ "$quick_mode" = "true" ]; then
+        agent_type="engineering.pr-comment-fix"
+        pipeline_export=""
+        log "Launching quick fix agent for $(basename "$worker_dir") (no test verification)"
     else
-        log "Launching fix agent for $(basename "$worker_dir")"
+        log "Launching fix pipeline for $(basename "$worker_dir") (with test verification)"
     fi
 
     # Launch agent in background via setsid (new session, won't receive parent signals)
@@ -1053,11 +1057,11 @@ case "$COMMAND" in
             exit $EXIT_USAGE
         fi
 
-        # Check for --pipeline flag in remaining args
-        USE_FIX_PIPELINE=false
+        # Check for --quick flag in remaining args (skips test verification)
+        USE_QUICK_MODE=false
         for arg in "${ARGS[@]:2}"; do
-            if [ "$arg" = "--pipeline" ]; then
-                USE_FIX_PIPELINE=true
+            if [ "$arg" = "--quick" ]; then
+                USE_QUICK_MODE=true
             fi
         done
 
@@ -1066,7 +1070,7 @@ case "$COMMAND" in
                 cmd_task_sync "$TASK_PATTERNS"
                 ;;
             fix)
-                cmd_task_fix "$TASK_PATTERNS" "$USE_FIX_PIPELINE"
+                cmd_task_fix "$TASK_PATTERNS" "$USE_QUICK_MODE"
                 ;;
             resolve)
                 cmd_task_resolve "$TASK_PATTERNS" "$NO_FETCH"

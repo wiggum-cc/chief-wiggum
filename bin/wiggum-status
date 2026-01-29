@@ -26,6 +26,7 @@ Description:
   Displays the current status of all workers including:
   - Which workers are running
   - Worker PIDs
+  - How long the task has been running
   - Context window usage ([MODEL] Context: N%)
   - Recent activity from logs
 
@@ -33,6 +34,36 @@ Examples:
   wiggum status        # Show current worker status
 
 EOF
+}
+
+# Format duration in human-readable format
+# Args: duration_seconds
+# Returns: formatted string like "2h 15m" or "45m 30s" or "10s"
+format_duration() {
+    local seconds="$1"
+    local hours=$((seconds / 3600))
+    local minutes=$(((seconds % 3600) / 60))
+    local secs=$((seconds % 60))
+
+    if ((hours > 0)); then
+        echo "${hours}h ${minutes}m"
+    elif ((minutes > 0)); then
+        echo "${minutes}m ${secs}s"
+    else
+        echo "${secs}s"
+    fi
+}
+
+# Extract start timestamp from worker directory name
+# Worker format: worker-TASK-XXX-<timestamp>
+# Args: worker_name
+# Returns: timestamp (Unix epoch seconds) or empty if not found
+get_worker_start_timestamp() {
+    local worker_name="$1"
+    # Extract the timestamp suffix (last component after final dash)
+    if [[ "$worker_name" =~ -([0-9]+)$ ]]; then
+        echo "${BASH_REMATCH[1]}"
+    fi
 }
 
 # Parse verbose flags first
@@ -116,11 +147,22 @@ else
 fi
 echo ""
 
-# Display running workers with context usage
+# Display running workers with duration and context usage
 for i in "${!worker_pids[@]}"; do
     worker_name="${worker_names[$i]}"
     worker_pid="${worker_pids[$i]}"
     worker_dir="$RALPH_DIR/workers/$worker_name"
+
+    # Calculate running duration from worker start timestamp
+    duration_info=""
+    start_ts=$(get_worker_start_timestamp "$worker_name")
+    if [ -n "$start_ts" ]; then
+        now_ts=$(date +%s)
+        duration=$((now_ts - start_ts))
+        if ((duration >= 0)); then
+            duration_info=" [$(format_duration "$duration")]"
+        fi
+    fi
 
     # Get context usage if available
     context_info=""
@@ -132,7 +174,7 @@ for i in "${!worker_pids[@]}"; do
         fi
     fi
 
-    echo "✓ Worker $worker_name (PID: $worker_pid) - RUNNING$context_info"
+    echo "✓ Worker $worker_name (PID: $worker_pid) - RUNNING$duration_info$context_info"
 done
 
 echo ""

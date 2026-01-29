@@ -81,31 +81,46 @@ Fix the issues reported by the upstream agent (see context above).
 3. **Run tests** after all fixes to verify nothing is broken
 4. **Repeat** until all issues are addressed
 
-## Build Verification (CRITICAL)
+## Build Verification (CRITICAL - ALL LANGUAGES)
 
-After EVERY fix, you MUST verify the code compiles:
+After EVERY fix, you MUST verify the code compiles.
 
-| Language | Build Command |
-|----------|---------------|
-| Rust | `cargo check` or `cargo build` |
-| TypeScript/JS | `npm run build` or `tsc` |
-| Python | `python -m py_compile <file>` or project's lint/type check |
-| Go | `go build ./...` |
-| Java | `mvn compile` or `gradle build` |
+**CRITICAL: For polyglot projects, run ALL applicable build commands.**
 
-**A fix that breaks compilation is NOT complete.**
+First, detect which build systems are present:
+```bash
+ls package.json Cargo.toml go.mod pyproject.toml pom.xml 2>/dev/null
+```
 
-## Test Verification
+Then run ALL applicable build commands:
 
-After fixing build issues, run the project's test command:
+| If Present | Build Command | Type Check Command |
+|------------|---------------|-------------------|
+| Cargo.toml | `cargo build` | `cargo check` |
+| package.json | `npm run build` | `npm run check` or `npx tsc --noEmit` |
+| go.mod | `go build ./...` | `go vet ./...` |
+| pyproject.toml | - | `mypy .` or `pyright` |
+| pom.xml | `mvn compile` | - |
 
-| Language | Test Command |
-|----------|--------------|
-| Rust | `cargo test` |
-| TypeScript/JS | `npm test` |
-| Python | `pytest` |
-| Go | `go test ./...` |
-| Java | `mvn test` or `gradle test` |
+**For polyglot projects (e.g., Rust backend + TypeScript frontend):**
+- Run BOTH `cargo check` AND `npm run check`
+- **ANY build failure means the fix is NOT complete.**
+
+## Test Verification (CRITICAL - ALL LANGUAGES)
+
+After fixing build issues, run ALL applicable test commands:
+
+| If Present | Test Command |
+|------------|--------------|
+| Cargo.toml | `cargo test` |
+| package.json | `npm test` |
+| go.mod | `go test ./...` |
+| pyproject.toml | `pytest` |
+| pom.xml | `mvn test` |
+
+**For polyglot projects:**
+- Run BOTH `cargo test` AND `npm test`
+- **ANY test failure means the fix is NOT complete.**
 
 ## Common Fixes
 

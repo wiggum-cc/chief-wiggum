@@ -73,44 +73,78 @@ TEST EXECUTION TASK:
 
 Run the project's existing tests to verify the code works correctly after recent changes.
 
-## Step 1: Identify Test Framework
+## Step 1: Identify ALL Test Frameworks (CRITICAL)
 
-Find the project's test framework:
-- `package.json` -> jest, mocha, vitest, ava, npm test
-- `pytest.ini`, `pyproject.toml`, `setup.cfg` -> pytest
-- `*_test.go` files -> go test
-- `Cargo.toml` -> cargo test
-- `build.gradle`, `pom.xml` -> gradle test, mvn test
-- Shell scripts in `tests/` -> custom test runner
+**CRITICAL: Polyglot projects have MULTIPLE test frameworks. You MUST identify ALL of them.**
+
+Check for ALL of these:
+```bash
+ls package.json Cargo.toml go.mod pyproject.toml pom.xml tests/test-runner.sh 2>/dev/null
+```
+
+| If Present | Test Framework |
+|------------|---------------|
+| package.json | jest, mocha, vitest, ava, npm test |
+| Cargo.toml | cargo test |
+| go.mod | go test |
+| pyproject.toml | pytest |
+| pom.xml | maven test |
+| tests/test-runner.sh | custom bash tests |
+
+**For polyglot projects (e.g., Rust + TypeScript):**
+- Identify BOTH frameworks
+- You MUST run BOTH test suites
 
 **If no test framework exists -> SKIP**
 
-## Step 2: Verify Build First
+## Step 2: Verify Build First (ALL LANGUAGES)
 
-Before running tests, verify the codebase compiles:
+Before running tests, verify ALL codebases compile:
 
-| Language | Build Command |
-|----------|---------------|
-| Rust | `cargo check` or `cargo build` |
-| TypeScript/JS | `npm run build` or `tsc` |
-| Go | `go build ./...` |
-| Python | `python -m py_compile` or type checker |
-| Java | `mvn compile` or `gradle build` |
+```bash
+# Run ALL applicable build commands
+[ -f Cargo.toml ] && cargo check
+[ -f package.json ] && npm run build
+[ -f go.mod ] && go build ./...
+```
 
-**If the build fails -> report as FIX** with compilation errors.
+| If Present | Build Command |
+|------------|---------------|
+| Cargo.toml | `cargo check` or `cargo build` |
+| package.json | `npm run build` or `npm run check` |
+| go.mod | `go build ./...` |
+| pyproject.toml | `mypy .` or type checker |
+| pom.xml | `mvn compile` |
 
-## Step 3: Run Tests
+**ANY build failure -> report as FIX** with compilation errors.
 
-Execute the project's test command:
+## Step 3: Run ALL Tests (CRITICAL)
 
-| Language | Test Command |
-|----------|--------------|
-| Rust | `cargo test` |
-| TypeScript/JS | `npm test` |
-| Python | `pytest` |
-| Go | `go test ./...` |
-| Java | `mvn test` or `gradle test` |
-| Bash | `./tests/test-runner.sh` or similar |
+**CRITICAL: For polyglot projects, run ALL test suites.**
+
+```bash
+# Run ALL applicable test commands
+[ -f Cargo.toml ] && cargo test
+[ -f package.json ] && npm test
+[ -f go.mod ] && go test ./...
+[ -f pyproject.toml ] && pytest
+[ -f pom.xml ] && mvn test
+[ -f tests/test-runner.sh ] && ./tests/test-runner.sh
+```
+
+| If Present | Test Command |
+|------------|--------------|
+| Cargo.toml | `cargo test` |
+| package.json | `npm test` |
+| go.mod | `go test ./...` |
+| pyproject.toml | `pytest` |
+| pom.xml | `mvn test` |
+| tests/test-runner.sh | `./tests/test-runner.sh` |
+
+**For polyglot projects:**
+- Run BOTH `cargo test` AND `npm test`
+- Report results from ALL test suites
+- **ANY test failure in ANY suite = FIX**
 
 Capture the output and note:
 - Total tests run
