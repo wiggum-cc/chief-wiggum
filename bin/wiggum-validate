@@ -149,6 +149,22 @@ validate_kanban() {
             break
         fi
 
+        # Parse done comment (collapsed completed tasks from cleanup)
+        if [[ "$line" =~ ^\<!--[[:space:]]*done:[[:space:]]*(.*)[[:space:]]*--\>$ ]]; then
+            local done_csv="${BASH_REMATCH[1]}"
+            IFS=',' read -ra _done_ids <<< "$done_csv"
+            for _did in "${_done_ids[@]}"; do
+                _did="${_did#"${_did%%[![:space:]]*}"}"
+                _did="${_did%"${_did##*[![:space:]]}"}"
+                if [ -n "$_did" ]; then
+                    ((++TASK_COUNT_DONE))
+                    ((++TASK_COUNT_TOTAL))
+                    task_ids[$_did]=$line_num
+                fi
+            done
+            continue
+        fi
+
         # Check for task line: - [ ] **[TASK-ID]** or - [x] **[TASK-ID]** etc.
         # Status markers: space=pending, x=complete, ==in-progress, P=pending-approval, N=not-planned, *=failed
         if [[ "$line" =~ ^-[[:space:]]\[([[:space:]x=PN\*])\][[:space:]]\*\*\[([A-Za-z0-9-]+)\]\*\* ]]; then
