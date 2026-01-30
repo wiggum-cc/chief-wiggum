@@ -958,25 +958,27 @@ handle_fix_worker_completion() {
     local worker_dir="$1"
     local task_id="$2"
 
-    # Find the fix agent result by looking for result files with gate_result field.
-    # Fix agents produce results with gate_result (PASS/FIX/FAIL/SKIP).
-    # Check newest results first to get the most recent run.
+    # Find the fix agent result. Try specific pipeline step results first,
+    # then fall back to generic search for backward compatibility.
     local result_file=""
-    local candidate
-    while read -r candidate; do
-        [ -f "$candidate" ] || continue
-        # Check if this result has gate_result (fix agent signature)
-        # Accept results with either outputs.gate_result or top-level gate_result
-        if jq -e '.outputs.gate_result // .gate_result' "$candidate" &>/dev/null; then
-            result_file="$candidate"
-            break
-        fi
-    done < <(find "$worker_dir/results" -maxdepth 1 -name "*-result.json" -type f 2>/dev/null | sort -r)
+
+    # 1. Try pr-fix result (has gate_result + push_succeeded)
+    result_file=$(find_newest "$worker_dir/results" -maxdepth 1 -name "*-pr-fix-result.json")
+
+    # 2. Fall back to generic search: newest result with gate_result field
+    if [ -z "$result_file" ]; then
+        local candidate
+        while read -r candidate; do
+            [ -f "$candidate" ] || continue
+            if jq -e '.outputs.gate_result // .gate_result' "$candidate" &>/dev/null; then
+                result_file="$candidate"
+                break
+            fi
+        done < <(find "$worker_dir/results" -maxdepth 1 -name "*-result.json" -type f 2>/dev/null | sort -r)
+    fi
 
     if [ -z "$result_file" ]; then
-        # Fix agent didn't produce a result - it may have failed to start or exited early
         log_warn "No fix agent result for $task_id - fix agent may not have run"
-        # Revert state to needs_fix so it can be retried on next cycle
         git_state_set "$worker_dir" "needs_fix" "priority-workers.handle_fix_worker_completion" "No result file found"
         return 1
     fi
@@ -985,15 +987,30 @@ handle_fix_worker_completion() {
     gate_result=$(jq -r '.outputs.gate_result // .gate_result // "FAIL"' "$result_file" 2>/dev/null)
     push_succeeded=$(jq -r '.outputs.push_succeeded // "false"' "$result_file" 2>/dev/null)
 
+    # If pr-fix didn't report push success, check commit-push result for push_status
+    if [ "$push_succeeded" != "true" ]; then
+        local commit_push_result
+        commit_push_result=$(find_newest "$worker_dir/results" -maxdepth 1 -name "*-commit-push-result.json")
+        if [ -n "$commit_push_result" ] && [ -f "$commit_push_result" ]; then
+            local push_status
+            push_status=$(jq -r '.outputs.push_status // .push_status // ""' "$commit_push_result" 2>/dev/null)
+            if [ "$push_status" = "success" ]; then
+                push_succeeded="true"
+            fi
+        fi
+    fi
+
     if [ "$gate_result" = "PASS" ] && [ "$push_succeeded" = "true" ]; then
         git_state_set "$worker_dir" "fix_completed" "priority-workers.handle_fix_worker_completion" "Push verified"
         git_state_set "$worker_dir" "needs_merge" "priority-workers.handle_fix_worker_completion" "Ready for merge attempt"
         log "Fix completed for $task_id - ready for merge"
         return 0
     elif [ "$gate_result" = "PASS" ]; then
-        # Fix succeeded but push didn't - still mark as completed
-        git_state_set "$worker_dir" "fix_completed" "priority-workers.handle_fix_worker_completion" "Fix passed but push failed"
-        log_warn "Fix completed for $task_id but push failed"
+        # Fix succeeded but push status unclear - proceed to merge anyway.
+        # attempt_pr_merge handles failures gracefully with proper state transitions.
+        git_state_set "$worker_dir" "fix_completed" "priority-workers.handle_fix_worker_completion" "Fix passed, push status unclear"
+        git_state_set "$worker_dir" "needs_merge" "priority-workers.handle_fix_worker_completion" "Ready for merge attempt (push status unverified)"
+        log_warn "Fix completed for $task_id - push status unclear, proceeding to merge"
         return 0
     elif [ "$gate_result" = "SKIP" ]; then
         # No comments to fix - transition to merge
