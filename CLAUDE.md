@@ -308,6 +308,10 @@ local exit_code=0
 wait "$pid" 2>/dev/null || exit_code=$?
 ```
 
+### Platform Compatibility
+- Code must work on both Linux and macOS — use `lib/core/platform.sh` for OS-specific operations (e.g., `stat`, `date`, `sed -i`)
+- Never use GNU-only flags directly; call the platform abstraction instead
+
 ### Shellcheck
 - Run `./tests/run-shellcheck.sh` before committing
 - All scripts must pass shellcheck

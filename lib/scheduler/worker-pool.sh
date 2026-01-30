@@ -54,7 +54,48 @@ pool_add() {
     fi
 
     _WORKER_POOL[$pid]="$type|$task_id|$start_time"
+
+    # Persist to disk so subshell callers are visible to the main process
+    if [ -n "${RALPH_DIR:-}" ]; then
+        local pending_file="$RALPH_DIR/.pool-pending"
+        (
+            flock -x 200
+            echo "$pid|$type|$task_id|$start_time" >> "$pending_file"
+        ) 200>"$pending_file.lock"
+    fi
+
     return 0
+}
+
+# Ingest pending pool entries written to disk by subshells
+#
+# Reads $ralph_dir/.pool-pending under flock, adds each entry to
+# _WORKER_POOL (skipping duplicates), then truncates the file.
+#
+# Args:
+#   ralph_dir - Ralph directory path
+pool_ingest_pending() {
+    local ralph_dir="$1"
+    local pending_file="$ralph_dir/.pool-pending"
+
+    [ -s "$pending_file" ] || return 0
+
+    local lines=""
+    {
+        flock -x 200
+        lines=$(cat "$pending_file")
+        : > "$pending_file"
+    } 200>"$pending_file.lock"
+
+    local line
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        local pid type task_id start_time
+        IFS='|' read -r pid type task_id start_time <<< "$line"
+        # Skip if already in pool
+        [ -z "${_WORKER_POOL[$pid]+x}" ] || continue
+        _WORKER_POOL[$pid]="$type|$task_id|$start_time"
+    done <<< "$lines"
 }
 
 # Remove a worker from the pool

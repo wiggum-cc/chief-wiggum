@@ -134,82 +134,43 @@ conflict_queue_group_related() {
     local queue_file="$ralph_dir/batches/queue.json"
     [ -f "$queue_file" ] || { echo "[]"; return 0; }
 
-    # Get unbatched queue entries
-    local unbatched
-    unbatched=$(jq '[.queue[] | select(.batch_id == null)]' "$queue_file")
-
-    local count
-    count=$(echo "$unbatched" | jq 'length')
-
-    if [ "$count" -lt 2 ]; then
-        echo "[]"
-        return 0
-    fi
-
-    # Build file -> tasks mapping and find overlaps
-    # This is a simplified grouping - tasks share a group if they have any common file
-    local groups='[]'
-    local processed='[]'
-
-    while read -r task_json; do
-        local task_id
-        task_id=$(echo "$task_json" | jq -r '.task_id')
-
-        # Skip if already processed
-        if echo "$processed" | jq -e ". | index(\"$task_id\")" >/dev/null 2>&1; then
-            continue
-        fi
-
-        local task_files
-        task_files=$(echo "$task_json" | jq '.affected_files')
-
-        # Find all tasks with overlapping files
-        local group_tasks='["'$task_id'"]'
-        local common_files="$task_files"
-
-        while read -r other_json; do
-            local other_id
-            other_id=$(echo "$other_json" | jq -r '.task_id')
-
-            [ "$other_id" = "$task_id" ] && continue
-
-            # Skip if already processed
-            if echo "$processed" | jq -e ". | index(\"$other_id\")" >/dev/null 2>&1; then
-                continue
-            fi
-
-            local other_files
-            other_files=$(echo "$other_json" | jq '.affected_files')
-
-            # Check for file overlap
-            local overlap
-            overlap=$(jq -n --argjson a "$task_files" --argjson b "$other_files" \
-                '[$a[], $b[]] | group_by(.) | map(select(length > 1) | .[0]) | unique')
-
-            if [ "$(echo "$overlap" | jq 'length')" -gt 0 ]; then
-                group_tasks=$(echo "$group_tasks" | jq --arg id "$other_id" '. += [$id]')
-                common_files=$(echo "$overlap" | jq '.')
-            fi
-        done < <(echo "$unbatched" | jq -c '.[]')
-
-        # Only create group if multiple tasks
-        local group_size
-        group_size=$(echo "$group_tasks" | jq 'length')
-
-        if [ "$group_size" -ge 2 ]; then
-            local group
-            group=$(jq -n \
-                --argjson task_ids "$group_tasks" \
-                --argjson common_files "$common_files" \
-                '{task_ids: $task_ids, common_files: $common_files}')
-            groups=$(echo "$groups" | jq --argjson g "$group" '. += [$g]')
-        fi
-
-        # Mark all tasks in group as processed
-        processed=$(echo "$processed" | jq --argjson g "$group_tasks" '. + $g | unique')
-    done < <(echo "$unbatched" | jq -c '.[]')
-
-    echo "$groups"
+    # Single jq program replaces O(N^2) bash+jq nested loops
+    jq '
+        [.queue[] | select(.batch_id == null)] |
+        if length < 2 then []
+        else
+          . as $items |
+          reduce range($items | length) as $i (
+            {groups: [], processed: []};
+            . as $state |
+            if ($state.processed | index($items[$i].task_id)) then $state
+            else
+              ($items[$i].task_id) as $tid |
+              ($items[$i].affected_files) as $tfiles |
+              [range($items | length) |
+                select(. != $i) |
+                . as $j |
+                select(($items[$j].task_id) as $oid | $state.processed | index($oid) | not) |
+                select(
+                  ($items[$j].affected_files) as $ofiles |
+                  ([$tfiles[], $ofiles[]] | group_by(.) | map(select(length > 1)) | length) > 0
+                )
+              ] as $overlapping |
+              if ($overlapping | length) > 0 then
+                ($overlapping | map($items[.].task_id)) as $overlap_ids |
+                ([$overlapping[] | $items[.].affected_files[]] + $tfiles |
+                  group_by(.) | map(select(length > 1) | .[0]) | unique) as $common |
+                $state |
+                .groups += [{task_ids: ([$tid] + $overlap_ids), common_files: $common}] |
+                .processed += ([$tid] + $overlap_ids)
+              else
+                $state |
+                .processed += [$tid]
+              end
+            end
+          ) | .groups
+        end
+    ' "$queue_file"
 }
 
 # Check if batch threshold is met
@@ -403,49 +364,31 @@ conflict_queue_build_batch_file() {
     task_ids=$(echo "$batch" | jq '.task_ids')
     common_files=$(echo "$batch" | jq '.common_files')
 
-    # Build tasks array with full details
-    local tasks='[]'
-    while read -r task_id; do
-        local task_entry
-        task_entry=$(jq --arg task_id "$task_id" '.queue[] | select(.task_id == $task_id)' "$queue_file")
+    # Extract all task data in a single jq call (replaces ~7 jq calls per task)
+    local all_task_data
+    all_task_data=$(jq -c --argjson task_ids "$task_ids" --argjson common_files "$common_files" '
+        [.queue[] | select(.task_id | IN($task_ids[])) |
+        {
+            task_id: .task_id,
+            worker_dir: .worker_dir,
+            pr_number: .pr_number,
+            affected_files: .affected_files,
+            conflict_files: ([.affected_files[], $common_files[]] | group_by(.) | map(select(length > 1) | .[0]))
+        }]
+    ' "$queue_file")
 
-        if [ -n "$task_entry" ] && [ "$task_entry" != "null" ]; then
-            local worker_dir pr_number affected_files
-            worker_dir=$(echo "$task_entry" | jq -r '.worker_dir')
-            pr_number=$(echo "$task_entry" | jq '.pr_number')
-            affected_files=$(echo "$task_entry" | jq '.affected_files')
-
-            # Get branch name from workspace
-            local branch=""
-            if [ -d "$worker_dir/workspace" ]; then
-                branch=$(git -C "$worker_dir/workspace" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
-            fi
-
-            # Determine which files have conflicts (intersection with common_files)
-            local conflict_files
-            conflict_files=$(jq -n --argjson a "$affected_files" --argjson b "$common_files" \
-                '[$a[], $b[]] | group_by(.) | map(select(length > 1) | .[0])')
-
-            local task
-            task=$(jq -n \
-                --arg task_id "$task_id" \
-                --arg worker_dir "$worker_dir" \
-                --argjson pr_number "$pr_number" \
-                --arg branch "$branch" \
-                --argjson affected_files "$affected_files" \
-                --argjson conflict_files "$conflict_files" \
-                '{
-                    task_id: $task_id,
-                    worker_dir: $worker_dir,
-                    pr_number: $pr_number,
-                    branch: $branch,
-                    affected_files: $affected_files,
-                    conflict_files: $conflict_files
-                }')
-
-            tasks=$(echo "$tasks" | jq --argjson t "$task" '. += [$t]')
+    # Add branch info (requires git, cannot be done in jq)
+    local tasks="$all_task_data"
+    local i=0
+    while IFS=$'\t' read -r task_id worker_dir; do
+        [ -z "$task_id" ] && continue
+        local branch=""
+        if [ -d "$worker_dir/workspace" ]; then
+            branch=$(git -C "$worker_dir/workspace" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
         fi
-    done < <(echo "$task_ids" | jq -r '.[]')
+        tasks=$(echo "$tasks" | jq -c --arg branch "$branch" --argjson idx "$i" '.[$idx] += {branch: $branch}')
+        ((++i)) || true
+    done < <(echo "$all_task_data" | jq -r '.[] | "\(.task_id)\t\(.worker_dir)"')
 
     # Write batch file with explicit merge_order for the planner to use
     jq -n \

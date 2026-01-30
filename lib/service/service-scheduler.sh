@@ -58,6 +58,9 @@ _SCHED_STARTUP_COMPLETE=false
 _SCHED_LAST_HEALTH_CHECK=0
 _SCHED_HEALTH_CHECK_INTERVAL=30
 
+# Per-tick cache of enabled services (avoids repeated jq calls within a tick)
+_SCHED_TICK_ENABLED=""
+
 # Track last cron minute to avoid duplicate runs
 declare -gA _SCHED_LAST_CRON_MINUTE=()
 
@@ -118,7 +121,7 @@ service_scheduler_run_startup() {
     log_debug "Running startup services..."
 
     local enabled_services
-    enabled_services=$(service_get_enabled)
+    enabled_services="${_SCHED_TICK_ENABLED:-$(service_get_enabled)}"
 
     for id in $enabled_services; do
         if service_runs_on_startup "$id"; then
@@ -143,13 +146,15 @@ service_scheduler_run_startup() {
 service_scheduler_tick() {
     [ "$_SCHED_INITIALIZED" = true ] || return 1
 
+    # Cache enabled services for this tick (avoids repeated jq calls)
+    _SCHED_TICK_ENABLED=$(service_get_enabled)
+
     # Run startup services on first tick
     if [ "$_SCHED_STARTUP_COMPLETE" = false ]; then
         service_scheduler_run_startup
     fi
 
-    local enabled_services
-    enabled_services=$(service_get_enabled)
+    local enabled_services="$_SCHED_TICK_ENABLED"
 
     for id in $enabled_services; do
         # Skip if circuit breaker is open
@@ -310,7 +315,7 @@ service_trigger_event() {
     [ "$_SCHED_INITIALIZED" = true ] || return 1
 
     local enabled_services
-    enabled_services=$(service_get_enabled)
+    enabled_services="${_SCHED_TICK_ENABLED:-$(service_get_enabled)}"
 
     for id in $enabled_services; do
         local schedule_type trigger
@@ -407,8 +412,7 @@ _run_service_if_allowed() {
 
 # Process queued service executions
 _process_service_queues() {
-    local enabled_services
-    enabled_services=$(service_get_enabled)
+    local enabled_services="$_SCHED_TICK_ENABLED"
 
     for id in $enabled_services; do
         local queue_size
@@ -442,8 +446,7 @@ _process_service_queues() {
 
 # Check for completed background services and update their state
 _check_completed_services() {
-    local enabled_services
-    enabled_services=$(service_get_enabled)
+    local enabled_services="$_SCHED_TICK_ENABLED"
 
     for id in $enabled_services; do
         local status
@@ -626,8 +629,7 @@ _maybe_run_health_checks() {
     fi
     _SCHED_LAST_HEALTH_CHECK="$now"
 
-    local enabled_services
-    enabled_services=$(service_get_enabled)
+    local enabled_services="$_SCHED_TICK_ENABLED"
 
     for id in $enabled_services; do
         # Only check running services with health checks
@@ -757,7 +759,7 @@ service_scheduler_status() {
     circuit_open_count=0
 
     local enabled_services
-    enabled_services=$(service_get_enabled)
+    enabled_services="${_SCHED_TICK_ENABLED:-$(service_get_enabled)}"
 
     for id in $enabled_services; do
         ((++enabled_count))
@@ -908,7 +910,7 @@ service_scheduler_all_statuses() {
     local result="[]"
 
     local enabled_services
-    enabled_services=$(service_get_enabled)
+    enabled_services="${_SCHED_TICK_ENABLED:-$(service_get_enabled)}"
 
     for id in $enabled_services; do
         local svc_status

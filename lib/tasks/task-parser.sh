@@ -234,24 +234,20 @@ are_dependencies_satisfied() {
     return 0
 }
 
-# Count transitively dependent tasks (tasks blocked by this one, directly or indirectly)
-# BFS through reverse dependency graph
-# Args: kanban_file task_id
-# Returns: count of all transitive dependents
-get_dependency_depth() {
-    local kanban="$1"
-    local target_task="$2"
+# Build reverse dependency graph from metadata
+# Serializes the graph as pipe-delimited text for reuse across multiple BFS calls.
+#
+# Args:
+#   all_metadata - Output from _get_cached_metadata (task_id|status|priority|deps lines)
+#
+# Returns: Serialized reverse dep graph (one line per node: task_id|dependent1 dependent2 ...)
+_build_reverse_dep_graph() {
+    local all_metadata="$1"
 
-    local all_metadata
-    all_metadata=$(_get_cached_metadata "$kanban")
-
-    # Build reverse dependency map: for each task, find who depends on it
-    # Format: task_id -> list of tasks that have task_id as a dependency
-    declare -A reverse_deps=()
+    local -A reverse_deps=()
     while IFS='|' read -r tid _status _priority deps; do
         [ -z "$tid" ] && continue
         [ -z "$deps" ] && continue
-        # Parse comma-separated deps
         local remaining="$deps"
         while [ -n "$remaining" ]; do
             local dep="${remaining%%,*}"
@@ -260,11 +256,40 @@ get_dependency_depth() {
             else
                 remaining="${remaining#*,}"
             fi
-            dep=$(echo "$dep" | xargs)
+            # Trim whitespace using parameter expansion (no subprocess)
+            dep="${dep#"${dep%%[![:space:]]*}"}"
+            dep="${dep%"${dep##*[![:space:]]}"}"
             [ -z "$dep" ] && continue
             reverse_deps[$dep]="${reverse_deps[$dep]:-} $tid"
         done
     done <<< "$all_metadata"
+
+    # Serialize: one line per node that has dependents
+    local key
+    for key in "${!reverse_deps[@]}"; do
+        echo "$key|${reverse_deps[$key]}"
+    done
+}
+
+# BFS count of transitive dependents from a pre-built serialized reverse dep graph
+#
+# Args:
+#   graph_data  - Serialized graph from _build_reverse_dep_graph
+#   target_task - Task ID to count dependents from
+#
+# Returns: Count of all transitive dependents
+_bfs_count_from_graph() {
+    local graph_data="$1"
+    local target_task="$2"
+
+    # Deserialize graph
+    local -A reverse_deps=()
+    if [ -n "$graph_data" ]; then
+        while IFS='|' read -r key dependents; do
+            [ -z "$key" ] && continue
+            reverse_deps[$key]="$dependents"
+        done <<< "$graph_data"
+    fi
 
     # BFS from target_task through reverse_deps
     local -A visited
@@ -286,6 +311,23 @@ get_dependency_depth() {
     done
 
     echo "$count"
+}
+
+# Count transitively dependent tasks (tasks blocked by this one, directly or indirectly)
+# BFS through reverse dependency graph
+# Args: kanban_file task_id
+# Returns: count of all transitive dependents
+get_dependency_depth() {
+    local kanban="$1"
+    local target_task="$2"
+
+    local all_metadata
+    all_metadata=$(_get_cached_metadata "$kanban")
+
+    local graph_data
+    graph_data=$(_build_reverse_dep_graph "$all_metadata")
+
+    _bfs_count_from_graph "$graph_data" "$target_task"
 }
 
 # Compute effective priority with aging (fixed-point arithmetic)
@@ -325,7 +367,7 @@ get_effective_priority() {
 # Returns: prefix string
 get_task_prefix() {
     local task_id="$1"
-    echo "$task_id" | sed 's/-[0-9]*$//'
+    echo "${task_id%-*}"
 }
 
 # Calculate sibling penalty based on number of active siblings (fixed-point)
@@ -397,6 +439,10 @@ get_ready_tasks() {
     local pending_tasks
     pending_tasks=$(echo "$all_metadata" | awk -F'|' '$2 == " " { print $1 }')
 
+    # Build reverse dependency graph ONCE for all tasks (avoids O(N^2) rebuild per task)
+    local reverse_graph
+    reverse_graph=$(_build_reverse_dep_graph "$all_metadata")
+
     # Filter to tasks with satisfied dependencies and sort by priority
     for task_id in $pending_tasks; do
         if are_dependencies_satisfied "$kanban" "$task_id"; then
@@ -442,7 +488,7 @@ get_ready_tasks() {
             # Each blocked task gives a bonus to prioritize unblocking work
             if [ "$dep_bonus_per_task" -gt 0 ]; then
                 local dep_depth
-                dep_depth=$(get_dependency_depth "$kanban" "$task_id")
+                dep_depth=$(_bfs_count_from_graph "$reverse_graph" "$task_id")
                 local dep_bonus=$(( dep_depth * dep_bonus_per_task ))
                 effective_pri=$(( effective_pri - dep_bonus ))
             fi

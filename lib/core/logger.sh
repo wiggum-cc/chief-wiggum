@@ -26,6 +26,18 @@ _log_level_value() {
     esac
 }
 
+# Cache numeric min level at source time for fast-path filtering
+_CACHED_MIN_LEVEL=$(_log_level_value "${LOG_LEVEL:-INFO}")
+if [[ "${DEBUG:-0}" == "1" ]] && (( _CACHED_MIN_LEVEL > 1 )); then
+    _CACHED_MIN_LEVEL=1
+fi
+
+# Detect printf %()T support (bash 4.2+, avoids date subprocess per log line)
+_LOG_HAS_PRINTF_T=0
+if printf '%(%s)T' -1 &>/dev/null; then
+    _LOG_HAS_PRINTF_T=1
+fi
+
 # Check if a log level should be output
 _should_log() {
     local level="$1"
@@ -54,8 +66,13 @@ _log_output() {
         return
     fi
 
-    local formatted
-    formatted="[$(date -Iseconds)] ${level}: $message"
+    local timestamp
+    if (( _LOG_HAS_PRINTF_T )); then
+        printf -v timestamp '%(%Y-%m-%dT%H:%M:%S%z)T' -1
+    else
+        timestamp=$(date -Iseconds)
+    fi
+    local formatted="[$timestamp] ${level}: $message"
 
     # Output to appropriate stream
     if [[ "$stream" == "2" ]]; then
@@ -87,31 +104,37 @@ _log_output() {
 
 # Log at INFO level (to stdout)
 log() {
+    (( _CACHED_MIN_LEVEL <= 2 )) || return 0
     _log_output "INFO" "$1" 1
 }
 
 # Alias for log() with explicit name
 log_info() {
+    (( _CACHED_MIN_LEVEL <= 2 )) || return 0
     _log_output "INFO" "$1" 1
 }
 
 # Log at WARN level (to stderr)
 log_warn() {
+    (( _CACHED_MIN_LEVEL <= 3 )) || return 0
     _log_output "WARN" "$1" 2
 }
 
 # Log at ERROR level (to stderr)
 log_error() {
+    (( _CACHED_MIN_LEVEL <= 4 )) || return 0
     _log_output "ERROR" "$1" 2
 }
 
 # Log at DEBUG level (to stderr, only when DEBUG=1 or LOG_LEVEL=DEBUG)
 log_debug() {
+    (( _CACHED_MIN_LEVEL <= 1 )) || [[ "${DEBUG:-0}" == "1" ]] || [[ "${LOG_LEVEL:-}" == "DEBUG" ]] || [[ "${LOG_LEVEL:-}" == "TRACE" ]] || return 0
     _log_output "DEBUG" "$1" 2
 }
 
 # Log at TRACE level (to stderr, only when LOG_LEVEL=TRACE)
 log_trace() {
+    (( _CACHED_MIN_LEVEL <= 0 )) || [[ "${LOG_LEVEL:-}" == "TRACE" ]] || return 0
     _log_output "TRACE" "$1" 2
 }
 

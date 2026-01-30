@@ -838,6 +838,9 @@ _main_loop() {
     while true; do
         ((++iteration))
 
+        # Ingest pool entries persisted by subshells before cleanup/orphan detection
+        pool_ingest_pending "$RALPH_DIR"
+
         # Clean up finished workers FIRST - before services run
         # This ensures completion handlers run before services detect "stuck" workers
         # (e.g., resolve-workers service checks agent.pid which is deleted on completion)

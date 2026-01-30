@@ -67,22 +67,23 @@ activity_log() {
     local ts
     ts=$(date -Iseconds)
 
-    # Build JSON with jq, adding extra fields
-    local json
-    json=$(jq -c -n \
-        --arg ts "$ts" \
-        --arg event "$event" \
-        --arg worker_id "$worker_id" \
-        --arg task_id "$task_id" \
-        '{ts: $ts, event: $event, worker_id: $worker_id, task_id: $task_id}')
+    # Build all jq args and filter in a single pass (avoids N+1 jq subprocess spawns)
+    local -a jq_args=(--arg ts "$ts" --arg event "$event" --arg worker_id "$worker_id" --arg task_id "$task_id")
+    local jq_filter='{ts: $ts, event: $event, worker_id: $worker_id, task_id: $task_id'
 
-    # Append extra key=value pairs
     local kv
+    local i=0
     for kv in "$@"; do
         local key="${kv%%=*}"
         local val="${kv#*=}"
-        json=$(echo "$json" | jq -c --arg k "$key" --arg v "$val" '. + {($k): $v}')
+        jq_args+=(--arg "k$i" "$key" --arg "v$i" "$val")
+        jq_filter+=", (\$k$i): \$v$i"
+        ((++i)) || true
     done
+    jq_filter+='}'
+
+    local json
+    json=$(jq -c -n "${jq_args[@]}" "$jq_filter")
 
     # Atomic append with flock (using shared utility)
     append_with_lock "$_ACTIVITY_LOG_FILE" "$json"
