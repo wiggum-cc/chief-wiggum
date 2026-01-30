@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Test suite for ralph loop supervisor functionality
 # Tests: extraction helpers, config loading, syntax validation
-# Note: Supervisor functionality is now in the unified run-claude-ralph-loop.sh
+# Note: Supervisor functionality is now in the unified runtime-loop.sh
 
 set -euo pipefail
 
@@ -37,10 +37,10 @@ teardown() {
 # =============================================================================
 
 test_ralph_loop_sh_syntax() {
-    if bash -n "$WIGGUM_HOME/lib/claude/run-claude-ralph-loop.sh" 2>/dev/null; then
-        assert_success "run-claude-ralph-loop.sh should have valid bash syntax" true
+    if bash -n "$WIGGUM_HOME/lib/runtime/runtime-loop.sh" 2>/dev/null; then
+        assert_success "runtime-loop.sh should have valid bash syntax" true
     else
-        assert_failure "run-claude-ralph-loop.sh should have valid bash syntax" true
+        assert_failure "runtime-loop.sh should have valid bash syntax" true
     fi
 }
 
@@ -49,7 +49,8 @@ test_ralph_loop_sh_syntax() {
 # =============================================================================
 
 test_extract_supervisor_decision_continue() {
-    source "$WIGGUM_HOME/lib/claude/run-claude-ralph-loop.sh"
+    source "$WIGGUM_HOME/lib/runtime/runtime.sh"
+    source "$WIGGUM_HOME/lib/runtime/runtime-loop.sh"
 
     echo "<decision>CONTINUE</decision>" > "$TEST_TMP_DIR/test.log"
     local result
@@ -59,7 +60,8 @@ test_extract_supervisor_decision_continue() {
 }
 
 test_extract_supervisor_decision_stop() {
-    source "$WIGGUM_HOME/lib/claude/run-claude-ralph-loop.sh"
+    source "$WIGGUM_HOME/lib/runtime/runtime.sh"
+    source "$WIGGUM_HOME/lib/runtime/runtime-loop.sh"
 
     echo "<decision>STOP</decision>" > "$TEST_TMP_DIR/test.log"
     local result
@@ -69,7 +71,8 @@ test_extract_supervisor_decision_stop() {
 }
 
 test_extract_supervisor_decision_restart() {
-    source "$WIGGUM_HOME/lib/claude/run-claude-ralph-loop.sh"
+    source "$WIGGUM_HOME/lib/runtime/runtime.sh"
+    source "$WIGGUM_HOME/lib/runtime/runtime-loop.sh"
 
     echo "<decision>RESTART</decision>" > "$TEST_TMP_DIR/test.log"
     local result
@@ -79,7 +82,8 @@ test_extract_supervisor_decision_restart() {
 }
 
 test_extract_supervisor_decision_missing_defaults_to_continue() {
-    source "$WIGGUM_HOME/lib/claude/run-claude-ralph-loop.sh"
+    source "$WIGGUM_HOME/lib/runtime/runtime.sh"
+    source "$WIGGUM_HOME/lib/runtime/runtime-loop.sh"
 
     echo "No decision tag here" > "$TEST_TMP_DIR/test.log"
     local result
@@ -89,7 +93,8 @@ test_extract_supervisor_decision_missing_defaults_to_continue() {
 }
 
 test_extract_supervisor_decision_invalid_defaults_to_continue() {
-    source "$WIGGUM_HOME/lib/claude/run-claude-ralph-loop.sh"
+    source "$WIGGUM_HOME/lib/runtime/runtime.sh"
+    source "$WIGGUM_HOME/lib/runtime/runtime-loop.sh"
 
     echo "<decision>INVALID</decision>" > "$TEST_TMP_DIR/test.log"
     local result
@@ -99,7 +104,8 @@ test_extract_supervisor_decision_invalid_defaults_to_continue() {
 }
 
 test_extract_supervisor_decision_embedded_in_content() {
-    source "$WIGGUM_HOME/lib/claude/run-claude-ralph-loop.sh"
+    source "$WIGGUM_HOME/lib/runtime/runtime.sh"
+    source "$WIGGUM_HOME/lib/runtime/runtime-loop.sh"
 
     cat > "$TEST_TMP_DIR/test.log" << 'EOF'
 {"type":"assistant","message":{"content":[{"type":"text","text":"Let me review..."}]}}
@@ -119,7 +125,8 @@ EOF
 # =============================================================================
 
 test_extract_supervisor_review_success() {
-    source "$WIGGUM_HOME/lib/claude/run-claude-ralph-loop.sh"
+    source "$WIGGUM_HOME/lib/runtime/runtime.sh"
+    source "$WIGGUM_HOME/lib/runtime/runtime-loop.sh"
 
     cat > "$TEST_TMP_DIR/test.log" << 'EOF'
 <review>
@@ -139,7 +146,8 @@ EOF
 }
 
 test_extract_supervisor_review_missing_tag() {
-    source "$WIGGUM_HOME/lib/claude/run-claude-ralph-loop.sh"
+    source "$WIGGUM_HOME/lib/runtime/runtime.sh"
+    source "$WIGGUM_HOME/lib/runtime/runtime-loop.sh"
 
     echo "No review tag here" > "$TEST_TMP_DIR/test.log"
 
@@ -151,7 +159,8 @@ test_extract_supervisor_review_missing_tag() {
 }
 
 test_extract_supervisor_review_strips_tags() {
-    source "$WIGGUM_HOME/lib/claude/run-claude-ralph-loop.sh"
+    source "$WIGGUM_HOME/lib/runtime/runtime.sh"
+    source "$WIGGUM_HOME/lib/runtime/runtime-loop.sh"
 
     cat > "$TEST_TMP_DIR/test.log" << 'EOF'
 <review>
@@ -170,7 +179,8 @@ EOF
 # =============================================================================
 
 test_extract_supervisor_guidance_success() {
-    source "$WIGGUM_HOME/lib/claude/run-claude-ralph-loop.sh"
+    source "$WIGGUM_HOME/lib/runtime/runtime.sh"
+    source "$WIGGUM_HOME/lib/runtime/runtime-loop.sh"
 
     cat > "$TEST_TMP_DIR/test.log" << 'EOF'
 <guidance>
@@ -186,7 +196,8 @@ EOF
 }
 
 test_extract_supervisor_guidance_missing_tag() {
-    source "$WIGGUM_HOME/lib/claude/run-claude-ralph-loop.sh"
+    source "$WIGGUM_HOME/lib/runtime/runtime.sh"
+    source "$WIGGUM_HOME/lib/runtime/runtime-loop.sh"
 
     echo "No guidance tag here" > "$TEST_TMP_DIR/test.log"
 
@@ -198,7 +209,8 @@ test_extract_supervisor_guidance_missing_tag() {
 }
 
 test_extract_supervisor_guidance_strips_tags() {
-    source "$WIGGUM_HOME/lib/claude/run-claude-ralph-loop.sh"
+    source "$WIGGUM_HOME/lib/runtime/runtime.sh"
+    source "$WIGGUM_HOME/lib/runtime/runtime-loop.sh"
 
     cat > "$TEST_TMP_DIR/test.log" << 'EOF'
 <guidance>
@@ -217,7 +229,8 @@ EOF
 # =============================================================================
 
 test_extract_all_supervisor_outputs() {
-    source "$WIGGUM_HOME/lib/claude/run-claude-ralph-loop.sh"
+    source "$WIGGUM_HOME/lib/runtime/runtime.sh"
+    source "$WIGGUM_HOME/lib/runtime/runtime-loop.sh"
 
     # Create a realistic supervisor log
     cat > "$TEST_TMP_DIR/supervisor.log" << 'EOF'
@@ -374,7 +387,8 @@ test_agent_source_ralph_supervised_provides_extraction_helpers() {
 # =============================================================================
 
 test_default_supervisor_prompt_exists() {
-    source "$WIGGUM_HOME/lib/claude/run-claude-ralph-loop.sh"
+    source "$WIGGUM_HOME/lib/runtime/runtime.sh"
+    source "$WIGGUM_HOME/lib/runtime/runtime-loop.sh"
 
     if type _default_supervisor_prompt &>/dev/null; then
         assert_success "_default_supervisor_prompt function should exist" true
@@ -384,7 +398,8 @@ test_default_supervisor_prompt_exists() {
 }
 
 test_default_supervisor_prompt_contains_required_elements() {
-    source "$WIGGUM_HOME/lib/claude/run-claude-ralph-loop.sh"
+    source "$WIGGUM_HOME/lib/runtime/runtime.sh"
+    source "$WIGGUM_HOME/lib/runtime/runtime-loop.sh"
 
     local prompt
     # Use generic step ID for test (summary file name comes from session_prefix)

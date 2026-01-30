@@ -117,11 +117,11 @@ Agents invoke Claude Code to perform work. Each agent focuses on a single respon
 
 See [AGENT_DEV_GUIDE.md](AGENT_DEV_GUIDE.md) for writing custom agents.
 
-## Claude Invocation Patterns
+## Runtime Invocation Patterns
 
-Agents invoke Claude Code through three patterns in `lib/claude/`:
+Agents invoke the backend through patterns in `lib/runtime/` (see [RUNTIME-SCHEMA.md](RUNTIME-SCHEMA.md)):
 
-### 1. Single Execution (`run-claude-once.sh`)
+### 1. Single Execution (`runtime.sh`)
 
 One-shot prompts with no session continuity:
 
@@ -131,7 +131,7 @@ run_agent_once "$workspace" "$system_prompt" "$user_prompt" "$output_file" "$max
 
 Used for: validation, summarization, simple tasks.
 
-### 2. Ralph Loop (`run-claude-ralph-loop.sh`)
+### 2. Ralph Loop (`runtime-loop.sh`)
 
 Iterative work with context preservation between iterations:
 
@@ -337,7 +337,7 @@ Work on the task: {{task_id}}
 | `lib/pipeline/pipeline-runner.sh` | Execute pipeline state machine |
 | `lib/worker/agent-registry.sh` | Resolve agent names to scripts |
 | `lib/worker/agent-runner.sh` | Agent lifecycle management |
-| `lib/claude/run-claude-ralph-loop.sh` | Iterative Claude execution |
+| `lib/runtime/runtime-loop.sh` | Iterative backend execution |
 | `lib/git/worktree-helpers.sh` | Git worktree operations |
 | `lib/tasks/task-parser.sh` | Kanban markdown parsing |
 | `lib/utils/activity-log.sh` | Event logging |

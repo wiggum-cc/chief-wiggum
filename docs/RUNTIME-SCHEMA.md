@@ -334,16 +334,3 @@ runtime_backend_extract_session_id() {
 | Output format | stream-JSON | TBD |
 | Auth scoping | `ANTHROPIC_AUTH_TOKEN` | TBD |
 
-## Backward Compatibility
-
-Old `lib/claude/` files are preserved as thin shims that source from the runtime module:
-
-| Old Path | Shim Target |
-|----------|-------------|
-| `lib/claude/run-claude-once.sh` | `lib/runtime/runtime.sh` |
-| `lib/claude/run-claude-ralph-loop.sh` | `lib/runtime/runtime.sh` + `lib/runtime/runtime-loop.sh` |
-| `lib/claude/run-claude-resume.sh` | `lib/runtime/runtime.sh` |
-| `lib/claude/retry-strategy.sh` | `lib/runtime/runtime-retry.sh` |
-| `lib/claude/usage-tracker.sh` | `lib/backend/claude/usage-tracker.sh` |
-
-All existing function names (`run_agent_once`, `run_agent_resume`, `run_ralph_loop`, `run_claude_with_retry`, etc.) are preserved and work through both old and new source paths.

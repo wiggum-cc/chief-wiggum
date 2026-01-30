@@ -118,7 +118,8 @@ test_child_process_termination() {
 # Test: SIGTERM to ralph loop sets shutdown flag
 # =============================================================================
 test_ralph_loop_sigterm_shutdown() {
-    source "$WIGGUM_HOME/lib/claude/run-claude-ralph-loop.sh"
+    source "$WIGGUM_HOME/lib/runtime/runtime.sh"
+    source "$WIGGUM_HOME/lib/runtime/runtime-loop.sh"
 
     # Use a slow mock so we can signal during execution
     export MOCK_CLAUDE_DELAY="2"

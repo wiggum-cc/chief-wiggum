@@ -46,7 +46,8 @@ teardown() {
 # Test: Ralph loop invokes claude correct number of times with max_iterations
 # =============================================================================
 test_ralph_loop_max_iterations() {
-    source "$WIGGUM_HOME/lib/claude/run-claude-ralph-loop.sh"
+    source "$WIGGUM_HOME/lib/runtime/runtime.sh"
+    source "$WIGGUM_HOME/lib/runtime/runtime-loop.sh"
 
     # Define callbacks
     _test_user_prompt() {
@@ -75,7 +76,8 @@ test_ralph_loop_max_iterations() {
 # Test: Ralph loop stops when completion check passes
 # =============================================================================
 test_ralph_loop_completion_callback() {
-    source "$WIGGUM_HOME/lib/claude/run-claude-ralph-loop.sh"
+    source "$WIGGUM_HOME/lib/runtime/runtime.sh"
+    source "$WIGGUM_HOME/lib/runtime/runtime-loop.sh"
 
     local completion_file="$TEST_DIR/complete_after"
     echo "2" > "$completion_file"
@@ -113,7 +115,8 @@ test_ralph_loop_completion_callback() {
 # Test: Session resumption uses --resume flag for summaries
 # =============================================================================
 test_ralph_loop_session_resumption() {
-    source "$WIGGUM_HOME/lib/claude/run-claude-ralph-loop.sh"
+    source "$WIGGUM_HOME/lib/runtime/runtime.sh"
+    source "$WIGGUM_HOME/lib/runtime/runtime-loop.sh"
 
     _test_user_prompt_3() {
         echo "Do work"
@@ -144,7 +147,8 @@ test_ralph_loop_session_resumption() {
 # Test: Checkpoint files created per iteration
 # =============================================================================
 test_ralph_loop_creates_checkpoints() {
-    source "$WIGGUM_HOME/lib/claude/run-claude-ralph-loop.sh"
+    source "$WIGGUM_HOME/lib/runtime/runtime.sh"
+    source "$WIGGUM_HOME/lib/runtime/runtime-loop.sh"
 
     _test_user_prompt_4() {
         echo "Work on iteration $1"
@@ -176,7 +180,8 @@ test_ralph_loop_creates_checkpoints() {
 # Test: Summary files created per iteration
 # =============================================================================
 test_ralph_loop_creates_summaries() {
-    source "$WIGGUM_HOME/lib/claude/run-claude-ralph-loop.sh"
+    source "$WIGGUM_HOME/lib/runtime/runtime.sh"
+    source "$WIGGUM_HOME/lib/runtime/runtime-loop.sh"
 
     _test_user_prompt_5() {
         echo "Summarize iteration $1"
@@ -203,7 +208,8 @@ test_ralph_loop_creates_summaries() {
 # Test: Log files created per iteration
 # =============================================================================
 test_ralph_loop_creates_logs() {
-    source "$WIGGUM_HOME/lib/claude/run-claude-ralph-loop.sh"
+    source "$WIGGUM_HOME/lib/runtime/runtime.sh"
+    source "$WIGGUM_HOME/lib/runtime/runtime-loop.sh"
 
     _test_user_prompt_6() {
         echo "Log iteration $1"
@@ -231,7 +237,8 @@ test_ralph_loop_creates_logs() {
 # Test: Work log index is created
 # =============================================================================
 test_ralph_loop_creates_work_log() {
-    source "$WIGGUM_HOME/lib/claude/run-claude-ralph-loop.sh"
+    source "$WIGGUM_HOME/lib/runtime/runtime.sh"
+    source "$WIGGUM_HOME/lib/runtime/runtime-loop.sh"
 
     _test_user_prompt_7() {
         echo "Work log test"
@@ -258,7 +265,8 @@ test_ralph_loop_creates_work_log() {
 # Test: Ralph loop validates callback functions exist
 # =============================================================================
 test_ralph_loop_validates_callbacks() {
-    source "$WIGGUM_HOME/lib/claude/run-claude-ralph-loop.sh"
+    source "$WIGGUM_HOME/lib/runtime/runtime.sh"
+    source "$WIGGUM_HOME/lib/runtime/runtime-loop.sh"
 
     local exit_code=0
     run_ralph_loop "$WORKSPACE" "System prompt" \

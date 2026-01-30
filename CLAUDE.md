@@ -47,7 +47,6 @@ WIGGUM_LOG_LEVEL=debug wiggum run           # Verbose logging
 | `lib/core/` | Shared utilities (logger, exit codes, file locking, preflight) |
 | `lib/runtime/` | Backend-agnostic runtime abstraction (execution, retry, loop) |
 | `lib/backend/` | Backend implementations (claude, opencode) |
-| `lib/claude/` | DEPRECATED: backward-compat shims → `lib/runtime/` |
 | `lib/agents/` | Agent implementations (system, engineering, product) |
 | `lib/pipeline/` | Pipeline engine (loader, runner - state machine) |
 | `lib/worker/` | Worker lifecycle management |

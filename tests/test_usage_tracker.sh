@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Tests for lib/claude/usage-tracker.sh
+# Tests for lib/backend/claude/usage-tracker.sh
 #
 # Tests the usage tracking system including:
 # - 5-hour cycle calculation
@@ -32,7 +32,7 @@ setup() {
     unset _USAGE_TRACKER_LOADED 2>/dev/null || true
     # Source fresh
     source "$WIGGUM_HOME/lib/core/logger.sh"
-    source "$WIGGUM_HOME/lib/claude/usage-tracker.sh"
+    source "$WIGGUM_HOME/lib/backend/claude/usage-tracker.sh"
 }
 
 teardown() {

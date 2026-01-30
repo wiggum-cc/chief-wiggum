@@ -2,16 +2,13 @@
 # =============================================================================
 # runtime-retry.sh - Generic retry with exponential backoff
 #
-# Refactored from lib/claude/retry-strategy.sh. The backoff math is generic;
-# error classification delegates to the active backend via
-# runtime_backend_is_retryable().
+# The backoff math is generic; error classification delegates to the active
+# backend via runtime_backend_is_retryable().
 #
 # Config resolution (highest priority first):
 #   1. WIGGUM_RUNTIME_MAX_RETRIES env var
-#   2. WIGGUM_CLAUDE_MAX_RETRIES env var (backward compat)
-#   3. config/config.json → .runtime.backends.<backend>.max_retries
-#   4. config/config.json → .claude.max_retries (backward compat)
-#   5. Hardcoded default: 3
+#   2. config/config.json → .runtime.backends.<backend>.max_retries
+#   3. Hardcoded default: 3
 # =============================================================================
 set -euo pipefail
 
@@ -24,46 +21,34 @@ source "$WIGGUM_HOME/lib/core/logger.sh"
 # RETRY CONFIGURATION
 # =============================================================================
 
-# Defaults (overridden by load_runtime_retry_config)
-RUNTIME_MAX_RETRIES="${WIGGUM_RUNTIME_MAX_RETRIES:-${WIGGUM_CLAUDE_MAX_RETRIES:-3}}"
-RUNTIME_INITIAL_BACKOFF="${WIGGUM_RUNTIME_INITIAL_BACKOFF:-${WIGGUM_CLAUDE_INITIAL_BACKOFF:-5}}"
-RUNTIME_MAX_BACKOFF="${WIGGUM_RUNTIME_MAX_BACKOFF:-${WIGGUM_CLAUDE_MAX_BACKOFF:-60}}"
-RUNTIME_BACKOFF_MULTIPLIER="${WIGGUM_RUNTIME_BACKOFF_MULTIPLIER:-${WIGGUM_CLAUDE_BACKOFF_MULTIPLIER:-2}}"
-
-# Backward compatibility aliases (used externally by tests and agents)
-# shellcheck disable=SC2034
-CLAUDE_MAX_RETRIES="$RUNTIME_MAX_RETRIES"
-# shellcheck disable=SC2034
-CLAUDE_INITIAL_BACKOFF="$RUNTIME_INITIAL_BACKOFF"
-# shellcheck disable=SC2034
-CLAUDE_MAX_BACKOFF="$RUNTIME_MAX_BACKOFF"
-# shellcheck disable=SC2034
-CLAUDE_BACKOFF_MULTIPLIER="$RUNTIME_BACKOFF_MULTIPLIER"
+RUNTIME_MAX_RETRIES="${WIGGUM_RUNTIME_MAX_RETRIES:-3}"
+RUNTIME_INITIAL_BACKOFF="${WIGGUM_RUNTIME_INITIAL_BACKOFF:-5}"
+RUNTIME_MAX_BACKOFF="${WIGGUM_RUNTIME_MAX_BACKOFF:-60}"
+RUNTIME_BACKOFF_MULTIPLIER="${WIGGUM_RUNTIME_BACKOFF_MULTIPLIER:-2}"
 
 # =============================================================================
 # RETRY HELPER FUNCTIONS
 # =============================================================================
 
-# Load retry config from config.json with env var overrides and backward compat
+# Load retry config from config.json with env var overrides
 load_runtime_retry_config() {
     local config_file="$WIGGUM_HOME/config/config.json"
 
     if [ -f "$config_file" ]; then
         local backend="${WIGGUM_RUNTIME_BACKEND:-claude}"
 
-        # Try runtime.backends.<backend>.* first, then claude.* for backward compat
-        RUNTIME_MAX_RETRIES="${WIGGUM_RUNTIME_MAX_RETRIES:-${WIGGUM_CLAUDE_MAX_RETRIES:-$(
-            jq -r ".runtime.backends.${backend}.max_retries // .claude.max_retries // 3" "$config_file" 2>/dev/null
-        )}}"
-        RUNTIME_INITIAL_BACKOFF="${WIGGUM_RUNTIME_INITIAL_BACKOFF:-${WIGGUM_CLAUDE_INITIAL_BACKOFF:-$(
-            jq -r ".runtime.backends.${backend}.initial_backoff // .claude.initial_backoff_seconds // 5" "$config_file" 2>/dev/null
-        )}}"
-        RUNTIME_MAX_BACKOFF="${WIGGUM_RUNTIME_MAX_BACKOFF:-${WIGGUM_CLAUDE_MAX_BACKOFF:-$(
-            jq -r ".runtime.backends.${backend}.max_backoff // .claude.max_backoff_seconds // 60" "$config_file" 2>/dev/null
-        )}}"
-        RUNTIME_BACKOFF_MULTIPLIER="${WIGGUM_RUNTIME_BACKOFF_MULTIPLIER:-${WIGGUM_CLAUDE_BACKOFF_MULTIPLIER:-$(
-            jq -r ".runtime.backends.${backend}.backoff_multiplier // .claude.backoff_multiplier // 2" "$config_file" 2>/dev/null
-        )}}"
+        RUNTIME_MAX_RETRIES="${WIGGUM_RUNTIME_MAX_RETRIES:-$(
+            jq -r ".runtime.backends.${backend}.max_retries // 3" "$config_file" 2>/dev/null
+        )}"
+        RUNTIME_INITIAL_BACKOFF="${WIGGUM_RUNTIME_INITIAL_BACKOFF:-$(
+            jq -r ".runtime.backends.${backend}.initial_backoff // 5" "$config_file" 2>/dev/null
+        )}"
+        RUNTIME_MAX_BACKOFF="${WIGGUM_RUNTIME_MAX_BACKOFF:-$(
+            jq -r ".runtime.backends.${backend}.max_backoff // 60" "$config_file" 2>/dev/null
+        )}"
+        RUNTIME_BACKOFF_MULTIPLIER="${WIGGUM_RUNTIME_BACKOFF_MULTIPLIER:-$(
+            jq -r ".runtime.backends.${backend}.backoff_multiplier // 2" "$config_file" 2>/dev/null
+        )}"
     fi
 
     # Ensure defaults if parsing fails
@@ -71,21 +56,6 @@ load_runtime_retry_config() {
     RUNTIME_INITIAL_BACKOFF="${RUNTIME_INITIAL_BACKOFF:-5}"
     RUNTIME_MAX_BACKOFF="${RUNTIME_MAX_BACKOFF:-60}"
     RUNTIME_BACKOFF_MULTIPLIER="${RUNTIME_BACKOFF_MULTIPLIER:-2}"
-
-    # Sync backward compat aliases (used externally by tests and agents)
-    # shellcheck disable=SC2034
-    CLAUDE_MAX_RETRIES="$RUNTIME_MAX_RETRIES"
-    # shellcheck disable=SC2034
-    CLAUDE_INITIAL_BACKOFF="$RUNTIME_INITIAL_BACKOFF"
-    # shellcheck disable=SC2034
-    CLAUDE_MAX_BACKOFF="$RUNTIME_MAX_BACKOFF"
-    # shellcheck disable=SC2034
-    CLAUDE_BACKOFF_MULTIPLIER="$RUNTIME_BACKOFF_MULTIPLIER"
-}
-
-# Backward-compat alias
-load_claude_retry_config() {
-    load_runtime_retry_config
 }
 
 # Calculate backoff delay for a given attempt number
@@ -180,31 +150,4 @@ runtime_exec_with_retry() {
     done
 
     return "$exit_code"
-}
-
-# =============================================================================
-# BACKWARD COMPATIBILITY ALIASES
-# =============================================================================
-
-# Old name used throughout the codebase
-run_claude_with_retry() {
-    runtime_exec_with_retry "$@"
-}
-
-# Explicit retry alias
-retry_claude() {
-    runtime_exec_with_retry "$@"
-}
-
-# Legacy internal function used by tests: check if stderr file contains rate-limit patterns
-# Args: stderr_file
-# Returns: 0 if rate-limit pattern found, 1 otherwise
-_is_rate_limit_error() {
-    local stderr_file="$1"
-    [ -s "$stderr_file" ] || return 1
-    local pattern
-    for pattern in "429" "rate limit" "too many requests" "High concurrency"; do
-        grep -qi "$pattern" "$stderr_file" 2>/dev/null && return 0
-    done
-    return 1
 }
