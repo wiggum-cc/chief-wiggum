@@ -304,6 +304,90 @@ test_scheduler_get_dep_bonus_per_task() {
 }
 
 # =============================================================================
+# get_resumable_workers() Tests
+# =============================================================================
+
+# Helper: create a minimal resumable worker directory
+# Args: worker_name (e.g., "worker-TASK-001-1234567890")
+_create_resumable_worker() {
+    local name="$1"
+    local dir="$RALPH_DIR/workers/$name"
+    mkdir -p "$dir/workspace"
+    echo "test" > "$dir/prd.md"
+}
+
+test_get_resumable_workers_main_type() {
+    _create_resumable_worker "worker-TASK-001-1234567890"
+
+    local output
+    output=$(get_resumable_workers "$RALPH_DIR")
+
+    assert_output_contains "$output" "TASK-001" "Should find TASK-001"
+    assert_output_contains "$output" "main" "Main worker should have type 'main'"
+}
+
+test_get_resumable_workers_fix_type_from_dirname() {
+    _create_resumable_worker "worker-TASK-001-fix-1234567890"
+
+    local output
+    output=$(get_resumable_workers "$RALPH_DIR")
+
+    assert_output_contains "$output" "TASK-001" "Should find TASK-001"
+    assert_output_contains "$output" "fix" "Fix worker should have type 'fix'"
+    # Must not contain 'main'
+    local worker_type
+    worker_type=$(echo "$output" | awk '{print $4}')
+    assert_equals "fix" "$worker_type" "Worker type field should be 'fix'"
+}
+
+test_get_resumable_workers_resolve_type_from_dirname() {
+    _create_resumable_worker "worker-TASK-002-resolve-1234567890"
+
+    local output
+    output=$(get_resumable_workers "$RALPH_DIR")
+
+    assert_output_contains "$output" "TASK-002" "Should find TASK-002"
+    local worker_type
+    worker_type=$(echo "$output" | awk '{print $4}')
+    assert_equals "resolve" "$worker_type" "Worker type field should be 'resolve'"
+}
+
+test_get_resumable_workers_fix_type_from_git_state() {
+    _create_resumable_worker "worker-TASK-001-1234567890"
+    echo '{"state": "needs_fix"}' > "$RALPH_DIR/workers/worker-TASK-001-1234567890/git-state.json"
+
+    local output
+    output=$(get_resumable_workers "$RALPH_DIR")
+
+    local worker_type
+    worker_type=$(echo "$output" | awk '{print $4}')
+    assert_equals "fix" "$worker_type" "Worker with needs_fix git-state should be type 'fix'"
+}
+
+test_get_resumable_workers_resolve_type_from_git_state() {
+    _create_resumable_worker "worker-TASK-001-1234567890"
+    echo '{"state": "resolving"}' > "$RALPH_DIR/workers/worker-TASK-001-1234567890/git-state.json"
+
+    local output
+    output=$(get_resumable_workers "$RALPH_DIR")
+
+    local worker_type
+    worker_type=$(echo "$output" | awk '{print $4}')
+    assert_equals "resolve" "$worker_type" "Worker with resolving git-state should be type 'resolve'"
+}
+
+test_get_resumable_workers_output_has_four_fields() {
+    _create_resumable_worker "worker-TASK-001-1234567890"
+
+    local output
+    output=$(get_resumable_workers "$RALPH_DIR")
+
+    local field_count
+    field_count=$(echo "$output" | awk '{print NF}')
+    assert_equals "4" "$field_count" "Output should have 4 fields (worker_dir task_id step type)"
+}
+
+# =============================================================================
 # Run Tests
 # =============================================================================
 
@@ -329,6 +413,12 @@ run_test test_scheduler_remove_from_aging
 run_test test_scheduler_get_aging_factor
 run_test test_scheduler_get_plan_bonus
 run_test test_scheduler_get_dep_bonus_per_task
+run_test test_get_resumable_workers_main_type
+run_test test_get_resumable_workers_fix_type_from_dirname
+run_test test_get_resumable_workers_resolve_type_from_dirname
+run_test test_get_resumable_workers_fix_type_from_git_state
+run_test test_get_resumable_workers_resolve_type_from_git_state
+run_test test_get_resumable_workers_output_has_four_fields
 
 print_test_summary
 exit_with_test_result

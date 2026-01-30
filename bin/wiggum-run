@@ -573,15 +573,26 @@ _schedule_resume_workers() {
 
     log "Checking for stopped workers to resume..."
 
-    while read -r worker_dir task_id current_step; do
+    while read -r worker_dir task_id current_step worker_type; do
         [ -n "$worker_dir" ] || continue
 
-        # Check capacity
-        local main_count
-        main_count=$(pool_count "main")
-        if [ "$main_count" -ge "$MAX_WORKERS" ]; then
-            log "At capacity ($main_count/$MAX_WORKERS) - deferring remaining resumes"
-            break
+        # Check capacity based on worker type
+        if [[ "$worker_type" == "fix" || "$worker_type" == "resolve" ]]; then
+            local fix_count resolve_count total_priority
+            fix_count=$(pool_count "fix")
+            resolve_count=$(pool_count "resolve")
+            total_priority=$((fix_count + resolve_count))
+            if [ "$total_priority" -ge "$FIX_WORKER_LIMIT" ]; then
+                log "Priority workers at capacity ($total_priority/$FIX_WORKER_LIMIT) - deferring resume of $task_id"
+                continue
+            fi
+        else
+            local main_count
+            main_count=$(pool_count "main")
+            if [ "$main_count" -ge "$MAX_WORKERS" ]; then
+                log "At capacity ($main_count/$MAX_WORKERS) - deferring remaining resumes"
+                break
+            fi
         fi
 
         # Check task is still pending or in-progress
@@ -623,10 +634,10 @@ _schedule_resume_workers() {
         if wait_for_worker_pid "$worker_dir" "$PID_WAIT_TIMEOUT"; then
             local pid
             pid=$(cat "$worker_dir/agent.pid")
-            pool_add "$pid" "main" "$task_id"
+            pool_add "$pid" "$worker_type" "$task_id"
             scheduler_mark_event
-            activity_log "worker.resumed" "$(basename "$worker_dir")" "$task_id" "pipeline_step=$current_step pid=$pid"
-            log "Resumed worker for $task_id (PID: $pid)"
+            activity_log "worker.resumed" "$(basename "$worker_dir")" "$task_id" "pipeline_step=$current_step pid=$pid type=$worker_type"
+            log "Resumed worker for $task_id (PID: $pid, type: $worker_type)"
         else
             log_error "Resume started but PID not created for $task_id"
         fi

@@ -468,7 +468,7 @@ _is_terminal_failure() {
 # Args:
 #   ralph_dir - Ralph directory path
 #
-# Returns: Lines of "worker_dir task_id current_step" for each resumable worker
+# Returns: Lines of "worker_dir task_id current_step worker_type" for each resumable worker
 get_resumable_workers() {
     local ralph_dir="$1"
     [ -d "$ralph_dir/workers" ] || return 0
@@ -489,7 +489,7 @@ get_resumable_workers() {
         # Skip terminal failures (last step + FAIL)
         _is_terminal_failure "$worker_dir" && continue
 
-        local task_id current_step
+        local task_id current_step worker_type
         task_id=$(get_task_id_from_worker "$(basename "$worker_dir")")
 
         # Get current step from pipeline config, default to execution
@@ -499,6 +499,27 @@ get_resumable_workers() {
             current_step="execution"
         fi
 
-        echo "$worker_dir $task_id $current_step"
+        # Detect worker type from directory name and git-state
+        worker_type="main"
+        local worker_name
+        worker_name=$(basename "$worker_dir")
+        if [[ "$worker_name" == *"-fix-"* ]]; then
+            worker_type="fix"
+        elif [[ "$worker_name" == *"-resolve-"* ]]; then
+            worker_type="resolve"
+        elif [ -f "$worker_dir/git-state.json" ]; then
+            local git_state
+            git_state=$(jq -r '.state // ""' "$worker_dir/git-state.json" 2>/dev/null)
+            case "$git_state" in
+                fixing|needs_fix)
+                    worker_type="fix"
+                    ;;
+                resolving|needs_resolve|needs_multi_resolve)
+                    worker_type="resolve"
+                    ;;
+            esac
+        fi
+
+        echo "$worker_dir $task_id $current_step $worker_type"
     done
 }
