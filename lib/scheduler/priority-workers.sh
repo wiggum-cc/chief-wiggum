@@ -381,7 +381,16 @@ spawn_fix_workers() {
 
         # Ensure workspace exists (reconstruct from PR branch if missing)
         if ! ensure_workspace_from_pr "$worker_dir" "$project_dir" "$task_id"; then
-            log_error "Cannot spawn fix worker for $task_id: workspace missing and reconstruction failed"
+            # Reconstruction failed - check if PR is already merged (branch deleted)
+            local merge_status
+            merge_status=$(_verify_task_merged "$ralph_dir" "$task_id" "$worker_dir")
+
+            if [ "$merge_status" = "merged" ]; then
+                log "Fix worker not needed for $task_id - PR is already merged (workspace cleaned up)"
+                git_state_set "$worker_dir" "merged" "priority-workers.spawn_fix_workers" "PR confirmed merged during fix attempt"
+            else
+                log_error "Cannot spawn fix worker for $task_id: workspace missing and reconstruction failed (PR status: $merge_status)"
+            fi
             _priority_capacity_release "$ralph_dir"
             continue
         fi
