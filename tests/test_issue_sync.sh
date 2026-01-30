@@ -522,6 +522,263 @@ test_get_priority_label() {
 }
 
 # =============================================================================
+# Read-Only Operations Must Not Modify kanban.md
+# =============================================================================
+
+_kanban_checksum() {
+    sha256sum "$1" | cut -d' ' -f1
+}
+
+test_readonly_list_task_ids() {
+    local kanban="$TEST_DIR/.ralph/kanban.md"
+    local before after
+    before=$(_kanban_checksum "$kanban")
+    _list_all_kanban_task_ids "$kanban" > /dev/null
+    after=$(_kanban_checksum "$kanban")
+    assert_equals "$before" "$after" "list_all_kanban_task_ids must not modify kanban"
+}
+
+test_readonly_parse_kanban_fields() {
+    local kanban="$TEST_DIR/.ralph/kanban.md"
+    local before after
+    before=$(_kanban_checksum "$kanban")
+    _parse_kanban_task_fields "$kanban" "EXIST-1" > /dev/null
+    _parse_kanban_task_fields "$kanban" "NONEXIST-99" > /dev/null
+    after=$(_kanban_checksum "$kanban")
+    assert_equals "$before" "$after" "parse_kanban_task_fields must not modify kanban"
+}
+
+test_readonly_kanban_task_exists() {
+    local kanban="$TEST_DIR/.ralph/kanban.md"
+    local before after
+    before=$(_kanban_checksum "$kanban")
+    _kanban_task_exists "$kanban" "EXIST-1"
+    _kanban_task_exists "$kanban" "NONEXIST-99" || true
+    after=$(_kanban_checksum "$kanban")
+    assert_equals "$before" "$after" "kanban_task_exists must not modify kanban"
+}
+
+test_readonly_get_kanban_status() {
+    local kanban="$TEST_DIR/.ralph/kanban.md"
+    local before after
+    before=$(_kanban_checksum "$kanban")
+    _get_kanban_status "$kanban" "EXIST-1" > /dev/null
+    _get_kanban_status "$kanban" "EXIST-2" > /dev/null
+    after=$(_kanban_checksum "$kanban")
+    assert_equals "$before" "$after" "get_kanban_status must not modify kanban"
+}
+
+test_readonly_get_untracked_ids() {
+    local ralph_dir="$TEST_DIR/.ralph"
+    local kanban="$ralph_dir/kanban.md"
+    github_sync_state_init "$ralph_dir"
+
+    local before after
+    before=$(_kanban_checksum "$kanban")
+    _get_untracked_task_ids "$kanban" "$ralph_dir" > /dev/null
+    after=$(_kanban_checksum "$kanban")
+    assert_equals "$before" "$after" "get_untracked_task_ids must not modify kanban"
+}
+
+test_readonly_dry_run_up_create() {
+    local ralph_dir="$TEST_DIR/.ralph"
+    local kanban="$ralph_dir/kanban.md"
+    github_sync_state_init "$ralph_dir"
+
+    local before after
+    before=$(_kanban_checksum "$kanban")
+    github_issue_sync_up_create "$ralph_dir" "all" "true" "true" > /dev/null 2>&1
+    after=$(_kanban_checksum "$kanban")
+    assert_equals "$before" "$after" "sync_up_create dry_run must not modify kanban"
+}
+
+# =============================================================================
+# End-to-End: sync up create → sync down preserves kanban
+# =============================================================================
+
+test_sync_up_then_down_preserves_kanban() {
+    local ralph_dir="$TEST_DIR/.ralph"
+    local kanban="$ralph_dir/kanban.md"
+
+    # Write the scenario kanban: completed + pending + pending-approval tasks
+    cat > "$kanban" << 'KANBAN'
+# Kanban Board
+
+## TASKS
+
+- [x] **[BUG-004]** Fix dead_code warning for EmbeddingData.index field
+  - Description: `main.rs:29` has a dead_code warning for field `index` in `EmbeddingData` struct. The field is never read. Either use the field or remove it if unnecessary.
+  - Priority: LOW
+  - Complexity: LOW
+  - Dependencies: none
+  - Scope:
+    - Check if `EmbeddingData.index` is needed for the embedding response parsing
+    - If not needed: remove the field
+    - If needed but unused: add `#[allow(dead_code)]` with justification comment
+  - Acceptance Criteria:
+    - Warning resolved
+    - No functional regression
+
+### Innovative / Exploratory
+
+- [ ] **[INNOV-006]** Explore streaming/incremental ingestion pipeline (Strategy C)
+  - Description: Per SPEC-DATA-PIPELINE Section 4.3 and 12.1, Strategy C supports streaming ingestion where content arrives piece by piece.
+  - Priority: LOW
+  - Complexity: HIGH
+  - Dependencies: PIPE-002, PIPE-003
+  - Scope:
+    - Prototype sliding window segmenter
+    - Evaluate latency characteristics vs Strategy A/B
+  - Acceptance Criteria:
+    - Prototype demonstrates streaming ingestion
+    - Trade-offs and recommendation documented
+
+
+
+- [P] **[INNOV-007]** Explore multi-modal embedding integration (vision + audio)
+  - Description: Per SPEC-DATA-PIPELINE Section 6, the pipeline should eventually handle images and audio.
+  - Priority: LOW
+  - Complexity: HIGH
+  - Dependencies: PIPE-007, EMBED-001
+  - Scope:
+    - Evaluate vision embedding models (CLIP, SigLIP, Qwen2-VL)
+    - Prototype image embedding pipeline stage
+  - Acceptance Criteria:
+    - Image embedding prototype working
+    - Architecture recommendation documented
+KANBAN
+
+    github_sync_state_init "$ralph_dir"
+
+    # --- Mock setup ---
+    local counter_file="$TEST_DIR/issue_counter"
+    echo "227" > "$counter_file"
+
+    # Mock data for down sync: open issues (INNOV-006, INNOV-007)
+    local mock_open_issues="$TEST_DIR/mock_open_issues.json"
+    cat > "$mock_open_issues" << 'JSON'
+[
+  {
+    "number": 228,
+    "title": "[INNOV-006] Explore streaming/incremental ingestion pipeline (Strategy C)",
+    "body": "## Description\n\nPer SPEC-DATA-PIPELINE Section 4.3 and 12.1, Strategy C supports streaming ingestion.",
+    "labels": [{"name": "wiggum"}, {"name": "priority:low"}],
+    "author": {"login": "testuser", "id": "12345"},
+    "state": "OPEN",
+    "updatedAt": ""
+  },
+  {
+    "number": 229,
+    "title": "[INNOV-007] Explore multi-modal embedding integration (vision + audio)",
+    "body": "## Description\n\nPer SPEC-DATA-PIPELINE Section 6, the pipeline should handle images and audio.",
+    "labels": [{"name": "wiggum"}, {"name": "priority:low"}, {"name": "wiggum:pending-approval"}],
+    "author": {"login": "testuser", "id": "12345"},
+    "state": "OPEN",
+    "updatedAt": ""
+  }
+]
+JSON
+
+    # Mock data for down sync: closed issues (BUG-004)
+    local mock_closed_issues="$TEST_DIR/mock_closed_issues.json"
+    cat > "$mock_closed_issues" << 'JSON'
+[
+  {
+    "number": 227,
+    "title": "[BUG-004] Fix dead_code warning for EmbeddingData.index field",
+    "state": "CLOSED",
+    "updatedAt": "2025-01-23T12:00:00Z"
+  }
+]
+JSON
+
+    # Mock gh: handles issue create/edit/close/comment/list
+    export MOCK_COUNTER_FILE="$counter_file"
+    export MOCK_OPEN_ISSUES="$mock_open_issues"
+    export MOCK_CLOSED_ISSUES="$mock_closed_issues"
+
+    cat > "$MOCK_BIN/gh" << 'MOCK'
+#!/usr/bin/env bash
+if [[ "$1" == "issue" ]]; then
+    case "$2" in
+        create)
+            num=$(cat "$MOCK_COUNTER_FILE")
+            echo "$((num + 1))" > "$MOCK_COUNTER_FILE"
+            echo "https://github.com/test/repo/issues/$num"
+            ;;
+        edit|comment|close|reopen)
+            exit 0
+            ;;
+        list)
+            state=""
+            shift 2
+            while [[ $# -gt 0 ]]; do
+                case "$1" in
+                    --state) state="$2"; shift 2 ;;
+                    *) shift ;;
+                esac
+            done
+            if [[ "$state" == "open" ]]; then
+                cat "$MOCK_OPEN_ISSUES"
+            elif [[ "$state" == "closed" ]]; then
+                cat "$MOCK_CLOSED_ISSUES"
+            fi
+            ;;
+    esac
+fi
+MOCK
+    chmod +x "$MOCK_BIN/gh"
+
+    cat > "$MOCK_BIN/timeout" << 'MOCK'
+#!/usr/bin/env bash
+shift
+"$@"
+MOCK
+    chmod +x "$MOCK_BIN/timeout"
+
+    local old_path="$PATH"
+    export PATH="$MOCK_BIN:$PATH"
+
+    # --- Phase 1: sync up create all ---
+    github_issue_sync_up_create "$ralph_dir" "all" "false" "true" > /dev/null 2>&1
+
+    # Verify state has all 3 tasks with correct issue numbers
+    local state_file="$ralph_dir/github-sync-state.json"
+    local tracked_count
+    tracked_count=$(jq '.issues | length' "$state_file")
+    assert_equals "3" "$tracked_count" "Should track 3 tasks after sync up create"
+
+    local bug_num innov6_num innov7_num
+    bug_num=$(jq -r '.issues["BUG-004"].issue_number' "$state_file")
+    innov6_num=$(jq -r '.issues["INNOV-006"].issue_number' "$state_file")
+    innov7_num=$(jq -r '.issues["INNOV-007"].issue_number' "$state_file")
+    assert_equals "227" "$bug_num" "BUG-004 should map to issue #227"
+    assert_equals "228" "$innov6_num" "INNOV-006 should map to issue #228"
+    assert_equals "229" "$innov7_num" "INNOV-007 should map to issue #229"
+
+    # Verify synced statuses match kanban
+    local bug_status innov6_status innov7_status
+    bug_status=$(jq -r '.issues["BUG-004"].last_synced_status' "$state_file")
+    innov6_status=$(jq -r '.issues["INNOV-006"].last_synced_status' "$state_file")
+    innov7_status=$(jq -r '.issues["INNOV-007"].last_synced_status' "$state_file")
+    assert_equals "x" "$bug_status" "BUG-004 should have completed status"
+    assert_equals " " "$innov6_status" "INNOV-006 should have pending status"
+    assert_equals "P" "$innov7_status" "INNOV-007 should have pending-approval status"
+
+    # --- Phase 2: sync down must not modify kanban ---
+    local before after
+    before=$(_kanban_checksum "$kanban")
+
+    github_issue_sync_down "$ralph_dir" "false" > /dev/null 2>&1
+
+    after=$(_kanban_checksum "$kanban")
+    assert_equals "$before" "$after" "Down sync must not modify kanban after sync up create"
+
+    export PATH="$old_path"
+    unset MOCK_COUNTER_FILE MOCK_OPEN_ISSUES MOCK_CLOSED_ISSUES
+}
+
+# =============================================================================
 # Run all tests
 # =============================================================================
 run_test test_config_is_enabled
@@ -558,6 +815,13 @@ run_test test_sync_up_create_already_tracked
 run_test test_sync_up_create_no_untracked
 run_test test_build_issue_body
 run_test test_get_priority_label
+run_test test_readonly_list_task_ids
+run_test test_readonly_parse_kanban_fields
+run_test test_readonly_kanban_task_exists
+run_test test_readonly_get_kanban_status
+run_test test_readonly_get_untracked_ids
+run_test test_readonly_dry_run_up_create
+run_test test_sync_up_then_down_preserves_kanban
 
 print_test_summary
 exit_with_test_result

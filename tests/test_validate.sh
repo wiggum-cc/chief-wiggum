@@ -178,6 +178,119 @@ test_help_option() {
 }
 
 # =============================================================================
+# Cleanup Subcommand Tests
+# =============================================================================
+
+test_cleanup_collapses_completed() {
+    local tmp_dir
+    tmp_dir=$(create_test_dir)
+    cp "$FIXTURES_DIR/kanban-cleanup-mixed.md" "$tmp_dir/kanban.md"
+
+    local output
+    output=$("$WIGGUM_HOME/bin/wiggum-validate" cleanup -f "$tmp_dir/kanban.md" 2>&1)
+    local exit_code=$?
+
+    assert_equals "0" "$exit_code" "Cleanup should exit 0"
+    # Completed task blocks should be gone
+    assert_file_not_contains "$tmp_dir/kanban.md" "- [x] **[TASK-001]**" "TASK-001 block should be collapsed"
+    assert_file_not_contains "$tmp_dir/kanban.md" "- [x] **[TASK-004]**" "TASK-004 block should be collapsed"
+    # IDs preserved in done comment
+    assert_file_contains "$tmp_dir/kanban.md" "<!-- done: TASK-001, TASK-004 -->" "Done comment should list collapsed IDs"
+
+    rm -rf "$tmp_dir"
+}
+
+test_cleanup_keeps_non_completed() {
+    local tmp_dir
+    tmp_dir=$(create_test_dir)
+    cp "$FIXTURES_DIR/kanban-cleanup-mixed.md" "$tmp_dir/kanban.md"
+
+    "$WIGGUM_HOME/bin/wiggum-validate" cleanup -f "$tmp_dir/kanban.md" >/dev/null 2>&1
+
+    assert_file_contains "$tmp_dir/kanban.md" "**[TASK-002]**" "TASK-002 (failed) should remain"
+    assert_file_contains "$tmp_dir/kanban.md" "**[TASK-003]**" "TASK-003 (pending) should remain"
+    assert_file_contains "$tmp_dir/kanban.md" "**[TASK-005]**" "TASK-005 (in-progress) should remain"
+
+    rm -rf "$tmp_dir"
+}
+
+test_cleanup_all_completed() {
+    local tmp_dir
+    tmp_dir=$(create_test_dir)
+    cp "$FIXTURES_DIR/kanban-all-complete.md" "$tmp_dir/kanban.md"
+
+    local output
+    output=$("$WIGGUM_HOME/bin/wiggum-validate" cleanup -f "$tmp_dir/kanban.md" 2>&1)
+    local exit_code=$?
+
+    assert_equals "0" "$exit_code" "Cleanup should exit 0 when all tasks collapsed"
+    assert_file_contains "$tmp_dir/kanban.md" "## TASKS" "TASKS section header should be preserved"
+    assert_file_contains "$tmp_dir/kanban.md" "<!-- done: TASK-001, TASK-002 -->" "Done comment should list all IDs"
+    assert_file_not_contains "$tmp_dir/kanban.md" "- [x]" "No [x] task blocks should remain"
+
+    rm -rf "$tmp_dir"
+}
+
+test_cleanup_no_completed() {
+    local tmp_dir
+    tmp_dir=$(create_test_dir)
+    # Create a kanban with no completed tasks
+    cat > "$tmp_dir/kanban.md" << 'EOF'
+# Kanban Board
+
+## TASKS
+
+- [ ] **[TASK-001]** Pending task
+  - Description: Not done yet
+  - Priority: HIGH
+  - Dependencies: none
+EOF
+
+    local output
+    output=$("$WIGGUM_HOME/bin/wiggum-validate" cleanup -f "$tmp_dir/kanban.md" 2>&1)
+    local exit_code=$?
+
+    assert_equals "0" "$exit_code" "Cleanup should exit 0 when no completed tasks"
+    assert_output_contains "$output" "No completed tasks to clean up" "Should report no completed tasks"
+
+    rm -rf "$tmp_dir"
+}
+
+test_cleanup_quiet_mode() {
+    local tmp_dir
+    tmp_dir=$(create_test_dir)
+    cp "$FIXTURES_DIR/kanban-cleanup-mixed.md" "$tmp_dir/kanban.md"
+
+    local output
+    output=$("$WIGGUM_HOME/bin/wiggum-validate" cleanup -q -f "$tmp_dir/kanban.md" 2>&1)
+
+    assert_equals "" "$output" "Quiet mode should produce no output on success"
+
+    rm -rf "$tmp_dir"
+}
+
+test_cleanup_file_not_found() {
+    "$WIGGUM_HOME/bin/wiggum-validate" cleanup -f "$FIXTURES_DIR/nonexistent.md" >/dev/null 2>&1
+    local exit_code=$?
+    assert_equals "$EXIT_VALIDATE_FILE_NOT_FOUND" "$exit_code" "Should exit $EXIT_VALIDATE_FILE_NOT_FOUND for missing file"
+}
+
+test_cleanup_reports_collapsed_ids() {
+    local tmp_dir
+    tmp_dir=$(create_test_dir)
+    cp "$FIXTURES_DIR/kanban-cleanup-mixed.md" "$tmp_dir/kanban.md"
+
+    local output
+    output=$("$WIGGUM_HOME/bin/wiggum-validate" cleanup -f "$tmp_dir/kanban.md" 2>&1)
+
+    assert_output_contains "$output" "Collapsed 2 completed task(s)" "Should report number of collapsed tasks"
+    assert_output_contains "$output" "TASK-001" "Should list collapsed TASK-001"
+    assert_output_contains "$output" "TASK-004" "Should list collapsed TASK-004"
+
+    rm -rf "$tmp_dir"
+}
+
+# =============================================================================
 # Run All Tests
 # =============================================================================
 
@@ -196,6 +309,13 @@ run_test test_exit_code_on_missing_file
 run_test test_quiet_mode_no_success_message
 run_test test_quiet_mode_shows_errors
 run_test test_help_option
+run_test test_cleanup_collapses_completed
+run_test test_cleanup_keeps_non_completed
+run_test test_cleanup_all_completed
+run_test test_cleanup_no_completed
+run_test test_cleanup_quiet_mode
+run_test test_cleanup_file_not_found
+run_test test_cleanup_reports_collapsed_ids
 
 print_test_summary
 exit_with_test_result

@@ -81,51 +81,90 @@ _github_issue_parse_body_to_files() {
     echo "$body" | awk -v out_dir="$out_dir" '
     BEGIN {
         current_section = ""
+        pending_field = ""   # single-value heading field awaiting next non-blank line
     }
+
+    # Skip title heading produced by extract_task (e.g., "# Task: OPT-004 - ...")
+    /^#[[:space:]]+[Tt]ask:/ { next }
 
     # Inline fields: "Priority: HIGH" (case-insensitive)
     /^[Pp]riority[[:space:]]*:/ {
         sub(/^[Pp]riority[[:space:]]*:[[:space:]]*/, "")
         gsub(/^[[:space:]]+|[[:space:]]+$/, "")
         print toupper($0) > out_dir "/priority"
+        current_section = ""; pending_field = ""
         next
     }
     /^[Cc]omplexity[[:space:]]*:/ {
         sub(/^[Cc]omplexity[[:space:]]*:[[:space:]]*/, "")
         gsub(/^[[:space:]]+|[[:space:]]+$/, "")
         print toupper($0) > out_dir "/complexity"
+        current_section = ""; pending_field = ""
         next
     }
     /^[Dd]ependencies[[:space:]]*:/ {
         sub(/^[Dd]ependencies[[:space:]]*:[[:space:]]*/, "")
         gsub(/^[[:space:]]+|[[:space:]]+$/, "")
         print > out_dir "/dependencies"
+        current_section = ""; pending_field = ""
         next
     }
 
-    # Section headings (case-insensitive)
+    # Heading-based single-value fields: "## Priority" then value on next line
+    /^#{2,3}[[:space:]]+[Pp]riority[[:space:]]*$/ {
+        current_section = ""; pending_field = "priority"
+        next
+    }
+    /^#{2,3}[[:space:]]+[Cc]omplexity[[:space:]]*$/ {
+        current_section = ""; pending_field = "complexity"
+        next
+    }
+    /^#{2,3}[[:space:]]+[Dd]ependencies[[:space:]]*$/ {
+        current_section = ""; pending_field = "dependencies"
+        next
+    }
+
+    # Heading-based multi-line sections
+    /^#{2,3}[[:space:]]+[Dd]escription[[:space:]]*$/ {
+        current_section = "description"; pending_field = ""
+        next
+    }
     /^#{2,3}[[:space:]]+[Ss]cope[[:space:]]*$/ {
-        current_section = "scope"
+        current_section = "scope"; pending_field = ""
         next
     }
     /^#{2,3}[[:space:]]+[Oo]ut [Oo]f [Ss]cope[[:space:]]*$/ {
-        current_section = "out_of_scope"
+        current_section = "out_of_scope"; pending_field = ""
         next
     }
     /^#{2,3}[[:space:]]+[Aa]cceptance [Cc]riteria[[:space:]]*$/ {
-        current_section = "acceptance_criteria"
+        current_section = "acceptance_criteria"; pending_field = ""
         next
     }
 
-    # Any other heading ends the current section
+    # Any other heading resets state (content below falls into description)
     /^#{1,6}[[:space:]]/ {
-        current_section = ""
-        print >> out_dir "/description"
+        current_section = ""; pending_field = ""
         next
     }
 
     # Accumulate content
     {
+        # Capture single-value heading field (first non-blank line after heading)
+        if (pending_field != "") {
+            if ($0 !~ /^[[:space:]]*$/) {
+                val = $0
+                gsub(/^[[:space:]]+|[[:space:]]+$/, "", val)
+                if (pending_field == "priority" || pending_field == "complexity") {
+                    print toupper(val) > out_dir "/" pending_field
+                } else {
+                    print val > out_dir "/" pending_field
+                }
+                pending_field = ""
+            }
+            next
+        }
+
         if (current_section != "") {
             print >> out_dir "/" current_section
         } else {

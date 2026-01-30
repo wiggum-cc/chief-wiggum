@@ -33,6 +33,7 @@ Usage: wiggum validate [options]
 
 Subcommands:
   sort              Validate and sort kanban tasks by status and task ID
+  cleanup           Collapse completed [x] tasks into a summary line
 
 Options:
   -v, --verbose     Verbose output (same as default)
@@ -64,6 +65,8 @@ Examples:
   wiggum validate --quiet                  # Only show errors
   wiggum validate sort                     # Validate and sort kanban
   wiggum validate sort -f custom.md        # Sort specific file
+  wiggum validate cleanup                  # Collapse completed tasks
+  wiggum validate cleanup -f custom.md     # Cleanup specific file
 
 Exit codes:
   0  - Kanban file is valid (or sorted successfully)
@@ -549,6 +552,225 @@ sort_kanban() {
     with_file_lock "$kanban_file" 5 _sort_kanban_impl "$kanban_file" "$quiet"
 }
 
+# Internal implementation - called under lock
+#
+# Collapses completed [x] task blocks into a single summary line at the top
+# of the TASKS section, preserving task IDs so dependency references remain valid.
+# Format: <!-- done: TASK-001, TASK-002, TASK-003 -->
+_cleanup_kanban_impl() {
+    local kanban_file="$1"
+    local quiet="${2:-false}"
+
+    # First validate the file
+    validate_kanban "$kanban_file"
+    if [ "$VALID" = false ]; then
+        echo "Cannot cleanup: validation failed" >&2
+        return $EXIT_VALIDATE_ERRORS_FOUND
+    fi
+
+    local header=""
+    local footer=""
+    local in_tasks_section=false
+    local past_tasks_section=false
+    local tasks_header=""
+
+    # Arrays to hold task blocks
+    declare -a task_blocks=()
+    declare -a task_statuses=()
+    declare -a block_ids=()
+    local current_block=""
+    local current_status=""
+    local current_id=""
+
+    # Collect IDs already in an existing done comment
+    declare -a existing_done_ids=()
+
+    # Read file and parse into sections
+    while IFS= read -r line || [ -n "$line" ]; do
+        # Check for TASKS section header
+        if [[ "$line" =~ ^##[[:space:]]+TASKS[[:space:]]*$ ]]; then
+            in_tasks_section=true
+            tasks_header="$line"
+            continue
+        fi
+
+        # Check for next section after TASKS (## something else)
+        if [ "$in_tasks_section" = true ] && [[ "$line" =~ ^##[[:space:]] ]] && [[ ! "$line" =~ ^##[[:space:]]+TASKS ]]; then
+            in_tasks_section=false
+            past_tasks_section=true
+            # Save any pending block
+            if [ -n "$current_block" ]; then
+                task_blocks+=("$current_block")
+                task_statuses+=("$current_status")
+                block_ids+=("$current_id")
+                current_block=""
+            fi
+            footer="$line"
+            continue
+        fi
+
+        if [ "$in_tasks_section" = false ] && [ "$past_tasks_section" = false ]; then
+            # Before TASKS section - accumulate header
+            if [ -n "$header" ]; then
+                header="$header"$'\n'"$line"
+            else
+                header="$line"
+            fi
+        elif [ "$past_tasks_section" = true ]; then
+            # After TASKS section - accumulate footer
+            footer="$footer"$'\n'"$line"
+        else
+            # Inside TASKS section
+            # Parse existing done comment (skip it — we'll regenerate)
+            if [[ "$line" =~ ^\<!--[[:space:]]*done:[[:space:]]*(.*)[[:space:]]*--\>$ ]]; then
+                local ids_csv="${BASH_REMATCH[1]}"
+                IFS=',' read -ra _ids <<< "$ids_csv"
+                for _id in "${_ids[@]}"; do
+                    _id="${_id#"${_id%%[![:space:]]*}"}"
+                    _id="${_id%"${_id##*[![:space:]]}"}"
+                    [ -n "$_id" ] && existing_done_ids+=("$_id")
+                done
+                continue
+            fi
+
+            # Check for task line
+            if [[ "$line" =~ ^-[[:space:]]\[([[:space:]x=PN\*])\][[:space:]]\*\*\[([A-Za-z0-9-]+)\]\*\* ]]; then
+                # Save previous block if exists
+                if [ -n "$current_block" ]; then
+                    task_blocks+=("$current_block")
+                    task_statuses+=("$current_status")
+                    block_ids+=("$current_id")
+                fi
+
+                current_status="${BASH_REMATCH[1]}"
+                current_id="${BASH_REMATCH[2]}"
+                current_block="$line"
+            elif [ -n "$current_block" ]; then
+                # Continuation of current task block
+                current_block="$current_block"$'\n'"$line"
+            fi
+        fi
+    done < "$kanban_file"
+
+    # Save last block
+    if [ -n "$current_block" ]; then
+        task_blocks+=("$current_block")
+        task_statuses+=("$current_status")
+        block_ids+=("$current_id")
+    fi
+
+    # Separate completed from non-completed task blocks
+    local num_tasks=${#task_blocks[@]}
+    declare -a collapsed_ids=()
+    declare -a kept_blocks=()
+
+    for ((i=0; i<num_tasks; i++)); do
+        if [ "${task_statuses[$i]}" = "x" ]; then
+            collapsed_ids+=("${block_ids[$i]}")
+        else
+            kept_blocks+=("${task_blocks[$i]}")
+        fi
+    done
+
+    local num_collapsed=${#collapsed_ids[@]}
+
+    if [ "$num_collapsed" -eq 0 ] && [ ${#existing_done_ids[@]} -eq 0 ]; then
+        if [ "$quiet" = false ]; then
+            echo "No completed tasks to clean up"
+        fi
+        return $EXIT_OK
+    fi
+
+    # Merge existing done IDs with newly collapsed ones (preserve order, deduplicate)
+    declare -A seen_ids=()
+    declare -a all_done_ids=()
+    for _id in "${existing_done_ids[@]}" "${collapsed_ids[@]}"; do
+        if [ -z "${seen_ids[$_id]:-}" ]; then
+            seen_ids[$_id]=1
+            all_done_ids+=("$_id")
+        fi
+    done
+
+    # Build done comment line
+    local done_csv=""
+    for _id in "${all_done_ids[@]}"; do
+        if [ -n "$done_csv" ]; then
+            done_csv="$done_csv, $_id"
+        else
+            done_csv="$_id"
+        fi
+    done
+    local done_line="<!-- done: $done_csv -->"
+
+    # Write cleaned file
+    {
+        # Write header (remove trailing whitespace-only lines)
+        while [[ "$header" =~ $'\n'[[:space:]]*$ ]]; do
+            header="${header%$'\n'*}"
+        done
+        printf '%s\n' "$header"
+        echo ""
+        echo "$tasks_header"
+        echo ""
+        echo "$done_line"
+        echo ""
+
+        # Write kept tasks
+        for block in "${kept_blocks[@]}"; do
+            # Remove trailing whitespace-only lines from block
+            while [[ "$block" =~ $'\n'[[:space:]]*$ ]]; do
+                block="${block%$'\n'*}"
+            done
+            printf '%s\n' "$block"
+            echo ""
+        done
+
+        # Write footer if exists
+        if [ -n "$footer" ]; then
+            # Remove leading whitespace-only lines from footer
+            while [[ "$footer" =~ ^[[:space:]]*$'\n' ]]; do
+                footer="${footer#*$'\n'}"
+            done
+            printf '%s\n' "$footer"
+        fi
+    } > "$kanban_file.tmp"
+
+    # Replace original with cleaned version
+    mv "$kanban_file.tmp" "$kanban_file"
+
+    if [ "$quiet" = false ]; then
+        if [ "$num_collapsed" -gt 0 ]; then
+            local ids_str=""
+            for _id in "${collapsed_ids[@]}"; do
+                if [ -n "$ids_str" ]; then
+                    ids_str="$ids_str, $_id"
+                else
+                    ids_str="$_id"
+                fi
+            done
+            echo "Collapsed $num_collapsed completed task(s): $ids_str"
+        else
+            echo "No new completed tasks to collapse"
+        fi
+    fi
+
+    return $EXIT_OK
+}
+
+# Collapse completed tasks in kanban file with file locking
+cleanup_kanban() {
+    local kanban_file="$1"
+    local quiet="${2:-false}"
+
+    if [ ! -f "$kanban_file" ]; then
+        echo "Error: Kanban file not found: $kanban_file" >&2
+        return $EXIT_VALIDATE_FILE_NOT_FOUND
+    fi
+
+    # Acquire lock for the entire cleanup operation
+    with_file_lock "$kanban_file" 5 _cleanup_kanban_impl "$kanban_file" "$quiet"
+}
+
 main() {
     # Parse verbose flags first
     parse_verbose_flags "$@"
@@ -557,15 +779,19 @@ main() {
     local kanban_file="$RALPH_DIR/kanban.md"
     local quiet=false
     local do_sort=false
+    local do_cleanup=false
 
     # Map LOG_LEVEL=WARN to quiet for backward compatibility
     if [[ "${LOG_LEVEL:-}" == "WARN" ]]; then
         quiet=true
     fi
 
-    # Check for sort subcommand first
+    # Check for subcommand first
     if [[ "${1:-}" == "sort" ]]; then
         do_sort=true
+        shift
+    elif [[ "${1:-}" == "cleanup" ]]; then
+        do_cleanup=true
         shift
     fi
 
@@ -602,6 +828,12 @@ main() {
     # Handle sort subcommand
     if [ "$do_sort" = true ]; then
         sort_kanban "$kanban_file" "$quiet"
+        exit $?
+    fi
+
+    # Handle cleanup subcommand
+    if [ "$do_cleanup" = true ]; then
+        cleanup_kanban "$kanban_file" "$quiet"
         exit $?
     fi
 

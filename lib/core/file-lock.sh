@@ -152,6 +152,11 @@ add_kanban_task() {
     local dependencies="${6:-none}"
     local extra_fields="${7:-}"
 
+    # Collapse multi-line description to single line (kanban format requires it)
+    if [[ "$description" == *$'\n'* ]]; then
+        description=$(echo "$description" | tr '\n' ' ' | sed 's/  */ /g; s/^ *//; s/ *$//')
+    fi
+
     # Build the task block via direct string construction (safe — no format interpretation)
     local task_block
     task_block="- [ ] **[${task_id}]** ${brief}"$'\n'
@@ -202,6 +207,11 @@ update_kanban_task_fields() {
     local description="${3:-}"
     local priority="${4:-}"
     local dependencies="${5:-}"
+
+    # Collapse multi-line description to single line (kanban format requires it)
+    if [[ -n "$description" && "$description" == *$'\n'* ]]; then
+        description=$(echo "$description" | tr '\n' ' ' | sed 's/  */ /g; s/^ *//; s/ *$//')
+    fi
 
     # Pass fields via environment to avoid injection
     _UKTF_TASK_ID="$task_id" \

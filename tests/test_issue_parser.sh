@@ -245,6 +245,93 @@ test_parse_full_issue_no_task_id() {
 }
 
 # =============================================================================
+# Heading-Based Format (round-trip with extract_task output)
+# =============================================================================
+
+test_parse_body_heading_fields() {
+    # This is the format extract_task produces for issue bodies
+    local body="# Task: OPT-004 - Backend performance optimizations
+
+## Description
+Implement N+1 upsert fix, batch graph mutations, and reduce RwLock contention.
+
+## Priority
+MEDIUM
+
+## Dependencies
+OPT-001, OPT-002
+
+## Scope
+- Fix N+1 upsert pattern
+- Implement batch mutation API
+
+## Checklist
+- [ ] Fix upsert
+- [ ] Mark this PRD as complete"
+
+    local result
+    result=$(github_issue_parse_body_json "$body")
+
+    local description priority dependencies scope
+    description=$(echo "$result" | jq -r '.description')
+    priority=$(echo "$result" | jq -r '.priority')
+    dependencies=$(echo "$result" | jq -r '.dependencies')
+    scope=$(echo "$result" | jq -r '.scope')
+
+    assert_equals "MEDIUM" "$priority" "Should extract priority from ## heading"
+    assert_equals "OPT-001, OPT-002" "$dependencies" "Should extract dependencies from ## heading"
+    assert_output_contains "$description" "Implement N+1 upsert fix" "Description should have body text"
+    assert_output_not_contains "$description" "## Priority" "Description should NOT contain ## Priority heading"
+    assert_output_not_contains "$description" "## Dependencies" "Description should NOT contain ## Dependencies heading"
+    assert_output_not_contains "$description" "# Task:" "Description should NOT contain title heading"
+    assert_output_contains "$scope" "Fix N+1 upsert pattern" "Should extract scope"
+}
+
+test_parse_body_heading_complexity() {
+    local body="## Description
+Some task.
+
+## Complexity
+HIGH
+
+## Priority
+LOW"
+
+    local result
+    result=$(github_issue_parse_body_json "$body")
+
+    local priority complexity
+    priority=$(echo "$result" | jq -r '.priority')
+    complexity=$(echo "$result" | jq -r '.complexity')
+
+    assert_equals "LOW" "$priority" "Should extract priority from heading"
+    assert_equals "HIGH" "$complexity" "Should extract complexity from heading"
+}
+
+test_parse_body_mixed_inline_and_heading() {
+    # Inline fields should still work alongside headings
+    local body="Priority: HIGH
+
+## Description
+Some description text.
+
+## Scope
+- Item one"
+
+    local result
+    result=$(github_issue_parse_body_json "$body")
+
+    local priority description scope
+    priority=$(echo "$result" | jq -r '.priority')
+    description=$(echo "$result" | jq -r '.description')
+    scope=$(echo "$result" | jq -r '.scope')
+
+    assert_equals "HIGH" "$priority" "Inline priority should take precedence"
+    assert_output_contains "$description" "Some description text." "Should extract description"
+    assert_output_contains "$scope" "Item one" "Should extract scope"
+}
+
+# =============================================================================
 # Run all tests
 # =============================================================================
 run_test test_parse_task_id_basic
@@ -269,6 +356,9 @@ run_test test_validate_deps_empty
 run_test test_validate_deps_all_invalid
 run_test test_parse_full_issue
 run_test test_parse_full_issue_no_task_id
+run_test test_parse_body_heading_fields
+run_test test_parse_body_heading_complexity
+run_test test_parse_body_mixed_inline_and_heading
 
 print_test_summary
 exit_with_test_result
