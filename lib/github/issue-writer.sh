@@ -165,12 +165,12 @@ github_issue_create() {
     local title="[$task_id] $brief"
 
     # Build label args — always include gate label
+    local gate_label="${GITHUB_SYNC_LABEL_FILTER:-wiggum}"
     local label_args=()
-    label_args+=(--label "${GITHUB_SYNC_LABEL_FILTER:-wiggum}")
+    label_args+=(--label "$gate_label")
     local label
     for label in "${labels[@]}"; do
-        # Skip empty, JSON artifacts, or whitespace-only labels
-        [[ -n "$label" && "$label" != "{}" && "$label" != "null" && "$label" =~ [a-zA-Z] ]] && \
+        [[ -n "$label" && "$label" != "$gate_label" ]] && \
             label_args+=(--label "$label")
     done
 

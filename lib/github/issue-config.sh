@@ -42,6 +42,9 @@ _extract_github_sync_config() {
 
     [ -f "$config_file" ] || return 1
 
+    # Use unit separator (\x1f) instead of @tsv — bash IFS=$'\t' collapses
+    # consecutive tabs, losing empty fields and shifting all subsequent values.
+    # Non-whitespace IFS characters preserve empty fields.
     jq -r '[
         (.github.issue_sync.enabled // ""),
         (.github.issue_sync.allowed_user_ids // [] | map(tostring) | join(",")),
@@ -51,7 +54,7 @@ _extract_github_sync_config() {
         (.github.issue_sync.priority_labels // {} | tojson),
         (.github.issue_sync.status_labels // {} | tojson),
         (.github.issue_sync.close_on // [] | join(","))
-    ] | @tsv' "$config_file" 2>/dev/null || return 1
+    ] | join("\u001f")' "$config_file" 2>/dev/null || return 1
 }
 
 # =============================================================================
@@ -94,7 +97,7 @@ load_github_sync_config() {
     fi
 
     if [ -n "$extracted" ]; then
-        IFS=$'\t' read -r _cfg_enabled _cfg_user_ids _cfg_usernames \
+        IFS=$'\x1f' read -r _cfg_enabled _cfg_user_ids _cfg_usernames \
                          _cfg_label_filter _cfg_default_priority \
                          _cfg_priority_labels _cfg_status_labels _cfg_close_on \
                          <<< "$extracted"
