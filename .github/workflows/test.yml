@@ -14,25 +14,8 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Run shellcheck on bin scripts
-        run: |
-          find bin -type f -executable -exec shellcheck --severity=warning {} +
-
-      - name: Run shellcheck on lib scripts
-        run: |
-          find lib -name "*.sh" -type f -exec shellcheck --severity=warning {} +
-
-      - name: Run shellcheck on test scripts
-        run: |
-          find tests -name "*.sh" -type f -exec shellcheck --severity=warning {} +
-
-      - name: Run shellcheck on hooks scripts
-        run: |
-          find hooks -name "*.sh" -type f -exec shellcheck --severity=warning {} +
-
-      - name: Run shellcheck on root scripts
-        run: |
-          shellcheck --severity=warning install.sh install-symlink.sh
+      - name: Run shellcheck
+        run: ./tests/run-shellcheck.sh
 
   test:
     name: Test Suite
