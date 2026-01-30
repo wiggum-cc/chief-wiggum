@@ -82,10 +82,12 @@ _github_issue_parse_body_to_files() {
     BEGIN {
         current_section = ""
         pending_field = ""   # single-value heading field awaiting next non-blank line
+        past_preamble = 0    # set once any heading is seen; prevents unrecognized
+                             # section content (e.g. ## Checklist) leaking into description
     }
 
     # Skip title heading produced by extract_task (e.g., "# Task: OPT-004 - ...")
-    /^#[[:space:]]+[Tt]ask:/ { next }
+    /^#[[:space:]]+[Tt]ask:/ { past_preamble = 1; next }
 
     # Inline fields: "Priority: HIGH" (case-insensitive)
     /^[Pp]riority[[:space:]]*:/ {
@@ -112,39 +114,39 @@ _github_issue_parse_body_to_files() {
 
     # Heading-based single-value fields: "## Priority" then value on next line
     /^#{2,3}[[:space:]]+[Pp]riority[[:space:]]*$/ {
-        current_section = ""; pending_field = "priority"
+        current_section = ""; pending_field = "priority"; past_preamble = 1
         next
     }
     /^#{2,3}[[:space:]]+[Cc]omplexity[[:space:]]*$/ {
-        current_section = ""; pending_field = "complexity"
+        current_section = ""; pending_field = "complexity"; past_preamble = 1
         next
     }
     /^#{2,3}[[:space:]]+[Dd]ependencies[[:space:]]*$/ {
-        current_section = ""; pending_field = "dependencies"
+        current_section = ""; pending_field = "dependencies"; past_preamble = 1
         next
     }
 
     # Heading-based multi-line sections
     /^#{2,3}[[:space:]]+[Dd]escription[[:space:]]*$/ {
-        current_section = "description"; pending_field = ""
+        current_section = "description"; pending_field = ""; past_preamble = 1
         next
     }
     /^#{2,3}[[:space:]]+[Ss]cope[[:space:]]*$/ {
-        current_section = "scope"; pending_field = ""
+        current_section = "scope"; pending_field = ""; past_preamble = 1
         next
     }
     /^#{2,3}[[:space:]]+[Oo]ut [Oo]f [Ss]cope[[:space:]]*$/ {
-        current_section = "out_of_scope"; pending_field = ""
+        current_section = "out_of_scope"; pending_field = ""; past_preamble = 1
         next
     }
     /^#{2,3}[[:space:]]+[Aa]cceptance [Cc]riteria[[:space:]]*$/ {
-        current_section = "acceptance_criteria"; pending_field = ""
+        current_section = "acceptance_criteria"; pending_field = ""; past_preamble = 1
         next
     }
 
-    # Any other heading resets state (content below falls into description)
+    # Any other heading resets state (content is discarded, not dumped to description)
     /^#{1,6}[[:space:]]/ {
-        current_section = ""; pending_field = ""
+        current_section = ""; pending_field = ""; past_preamble = 1
         next
     }
 
@@ -167,9 +169,10 @@ _github_issue_parse_body_to_files() {
 
         if (current_section != "") {
             print >> out_dir "/" current_section
-        } else {
+        } else if (!past_preamble) {
             print >> out_dir "/description"
         }
+        # else: discard (content under unrecognized heading like ## Checklist)
     }
     '
 }

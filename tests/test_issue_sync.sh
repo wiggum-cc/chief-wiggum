@@ -655,26 +655,29 @@ KANBAN
     echo "227" > "$counter_file"
 
     # Mock data for down sync: open issues (INNOV-006, INNOV-007)
+    # Bodies include ## Checklist section (as produced by extract_task) to test
+    # that the parser discards unrecognized sections and doesn't pollute description.
+    # updatedAt is realistic (non-empty) to trigger the timestamp comparison path.
     local mock_open_issues="$TEST_DIR/mock_open_issues.json"
     cat > "$mock_open_issues" << 'JSON'
 [
   {
     "number": 228,
     "title": "[INNOV-006] Explore streaming/incremental ingestion pipeline (Strategy C)",
-    "body": "## Description\n\nPer SPEC-DATA-PIPELINE Section 4.3 and 12.1, Strategy C supports streaming ingestion.",
+    "body": "# Task: INNOV-006 - Explore streaming/incremental ingestion pipeline (Strategy C)\n\n## Description\nPer SPEC-DATA-PIPELINE Section 4.3 and 12.1, Strategy C supports streaming ingestion where content arrives piece by piece.\n\n## Priority\nLOW\n\n## Dependencies\nPIPE-002, PIPE-003\n\n## Scope\n\n- Prototype sliding window segmenter\n- Evaluate latency characteristics vs Strategy A/B\n\n## Acceptance Criteria\n\n- Prototype demonstrates streaming ingestion\n- Trade-offs and recommendation documented\n\n## Checklist\n\n- [ ] Prototype sliding window segmenter\n- [ ] Evaluate latency characteristics vs Strategy A/B\n- [ ] Mark this PRD as complete",
     "labels": [{"name": "wiggum"}, {"name": "priority:low"}],
     "author": {"login": "testuser", "id": "12345"},
     "state": "OPEN",
-    "updatedAt": ""
+    "updatedAt": "2025-01-23T15:00:00Z"
   },
   {
     "number": 229,
     "title": "[INNOV-007] Explore multi-modal embedding integration (vision + audio)",
-    "body": "## Description\n\nPer SPEC-DATA-PIPELINE Section 6, the pipeline should handle images and audio.",
+    "body": "# Task: INNOV-007 - Explore multi-modal embedding integration (vision + audio)\n\n## Description\nPer SPEC-DATA-PIPELINE Section 6, the pipeline should eventually handle images and audio.\n\n## Priority\nLOW\n\n## Dependencies\nPIPE-007, EMBED-001\n\n## Scope\n\n- Evaluate vision embedding models (CLIP, SigLIP, Qwen2-VL)\n- Prototype image embedding pipeline stage\n\n## Acceptance Criteria\n\n- Image embedding prototype working\n- Architecture recommendation documented\n\n## Checklist\n\n- [ ] Evaluate vision embedding models (CLIP, SigLIP, Qwen2-VL)\n- [ ] Prototype image embedding pipeline stage\n- [ ] Mark this PRD as complete",
     "labels": [{"name": "wiggum"}, {"name": "priority:low"}, {"name": "wiggum:pending-approval"}],
     "author": {"login": "testuser", "id": "12345"},
     "state": "OPEN",
-    "updatedAt": ""
+    "updatedAt": "2025-01-23T15:00:00Z"
   }
 ]
 JSON
