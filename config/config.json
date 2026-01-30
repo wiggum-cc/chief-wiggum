@@ -41,6 +41,29 @@
       }
     }
   },
+  "github": {
+    "issue_sync": {
+      "enabled": false,
+      "allowed_user_ids": [],
+      "allowed_usernames": [],
+      "label_filter": "wiggum",
+      "priority_labels": {
+        "priority:critical": "CRITICAL",
+        "priority:high": "HIGH",
+        "priority:medium": "MEDIUM",
+        "priority:low": "LOW"
+      },
+      "default_priority": "MEDIUM",
+      "status_labels": {
+        "wiggum:in-progress": "=",
+        "wiggum:pending-approval": "P",
+        "wiggum:failed": "*",
+        "wiggum:completed": "x",
+        "wiggum:not-planned": "N"
+      },
+      "close_on": ["x"]
+    }
+  },
   "review": {
     "approved_authors": ["copilot", "dependabot", "github-actions[bot]", "dependabot[bot]", "renovate[bot]", "codecov[bot]"],
     "fix_max_iterations": 10,

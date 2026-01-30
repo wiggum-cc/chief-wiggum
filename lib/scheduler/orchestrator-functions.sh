@@ -799,6 +799,50 @@ orch_update_aging() {
 }
 
 # =============================================================================
+# GitHub Issue Sync
+# =============================================================================
+
+# Run GitHub issue sync (down + up)
+#
+# Called as a periodic service to sync issues.
+# Loads config, checks if enabled, and runs the sync engine.
+#
+# Globals:
+#   RALPH_DIR   - Required
+#   WIGGUM_HOME - Required
+#
+# Returns: 0 on success, 1 on failure
+orch_github_issue_sync() {
+    local ralph_dir="${RALPH_DIR:-}"
+    [ -n "$ralph_dir" ] || { log_error "RALPH_DIR not set"; return 1; }
+
+    source "$WIGGUM_HOME/lib/github/issue-config.sh"
+    load_github_sync_config
+
+    if ! github_sync_is_enabled; then
+        log_debug "GitHub issue sync disabled - skipping"
+        return 0
+    fi
+
+    if ! github_sync_validate_config; then
+        log_error "GitHub issue sync config invalid - skipping"
+        return 1
+    fi
+
+    source "$WIGGUM_HOME/lib/github/issue-sync.sh"
+
+    local sync_exit=0
+    github_issue_sync "$ralph_dir" "false" || sync_exit=$?
+
+    if [ "$sync_exit" -ne 0 ]; then
+        log_error "GitHub issue sync failed"
+        return 1
+    fi
+
+    return 0
+}
+
+# =============================================================================
 # Worker Spawn and Lifecycle Functions
 #
 # Extracted from wiggum-run to keep the entry point minimal.

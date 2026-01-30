@@ -101,6 +101,10 @@ test_scheduler_tick_finds_blocked_tasks() {
 }
 
 test_scheduler_tick_initializes_event_flag() {
+    # First tick populates task lists (triggers event due to list change)
+    scheduler_tick
+
+    # Second tick with no changes — flag should stay false
     SCHED_SCHEDULING_EVENT=true
     scheduler_tick
 

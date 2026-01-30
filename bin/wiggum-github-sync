@@ -1,0 +1,138 @@
+#!/usr/bin/env bash
+# wiggum-github-sync - CLI for GitHub issue sync
+#
+# Usage:
+#   wiggum github-sync              Full sync cycle (down + up)
+#   wiggum github-sync down         Pull issues -> kanban only
+#   wiggum github-sync up           Push kanban -> GitHub only
+#   wiggum github-sync status       Show sync state summary
+#   wiggum github-sync --dry-run    Show planned changes without writing
+set -euo pipefail
+
+WIGGUM_HOME="${WIGGUM_HOME:-$HOME/.claude/chief-wiggum}"
+
+source "$WIGGUM_HOME/lib/core/exit-codes.sh"
+source "$WIGGUM_HOME/lib/core/defaults.sh"
+source "$WIGGUM_HOME/lib/core/logger.sh"
+source "$WIGGUM_HOME/lib/core/verbose-flags.sh"
+source "$WIGGUM_HOME/lib/github/issue-config.sh"
+source "$WIGGUM_HOME/lib/github/issue-sync.sh"
+
+show_help() {
+    cat << EOF
+wiggum github-sync - Sync GitHub issues with local kanban
+
+Usage: wiggum github-sync [command] [options]
+
+Commands:
+  (none)    Full sync cycle (down + up)
+  down      Pull GitHub issues to local kanban only
+  up        Push local kanban status to GitHub only
+  status    Show sync state summary
+
+Options:
+  --dry-run    Show planned changes without writing
+  -h, --help   Show this help
+
+Examples:
+  wiggum github-sync              # Full sync
+  wiggum github-sync down         # Import new issues
+  wiggum github-sync up           # Push status changes
+  wiggum github-sync --dry-run    # Preview changes
+  wiggum github-sync status       # Show state
+
+Configuration:
+  Set in .ralph/config.json or config/config.json under github.issue_sync.
+  Enable with: "enabled": true
+  Required: allowed_user_ids or allowed_usernames must be configured.
+
+Environment:
+  WIGGUM_GITHUB_ISSUE_SYNC=true        Enable sync
+  WIGGUM_GITHUB_ALLOWED_USER_IDS=...   Comma-separated user IDs
+  WIGGUM_GITHUB_ALLOWED_USERNAMES=...  Comma-separated usernames
+  WIGGUM_GITHUB_LABEL_FILTER=wiggum    Gate label (default: wiggum)
+
+EOF
+}
+
+main() {
+    # Parse verbose flags first
+    parse_verbose_flags "$@"
+    set -- "${WIGGUM_REMAINING_ARGS[@]}"
+
+    local command=""
+    local dry_run="false"
+
+    # Parse arguments
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -h|--help)
+                show_help
+                exit $EXIT_OK
+                ;;
+            --dry-run)
+                dry_run="true"
+                shift
+                ;;
+            down|up|status)
+                command="$1"
+                shift
+                ;;
+            *)
+                echo "Unknown argument: $1" >&2
+                show_help
+                exit $EXIT_USAGE
+                ;;
+        esac
+    done
+
+    # Verify ralph directory
+    if [ ! -d "$RALPH_DIR" ]; then
+        log_error "Ralph directory not found: $RALPH_DIR"
+        echo "Run 'wiggum init' first."
+        exit $EXIT_RUN_NO_RALPH_DIR
+    fi
+
+    # Load and validate config
+    load_github_sync_config
+
+    if ! github_sync_is_enabled; then
+        echo "GitHub issue sync is disabled."
+        echo "Enable it in .ralph/config.json: {\"github\": {\"issue_sync\": {\"enabled\": true}}}"
+        echo "Or set: WIGGUM_GITHUB_ISSUE_SYNC=true"
+        exit $EXIT_OK
+    fi
+
+    if ! github_sync_validate_config; then
+        log_error "GitHub sync configuration is invalid"
+        exit $EXIT_ERROR
+    fi
+
+    # Dispatch command
+    case "${command:-}" in
+        ""|down|up)
+            if [ "$dry_run" = "true" ]; then
+                echo "=== Dry Run Mode ==="
+                echo ""
+            fi
+            ;;
+    esac
+
+    case "${command:-}" in
+        "")
+            # Full sync
+            github_issue_sync "$RALPH_DIR" "$dry_run"
+            ;;
+        down)
+            github_issue_sync_down "$RALPH_DIR" "$dry_run"
+            ;;
+        up)
+            github_issue_sync_up "$RALPH_DIR" "$dry_run"
+            ;;
+        status)
+            github_issue_sync_status "$RALPH_DIR"
+            ;;
+    esac
+}
+
+main "$@"

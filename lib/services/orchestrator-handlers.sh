@@ -96,6 +96,11 @@ svc_orch_display_status() {
     orch_display_status "$@"
 }
 
+# Sync GitHub issues to local kanban and push status updates
+svc_orch_github_issue_sync() {
+    orch_github_issue_sync "$@"
+}
+
 # =============================================================================
 # Startup Phase Handlers (Phase 3)
 # =============================================================================

@@ -1,0 +1,277 @@
+#!/usr/bin/env bash
+# issue-writer.sh - Write status updates back to GitHub issues
+#
+# Manages GitHub issue labels, comments, and open/close state.
+# All API calls use timeout and error handling via gh CLI.
+set -euo pipefail
+
+# Prevent double-sourcing
+[ -n "${_GITHUB_ISSUE_WRITER_LOADED:-}" ] && return 0
+_GITHUB_ISSUE_WRITER_LOADED=1
+
+# =============================================================================
+# Label Management
+# =============================================================================
+
+# Add a label to a GitHub issue
+#
+# Args:
+#   issue_number - GitHub issue number
+#   label        - Label name to add
+#
+# Returns: 0 on success, 1 on failure
+github_issue_add_label() {
+    local issue_number="$1"
+    local label="$2"
+
+    local exit_code=0
+    timeout "${WIGGUM_GH_TIMEOUT:-30}" gh issue edit "$issue_number" \
+        --add-label "$label" 2>/dev/null || exit_code=$?
+
+    if [ "$exit_code" -ne 0 ]; then
+        log_warn "Failed to add label '$label' to issue #$issue_number (exit: $exit_code)"
+        return 1
+    fi
+    return 0
+}
+
+# Remove a label from a GitHub issue
+#
+# Args:
+#   issue_number - GitHub issue number
+#   label        - Label name to remove
+#
+# Returns: 0 on success, 1 on failure (label might not exist)
+github_issue_remove_label() {
+    local issue_number="$1"
+    local label="$2"
+
+    local exit_code=0
+    timeout "${WIGGUM_GH_TIMEOUT:-30}" gh issue edit "$issue_number" \
+        --remove-label "$label" 2>/dev/null || exit_code=$?
+
+    # Label removal failure is non-critical (label might not be present)
+    if [ "$exit_code" -ne 0 ]; then
+        log_debug "Could not remove label '$label' from issue #$issue_number (may not exist)"
+    fi
+    return 0
+}
+
+# Remove all wiggum status labels from an issue, then add the new one
+#
+# Status labels are mutually exclusive. This removes any existing status
+# label before adding the new one.
+#
+# Args:
+#   issue_number - GitHub issue number
+#   new_label    - New status label to set (empty = remove all status labels)
+#   old_label    - Previous status label to remove (empty = skip removal)
+#
+# Returns: 0 on success
+github_issue_set_status_label() {
+    local issue_number="$1"
+    local new_label="${2:-}"
+    local old_label="${3:-}"
+
+    # Remove old status label if present and different from new
+    if [ -n "$old_label" ] && [ "$old_label" != "$new_label" ]; then
+        github_issue_remove_label "$issue_number" "$old_label"
+    fi
+
+    # Add new status label if present
+    if [ -n "$new_label" ]; then
+        github_issue_add_label "$issue_number" "$new_label"
+    fi
+}
+
+# =============================================================================
+# Comment Management
+# =============================================================================
+
+# Post a comment on a GitHub issue
+#
+# Args:
+#   issue_number - GitHub issue number
+#   body         - Comment body text
+#
+# Returns: 0 on success, 1 on failure
+github_issue_post_comment() {
+    local issue_number="$1"
+    local body="$2"
+
+    local exit_code=0
+    timeout "${WIGGUM_GH_TIMEOUT:-30}" gh issue comment "$issue_number" \
+        --body "$body" 2>/dev/null || exit_code=$?
+
+    if [ "$exit_code" -ne 0 ]; then
+        log_warn "Failed to post comment on issue #$issue_number (exit: $exit_code)"
+        return 1
+    fi
+    return 0
+}
+
+# Post a status transition comment
+#
+# Args:
+#   issue_number - GitHub issue number
+#   old_status   - Previous human-readable status (e.g., "pending")
+#   new_status   - New human-readable status (e.g., "in-progress")
+#
+# Returns: 0 on success
+github_issue_post_transition_comment() {
+    local issue_number="$1"
+    local old_status="$2"
+    local new_status="$3"
+
+    local body="wiggum: status changed — ${old_status} → ${new_status}"
+    github_issue_post_comment "$issue_number" "$body"
+}
+
+# Post a PR link comment (only once per issue)
+#
+# Args:
+#   issue_number - GitHub issue number
+#   pr_url       - Pull request URL
+#
+# Returns: 0 on success
+github_issue_post_pr_link() {
+    local issue_number="$1"
+    local pr_url="$2"
+
+    local body="wiggum: pull request created — $pr_url"
+    github_issue_post_comment "$issue_number" "$body"
+}
+
+# =============================================================================
+# Issue State Management
+# =============================================================================
+
+# Close a GitHub issue
+#
+# Args:
+#   issue_number - GitHub issue number
+#
+# Returns: 0 on success, 1 on failure
+github_issue_close() {
+    local issue_number="$1"
+
+    local exit_code=0
+    timeout "${WIGGUM_GH_TIMEOUT:-30}" gh issue close "$issue_number" \
+        2>/dev/null || exit_code=$?
+
+    if [ "$exit_code" -ne 0 ]; then
+        log_warn "Failed to close issue #$issue_number (exit: $exit_code)"
+        return 1
+    fi
+    return 0
+}
+
+# Reopen a GitHub issue
+#
+# Args:
+#   issue_number - GitHub issue number
+#
+# Returns: 0 on success, 1 on failure
+github_issue_reopen() {
+    local issue_number="$1"
+
+    local exit_code=0
+    timeout "${WIGGUM_GH_TIMEOUT:-30}" gh issue reopen "$issue_number" \
+        2>/dev/null || exit_code=$?
+
+    if [ "$exit_code" -ne 0 ]; then
+        log_warn "Failed to reopen issue #$issue_number (exit: $exit_code)"
+        return 1
+    fi
+    return 0
+}
+
+# =============================================================================
+# High-Level Status Update
+# =============================================================================
+
+# Map kanban status char to human-readable name
+#
+# Args:
+#   status_char - Single kanban status character
+#
+# Returns: human-readable name on stdout
+_kanban_status_name() {
+    local status_char="$1"
+    case "$status_char" in
+        " ") echo "pending" ;;
+        "=") echo "in-progress" ;;
+        "P") echo "pending-approval" ;;
+        "x") echo "completed" ;;
+        "*") echo "failed" ;;
+        "N") echo "not-planned" ;;
+        *)   echo "unknown" ;;
+    esac
+}
+
+# Perform a full status update on a GitHub issue
+#
+# Handles label changes, state changes (close/reopen), and transition comments.
+#
+# Args:
+#   issue_number   - GitHub issue number
+#   new_status     - New kanban status char
+#   old_status     - Previous kanban status char
+#   old_state      - Previous GitHub issue state ("open" or "closed")
+#   dry_run        - "true" to only log changes without making them
+#
+# Returns: 0 on success
+github_issue_update_status() {
+    local issue_number="$1"
+    local new_status="$2"
+    local old_status="$3"
+    local old_state="${4:-open}"
+    local dry_run="${5:-false}"
+
+    # Determine label changes
+    local new_label old_label
+    new_label=$(github_sync_get_status_label "$new_status")
+    old_label=$(github_sync_get_status_label "$old_status")
+
+    # Determine state changes
+    local should_close="false"
+    local should_reopen="false"
+
+    if github_sync_should_close "$new_status"; then
+        if [ "$old_state" = "open" ]; then
+            should_close="true"
+        fi
+    else
+        # Not a close_on status — reopen if issue was closed by a previous close_on status
+        if [ "$old_state" = "closed" ] && github_sync_should_close "$old_status"; then
+            should_reopen="true"
+        fi
+    fi
+
+    local old_name new_name
+    old_name=$(_kanban_status_name "$old_status")
+    new_name=$(_kanban_status_name "$new_status")
+
+    if [ "$dry_run" = "true" ]; then
+        echo "[dry-run] Issue #$issue_number: $old_name -> $new_name"
+        [ -n "$old_label" ] && [ "$old_label" != "$new_label" ] && \
+            echo "  - Remove label: $old_label"
+        [ -n "$new_label" ] && echo "  + Add label: $new_label"
+        [ "$should_close" = "true" ] && echo "  * Close issue"
+        [ "$should_reopen" = "true" ] && echo "  * Reopen issue"
+        return 0
+    fi
+
+    # Apply label changes
+    github_issue_set_status_label "$issue_number" "$new_label" "$old_label"
+
+    # Apply state changes
+    if [ "$should_close" = "true" ]; then
+        github_issue_close "$issue_number"
+    elif [ "$should_reopen" = "true" ]; then
+        github_issue_reopen "$issue_number"
+    fi
+
+    # Post transition comment
+    github_issue_post_transition_comment "$issue_number" "$old_name" "$new_name"
+}

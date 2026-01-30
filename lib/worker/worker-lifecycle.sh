@@ -22,7 +22,9 @@ _PID_OPS_LOCK_FILE=""
 # Returns: lock file path
 _get_pid_ops_lock() {
     local ralph_dir="$1"
-    echo "$ralph_dir/orchestrator/pid-ops.lock"
+    local lock_dir="$ralph_dir/orchestrator"
+    [ -d "$lock_dir" ] || mkdir -p "$lock_dir"
+    echo "$lock_dir/pid-ops.lock"
 }
 
 # Find the newest worker directory for a task
@@ -274,8 +276,8 @@ write_pid_file() {
     local pid="$2"
     local ralph_dir
 
-    # Extract ralph_dir from pid_file path (workers are in .ralph/workers/)
-    ralph_dir=$(dirname "$(dirname "$pid_file")")
+    # Extract ralph_dir from pid_file path (.ralph/workers/worker-XXX/agent.pid)
+    ralph_dir=$(dirname "$(dirname "$(dirname "$pid_file")")")
 
     local lock_file
     lock_file=$(_get_pid_ops_lock "$ralph_dir")
@@ -303,8 +305,8 @@ remove_pid_file() {
     local pid_file="$1"
     local ralph_dir
 
-    # Extract ralph_dir from pid_file path
-    ralph_dir=$(dirname "$(dirname "$pid_file")")
+    # Extract ralph_dir from pid_file path (.ralph/workers/worker-XXX/agent.pid)
+    ralph_dir=$(dirname "$(dirname "$(dirname "$pid_file")")")
 
     local lock_file
     lock_file=$(_get_pid_ops_lock "$ralph_dir")
