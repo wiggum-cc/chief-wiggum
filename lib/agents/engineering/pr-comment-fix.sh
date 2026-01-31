@@ -402,6 +402,16 @@ _commit_and_push_fixes() {
     # Stage all changes
     git add -A
 
+    # Guard: refuse to commit conflict markers
+    local marker_files
+    if marker_files=$(git_staged_has_conflict_markers "$workspace"); then
+        log_error "Conflict markers detected in staged files — aborting fix commit"
+        log_error "Files with markers:"
+        echo "$marker_files" | while read -r f; do log_error "  $f"; done
+        git reset HEAD -- . >/dev/null 2>&1 || true
+        return 1
+    fi
+
     # Create commit message
     local commit_msg="fix: Address PR review comments
 

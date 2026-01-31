@@ -13,6 +13,38 @@ source "$WIGGUM_HOME/lib/github/issue-state.sh"
 source "$WIGGUM_HOME/lib/core/platform.sh"
 
 # =============================================================================
+# CONFLICT MARKER DETECTION
+# =============================================================================
+
+# Check if staged files contain git conflict markers
+#
+# Scans the staged diff for standard conflict markers (<<<<<<< , =======, >>>>>>> ).
+# Must be called AFTER `git add` and BEFORE `git commit`.
+#
+# Args:
+#   workspace - Directory containing the git repository
+#
+# Returns: 0 if conflict markers found, 1 if clean
+# Echoes: list of files with markers (one per line) when markers found
+git_staged_has_conflict_markers() {
+    local workspace="$1"
+
+    # Search staged diff for added lines matching conflict markers.
+    # Pattern: line starts with '+' (diff added-line prefix) followed by
+    # exactly 7 marker characters and a space or end-of-line.
+    local marker_files
+    marker_files=$(git -C "$workspace" diff --cached --name-only \
+        -G '^(<{7} |={7}$|>{7} )' 2>/dev/null || true)
+
+    if [ -n "$marker_files" ]; then
+        echo "$marker_files"
+        return 0
+    fi
+
+    return 1
+}
+
+# =============================================================================
 # GIT IDENTITY HELPER
 # =============================================================================
 
@@ -199,6 +231,17 @@ git_create_commit() {
     if [ "$has_uncommitted_changes" = true ]; then
         # Stage all changes
         git add -A
+
+        # Guard: refuse to commit conflict markers
+        local marker_files
+        if marker_files=$(git_staged_has_conflict_markers "$workspace"); then
+            log_error "Conflict markers detected in staged files — aborting finalization commit"
+            log_error "Files with markers:"
+            echo "$marker_files" | while read -r f; do log_error "  $f"; done
+            git reset HEAD -- . >/dev/null 2>&1 || true
+            GIT_COMMIT_BRANCH=""
+            return 1
+        fi
 
         # Create commit message
         local commit_msg="${task_id}: ${task_desc}

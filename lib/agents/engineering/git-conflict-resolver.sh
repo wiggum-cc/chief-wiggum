@@ -166,12 +166,21 @@ No merge conflicts were found in the workspace. The repository is in a clean sta
     # Determine gate result based on remaining conflicts
     local remaining
     remaining=$(git -C "$workspace" diff --name-only --diff-filter=U 2>/dev/null | wc -l)
-    if [ "$remaining" -eq 0 ]; then
-        agent_write_result "$worker_dir" "PASS"
-        log "Conflict resolution completed successfully"
-    else
+    if [ "$remaining" -gt 0 ]; then
         agent_write_result "$worker_dir" "FAIL" "$(printf '{"unresolved_files":%d}' "$remaining")"
         log_warn "Conflict resolution incomplete ($remaining file(s) unresolved)"
+    else
+        # No unmerged files — also verify no conflict markers slipped into staged content
+        local marker_files
+        if marker_files=$(git_staged_has_conflict_markers "$workspace"); then
+            local marker_count
+            marker_count=$(echo "$marker_files" | wc -l)
+            agent_write_result "$worker_dir" "FAIL" "$(printf '{"staged_marker_files":%d}' "$marker_count")"
+            log_warn "No unmerged files but $marker_count staged file(s) still contain conflict markers"
+        else
+            agent_write_result "$worker_dir" "PASS"
+            log "Conflict resolution completed successfully"
+        fi
     fi
 
     return $agent_exit
@@ -235,15 +244,23 @@ _conflict_completion_check() {
     local workspace
     workspace=$(agent_get_workspace)
 
-    # Check if any unresolved conflicts remain
+    # Check if any unresolved conflicts remain (git index state)
     local unresolved
     unresolved=$(git -C "$workspace" diff --name-only --diff-filter=U 2>/dev/null)
 
-    if [ -z "$unresolved" ]; then
-        return 0  # All conflicts resolved
+    if [ -n "$unresolved" ]; then
+        return 1  # Still has unmerged files
     fi
 
-    return 1  # Still has conflicts
+    # Also check staged files for leftover conflict markers.
+    # A file can be staged (no longer "unmerged") but still contain markers
+    # if the agent ran `git add` on an incompletely resolved file.
+    if git_staged_has_conflict_markers "$workspace" >/dev/null; then
+        log_warn "No unmerged files but staged content still has conflict markers"
+        return 1
+    fi
+
+    return 0  # All conflicts resolved
 }
 
 # System prompt

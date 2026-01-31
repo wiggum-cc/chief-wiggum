@@ -127,6 +127,16 @@ _commit_subagent_changes() {
         return 0
     fi
 
+    # Guard: refuse to commit conflict markers
+    local marker_files
+    if marker_files=$(git_staged_has_conflict_markers "$workspace"); then
+        log_error "Conflict markers detected after $agent_name — aborting sub-agent commit"
+        log_error "Files with markers:"
+        echo "$marker_files" | while read -r f; do log_error "  $f"; done
+        git reset HEAD -- . >/dev/null 2>&1 || true
+        return 1
+    fi
+
     local commit_msg="chore($agent_name): automated changes"
 
     # Set git author/committer identity
