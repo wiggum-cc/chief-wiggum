@@ -185,12 +185,21 @@ ensure_workspace_from_pr() {
         return 1
     fi
 
-    # Get branch name from PR using gh CLI
-    local branch
-    branch=$(gh pr view "$pr_number" --json headRefName -q '.headRefName' 2>/dev/null || true)
+    # Get branch name and PR state in a single API call
+    local branch pr_state pr_info
+    pr_info=$(gh pr view "$pr_number" --json headRefName,state 2>/dev/null || true)
+    branch=$(echo "$pr_info" | jq -r '.headRefName // empty' 2>/dev/null)
+    pr_state=$(echo "$pr_info" | jq -r '.state // empty' 2>/dev/null)
 
     if [ -z "$branch" ]; then
         log_error "Cannot reconstruct workspace for $task_id: failed to get branch from PR #$pr_number"
+        return 1
+    fi
+
+    # Don't reconstruct workspace for merged/closed PRs - the branch may have been
+    # deleted and reconstructing would re-push it when agents commit changes
+    if [ "$pr_state" = "MERGED" ] || [ "$pr_state" = "CLOSED" ]; then
+        log "Skipping workspace reconstruction for $task_id: PR #$pr_number is $pr_state"
         return 1
     fi
 
@@ -471,7 +480,9 @@ _advance_batch_past_merged_tasks() {
         fi
 
         current_pos=$(jq -r '.current_position' "$coord_file")
+        current_pos="${current_pos:-0}"
         total=$(jq -r '.total' "$coord_file")
+        total="${total:-0}"
 
         # Stop if we've reached the end
         if [ "$current_pos" -ge "$total" ]; then

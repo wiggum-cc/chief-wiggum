@@ -33,6 +33,7 @@ _check_file_overlap() {
 
     local count
     count=$(echo "$overlap" | jq 'length')
+    count="${count:-0}"
 
     echo "$overlap"
     [ "$count" -gt 0 ]

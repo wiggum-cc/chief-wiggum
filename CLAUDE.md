@@ -361,6 +361,20 @@ while IFS=$'\x1e' read -r name type value; do
 done < <(jq -r '[.name, .type, .value] | join("\u001e")' file.json)
 ```
 
+### `jq` Output in Integer Comparisons
+- **Always guard `jq` output with `${var:-0}` before using it in `[ ]` integer tests** — if `jq` fails to parse a file (truncated, corrupt, missing), it returns an empty string even with `// 0` fallback, causing `[: : integer expected` under `[ "$var" -gt 0 ]`.
+
+```bash
+# BAD - empty string if jq fails to parse the file
+count=$(jq '.items | length' "$file" 2>/dev/null)
+[ "$count" -gt 0 ]          # BREAKS: "[: : integer expected"
+
+# GOOD - default ensures integer even when jq fails entirely
+count=$(jq '.items | length' "$file" 2>/dev/null)
+count="${count:-0}"
+[ "$count" -gt 0 ]
+```
+
 ### Platform Compatibility
 - Code must work on both Linux and macOS — use `lib/core/platform.sh` for OS-specific operations (e.g., `stat`, `date`, `sed -i`)
 - Never use GNU-only flags directly; call the platform abstraction instead

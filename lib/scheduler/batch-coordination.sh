@@ -125,6 +125,7 @@ batch_coord_is_my_turn() {
             fi
 
             current_pos=$(jq -r ".current_position" "$coord_file")
+            current_pos="${current_pos:-0}"
             my_pos=$(jq -r --arg tid "$task_id" ".order | to_entries[] | select(.value == \$tid) | .key" "$coord_file")
 
             if [ -z "$my_pos" ]; then

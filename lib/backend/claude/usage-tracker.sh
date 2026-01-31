@@ -470,6 +470,7 @@ rate_limit_check() {
     # Get stored cycle start time from usage file
     local stored_cycle_start_ms
     stored_cycle_start_ms=$(jq -r '.current_5h_cycle.start_time // 0' "$usage_file" 2>/dev/null)
+    stored_cycle_start_ms="${stored_cycle_start_ms:-0}"
 
     # If stored cycle is from a previous cycle, data is stale - not rate limited
     if [ "$stored_cycle_start_ms" -lt "$current_cycle_start_ms" ]; then
@@ -478,6 +479,7 @@ rate_limit_check() {
 
     local cycle_prompts
     cycle_prompts=$(jq -r '.current_5h_cycle.total_prompts // 0' "$usage_file" 2>/dev/null)
+    cycle_prompts="${cycle_prompts:-0}"
 
     if [ "$cycle_prompts" -ge "$threshold" ]; then
         return 0  # Rate limited

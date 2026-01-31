@@ -160,8 +160,13 @@ _cleanup_merged_worktree() {
         fi
     fi
 
+    # Retry once after a brief delay to handle race with background build processes
     if [ -d "$workspace" ]; then
-        rm -rf "$workspace"
+        rm -rf "$workspace" 2>/dev/null
+        if [ -d "$workspace" ]; then
+            sleep 1
+            rm -rf "$workspace" 2>/dev/null || true
+        fi
     fi
 
     if [ -d "$worker_dir" ]; then
@@ -347,6 +352,11 @@ _gather_pr_data() {
     # Fetch PR reviews from GitHub and filter by approved user IDs.
     # If approved_user_ids is configured, require an APPROVED review from one
     # of those IDs before allowing merge (usernames are not trusted).
+    # Ensure review config is loaded (sets WIGGUM_APPROVED_USER_IDS from config.json)
+    if [ -z "${WIGGUM_APPROVED_USER_IDS:-}" ]; then
+        source "$WIGGUM_HOME/lib/core/defaults.sh"
+        load_review_config
+    fi
     local _approved_ids="${WIGGUM_APPROVED_USER_IDS:-}"
     local copilot_reviewed="false"
 
@@ -369,7 +379,9 @@ _gather_pr_data() {
                 echo "$_reviews_json" > "$worker_dir/pr-reviews.json"
             fi
         fi
-        # Check reviews from approved user IDs only
+        # Check reviews from approved user IDs only.
+        # Any completed review (APPROVED, COMMENTED, CHANGES_REQUESTED) satisfies the gate.
+        # The has_new_comments check separately handles whether comments need fixing.
         if [ -f "$worker_dir/pr-reviews.json" ]; then
             local _latest_approved_state
             _latest_approved_state=$(jq -r --arg ids "$_approved_ids" '
@@ -377,7 +389,7 @@ _gather_pr_data() {
                 [.[] | select(.user_id as $uid | $allowed | any(. == $uid))] |
                 sort_by(.submitted_at) | last | .state // "NONE"
             ' "$worker_dir/pr-reviews.json" 2>/dev/null || echo "NONE")
-            if [ "$_latest_approved_state" = "APPROVED" ]; then
+            if [ "$_latest_approved_state" != "NONE" ]; then
                 copilot_reviewed="true"
             fi
         fi

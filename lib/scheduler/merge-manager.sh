@@ -132,8 +132,14 @@ _cleanup_merged_pr_worktree() {
     fi
 
     # If worktree remove didn't work, just remove the directory
+    # Retry once after a brief delay to handle race with background build processes
+    # (e.g. cargo/rustc writing to target-shared while rm -rf is deleting)
     if [ -d "$workspace" ]; then
-        rm -rf "$workspace"
+        rm -rf "$workspace" 2>/dev/null
+        if [ -d "$workspace" ]; then
+            sleep 1
+            rm -rf "$workspace" 2>/dev/null || true
+        fi
     fi
 
     # Mark cleanup in worker state

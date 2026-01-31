@@ -221,8 +221,21 @@ fetch_pr_comments() {
         url: .html_url
     }]')
 
-    # Merge all comments and sort by created_at
-    echo "$issue_comments" "$review_comments" "$reviews" | jq -s 'add | sort_by(.created_at)'
+    # Get PR creation time and author to exclude the PR body
+    # The PR body is the initial description, not a review comment
+    local pr_meta pr_created_at pr_author_id
+    pr_meta=$(timeout "$WIGGUM_GH_TIMEOUT" gh pr view "$pr_number" --json createdAt,author 2>/dev/null || echo "{}")
+    pr_created_at=$(echo "$pr_meta" | jq -r '.createdAt // empty' 2>/dev/null)
+    pr_author_id=$(echo "$pr_meta" | jq -r '.author.id // empty' 2>/dev/null)
+
+    # Merge all comments, exclude the PR body (same author + same timestamp as PR creation),
+    # and sort by created_at
+    if [ -n "$pr_created_at" ] && [ -n "$pr_author_id" ]; then
+        echo "$issue_comments" "$review_comments" "$reviews" | jq -s --arg pr_time "$pr_created_at" --argjson pr_author "$pr_author_id" '
+            add | [.[] | select(.author_id != $pr_author or .created_at != $pr_time)] | sort_by(.created_at)'
+    else
+        echo "$issue_comments" "$review_comments" "$reviews" | jq -s 'add | sort_by(.created_at)'
+    fi
 }
 
 # Filter comments by approved user IDs

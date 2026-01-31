@@ -225,6 +225,7 @@ pipeline_load() {
     # Get step count
     local step_count
     step_count=$(jq '.steps | length' "$file")
+    step_count="${step_count:-0}"
 
     if [ "$step_count" -eq 0 ]; then
         log_error "Pipeline has no steps: $file"

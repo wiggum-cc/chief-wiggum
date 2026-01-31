@@ -201,6 +201,7 @@ service_load() {
     # Get service count (excluding disabled services)
     local service_count
     service_count=$(jq '[.services[] | select(.enabled != false)] | length' "$file")
+    service_count="${service_count:-0}"
 
     if [ "$service_count" -eq 0 ]; then
         log_error "Service config has no services: $file"
