@@ -144,9 +144,9 @@ validate_kanban() {
             continue
         fi
 
-        # Stop at next section (## something)
-        if [[ "$line" =~ ^##[[:space:]] ]] && [[ ! "$line" =~ ^##[[:space:]]+TASKS ]]; then
-            break
+        # Skip non-TASKS section headers (but continue parsing — tasks may span multiple ## sections)
+        if [[ "$line" =~ ^##+ ]]; then
+            continue
         fi
 
         # Parse done comment (collapsed completed tasks from cleanup)
