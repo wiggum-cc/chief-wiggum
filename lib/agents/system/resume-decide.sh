@@ -354,6 +354,25 @@ agent_run() {
         fi
     fi
 
+    # Backup: resume original session and ask for just the decision tag.
+    # This gives the LLM another chance with its full context intact.
+    if [ -z "$raw_decision" ]; then
+        local session_id
+        session_id=$(_extract_session_id_from_log "$log_file") || true
+        if [ -n "$session_id" ]; then
+            log_warn "Attempting backup session resume to recover decision (session: ${session_id:0:8}...)"
+            raw_decision=$(_backup_decision_extraction "$session_id" "$worker_dir" "$pipeline_name") || true
+            if [ -n "$raw_decision" ]; then
+                log "Backup session resume recovered decision: $raw_decision"
+                if [ -z "$instructions" ]; then
+                    instructions="Decision recovered via backup session resume."
+                fi
+            fi
+        else
+            log_warn "No session_id in log — cannot attempt backup session resume"
+        fi
+    fi
+
     # Last resort: default to RETRY from first pipeline step (not ABORT — a fresh
     # attempt is almost always better than giving up)
     if [ -z "$raw_decision" ]; then
@@ -443,7 +462,8 @@ agent_run() {
 #
 # When XML tags are missing (agent hit max_turns or forgot tags), attempt to
 # recover the decision from the result summary text that Claude CLI writes.
-# Matches RETRY:pipeline:step patterns and bare decision keywords.
+# Searches both the result summary and full assistant text for structured
+# RETRY:pipeline:step patterns and contextual decision keywords.
 #
 # Args:
 #   log_file - Path to the stream-JSON log file
@@ -452,39 +472,141 @@ agent_run() {
 _fallback_extract_decision() {
     local log_file="$1"
 
-    local result_text
+    # Gather both result text and full assistant text for comprehensive search
+    local result_text full_text
     result_text=$(_extract_result_text_from_stream_json "$log_file") || true
+    full_text=$(_extract_text_from_stream_json "$log_file") || true
 
-    if [ -z "$result_text" ]; then
-        # No result line — also try full assistant text
-        result_text=$(_extract_text_from_stream_json "$log_file") || true
-    fi
-
-    [ -z "$result_text" ] && return 0
-
-    # Try structured RETRY:pipeline:step pattern first
-    local retry_match
-    retry_match=$(echo "$result_text" | grep -oE 'RETRY:[A-Za-z0-9_-]+:[A-Za-z0-9_-]+' | tail -1) || true
-    if [ -n "$retry_match" ]; then
-        echo "$retry_match"
+    # Nothing to search
+    if [ -z "$result_text" ] && [ -z "$full_text" ]; then
+        log_debug "Fallback: no result text or assistant text found in log"
         return 0
     fi
 
-    # Match bare decision keywords in the text (case-insensitive for natural language)
-    # Priority: COMPLETE > DEFER > ABORT (RETRY without step info isn't useful)
-    if echo "$result_text" | grep -qiE '\b(this is |decision:?\s*|should be |verdict:?\s*)COMPLETE\b'; then
-        echo "COMPLETE"
-        return 0
-    fi
+    # Search each text source — result text first (concise), then full text
+    local text_source
+    for text_source in "$result_text" "$full_text"; do
+        [ -z "$text_source" ] && continue
 
-    if echo "$result_text" | grep -qiE '\b(this is |decision:?\s*|should be |verdict:?\s*)DEFER\b'; then
-        echo "DEFER"
-        return 0
-    fi
+        # Try structured RETRY:pipeline:step pattern (most specific)
+        local retry_match
+        retry_match=$(echo "$text_source" | grep -oE 'RETRY:[A-Za-z0-9_-]+:[A-Za-z0-9_-]+' | tail -1) || true
+        if [ -n "$retry_match" ]; then
+            echo "$retry_match"
+            return 0
+        fi
+    done
+
+    # Broader keyword search across both sources
+    for text_source in "$result_text" "$full_text"; do
+        [ -z "$text_source" ] && continue
+
+        # Match COMPLETE with contextual signals (broader than before)
+        if echo "$text_source" | grep -qiE '(decision|verdict|recommend|should be|this is|conclusion|outcome)\b.*\bCOMPLETE\b'; then
+            echo "COMPLETE"
+            return 0
+        fi
+        # Standalone COMPLETE on its own line
+        if echo "$text_source" | grep -qE '^\s*COMPLETE\s*$'; then
+            echo "COMPLETE"
+            return 0
+        fi
+
+        # Match DEFER with contextual signals
+        if echo "$text_source" | grep -qiE '(decision|verdict|recommend|should be|this is|conclusion|outcome)\b.*\bDEFER\b'; then
+            echo "DEFER"
+            return 0
+        fi
+        if echo "$text_source" | grep -qE '^\s*DEFER\s*$'; then
+            echo "DEFER"
+            return 0
+        fi
+    done
 
     # Don't match ABORT from natural language — too dangerous as a false positive.
     # If we can't confidently determine the decision, return empty and let the
-    # caller fall through to the RETRY-from-first-step default.
+    # caller fall through to backup session resume or RETRY-from-first-step default.
+    return 0
+}
+
+# Backup decision extraction via session resume
+#
+# When all tag and keyword extraction methods fail, resume the original Claude
+# session with a focused prompt requesting only the decision tag. This gives the
+# LLM another chance to output the decision in the expected format with its full
+# conversation context intact.
+#
+# Args:
+#   session_id    - Session ID from the original run
+#   worker_dir    - Worker directory for log storage
+#   pipeline_name - Pipeline name for RETRY format
+#
+# Returns: Extracted decision string or empty
+_backup_decision_extraction() {
+    local session_id="$1"
+    local worker_dir="$2"
+    local pipeline_name="${3:-default}"
+
+    local prompt
+    prompt="STOP. Output ONLY your decision in this exact format — nothing else:
+
+<decision>VALUE</decision>
+
+VALUE must be one of:
+- COMPLETE
+- RETRY:${pipeline_name}:STEP_ID
+- ABORT
+- DEFER
+
+Output the <decision> tag NOW. No explanation, no other text."
+
+    local step_id="${WIGGUM_STEP_ID:-resume-decide}"
+    local run_id="${RALPH_RUN_ID:-default}"
+    local backup_log
+    backup_log="$worker_dir/logs/$run_id/${step_id}-backup-$(epoch_now).log"
+    mkdir -p "$(dirname "$backup_log")"
+
+    local exit_code=0
+    run_agent_resume "$session_id" "$prompt" "$backup_log" 5 || exit_code=$?
+
+    if [ $exit_code -ne 0 ]; then
+        log_debug "Backup session resume exited with code $exit_code"
+    fi
+
+    # Try tag extraction from backup log
+    local decision
+    decision=$(_extract_tag_content_from_stream_json "$backup_log" "decision") || true
+    if [ -n "$decision" ]; then
+        echo "$decision"
+        return 0
+    fi
+
+    # Try structured patterns in result text and full text
+    local backup_result backup_text
+    backup_result=$(_extract_result_text_from_stream_json "$backup_log") || true
+    backup_text=$(_extract_text_from_stream_json "$backup_log") || true
+
+    local text_source
+    for text_source in "$backup_result" "$backup_text"; do
+        [ -z "$text_source" ] && continue
+
+        local retry_match
+        retry_match=$(echo "$text_source" | grep -oE 'RETRY:[A-Za-z0-9_-]+:[A-Za-z0-9_-]+' | tail -1) || true
+        if [ -n "$retry_match" ]; then
+            echo "$retry_match"
+            return 0
+        fi
+
+        # In the backup prompt context, bare keywords are reliable since
+        # the prompt only asks for the decision tag with no other text
+        local keyword
+        keyword=$(echo "$text_source" | grep -oE '\b(COMPLETE|DEFER|ABORT)\b' | tail -1) || true
+        if [ -n "$keyword" ]; then
+            echo "$keyword"
+            return 0
+        fi
+    done
+
     return 0
 }
 
