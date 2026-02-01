@@ -44,6 +44,7 @@ setup() {
     source "$WIGGUM_HOME/lib/utils/activity-log.sh"
     activity_init "$TEST_DIR/project"
     source "$WIGGUM_HOME/lib/pipeline/pipeline-loader.sh"
+    source "$WIGGUM_HOME/lib/pipeline/pipeline-runner.sh"
 }
 
 teardown() {
@@ -155,9 +156,7 @@ test_pipeline_runs_steps_in_order() {
         ]
     }'
 
-    # Reset pipeline-runner loaded flag and source
-    unset _PIPELINE_RUNNER_LOADED 2>/dev/null || true
-    source "$WIGGUM_HOME/lib/pipeline/pipeline-runner.sh"
+    _pipeline_runner_reset
 
     : > "$TEST_DIR/agent_invocations.txt"
 

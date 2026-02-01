@@ -41,33 +41,42 @@ append_with_lock() {
 
 # Retry a command with file locking
 # Usage: with_file_lock <file> <max_retries> <command>
+#
+# Only retries on lock acquisition failure (flock timeout).
+# If the lock is acquired but the command itself fails,
+# returns the command's exit code immediately (no retry).
 with_file_lock() {
     local file="$1"
     local max_retries="${2:-5}"
     shift 2
     local lock_file="${file}.lock"
     local retry=0
+    local _lock_fail=200  # Sentinel exit code for lock acquisition failure
 
     while [ $retry -lt "$max_retries" ]; do
         # Try to acquire lock with flock
         # Note: lock file is intentionally NOT removed after use.
         # Removing it creates a TOCTOU race where concurrent processes
         # can hold locks on different inodes simultaneously.
+        local result=0
         (
-            flock -w 10 200 || exit 1
+            flock -w 10 200 || exit "$_lock_fail"
 
             # Execute command while holding lock
             "$@"
 
-        ) 200>"$lock_file"
-
-        local result=$?
+        ) 200>"$lock_file" || result=$?
 
         if [ $result -eq 0 ]; then
             return 0
         fi
 
-        # Failed - retry after delay
+        # Command itself failed (lock was acquired) - return immediately
+        if [ $result -ne "$_lock_fail" ]; then
+            return $result
+        fi
+
+        # Lock acquisition failed - retry after delay
         ((++retry))
         if [ $retry -lt "$max_retries" ]; then
             sleep $((retry * 2))  # Exponential backoff

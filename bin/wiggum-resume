@@ -264,7 +264,7 @@ do_resume() {
 
         # === STEP 3: Run system.resume-decide agent ===
         _msg "Analyzing previous run to decide resume step..."
-        run_agent "system.resume-decide" "$worker_dir" "$PROJECT_DIR" 0 1 25
+        run_agent "system.resume-decide" "$worker_dir" "$PROJECT_DIR" 0 1
 
         # === STEP 4: Read decision ===
         # Get the result file path for later use (workspace recovery, instructions)

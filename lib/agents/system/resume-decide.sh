@@ -287,6 +287,13 @@ agent_run() {
     # Load pipeline configuration for dynamic prompt generation
     _load_pipeline_config "$project_dir"
 
+    # Resolve pipeline name (used by prompts and fallback default)
+    local pipeline_name=""
+    if [ -f "$worker_dir/pipeline-config.json" ]; then
+        pipeline_name=$(jq -r '.pipeline.name // ""' "$worker_dir/pipeline-config.json" 2>/dev/null) || true
+    fi
+    pipeline_name="${pipeline_name:-default}"
+
     # Create standard directories
     agent_create_directories "$worker_dir"
 
@@ -331,11 +338,32 @@ agent_run() {
     fi
     instructions=$(_extract_tag_content_from_stream_json "$log_file" "instructions") || true
 
-    # Default to ABORT if no decision extracted
+    # Fallback: parse decision from the stream-JSON result text when XML tags are missing.
+    # This handles two failure modes:
+    #   1. Agent hit max_turns before outputting tags (error_max_turns)
+    #   2. Agent wrote decision in natural language instead of XML tags
     if [ -z "$raw_decision" ]; then
-        log_error "No <decision> or <step> tag found in resume-decide output"
-        raw_decision="ABORT"
-        instructions="${instructions:-Resume-decide agent did not produce a valid decision.}"
+        log_warn "No <decision> or <step> tag found — attempting fallback extraction from result text"
+        raw_decision=$(_fallback_extract_decision "$log_file") || true
+        if [ -n "$raw_decision" ]; then
+            log "Fallback extraction recovered decision: $raw_decision"
+            # Use the result text as instructions if we didn't get any
+            if [ -z "$instructions" ]; then
+                instructions=$(_extract_result_text_from_stream_json "$log_file") || true
+            fi
+        fi
+    fi
+
+    # Last resort: default to RETRY from first pipeline step (not ABORT — a fresh
+    # attempt is almost always better than giving up)
+    if [ -z "$raw_decision" ]; then
+        log_error "All decision extraction methods failed — defaulting to RETRY from first step"
+        local first_step_id
+        first_step_id=$(pipeline_get 0 ".id") || true
+        first_step_id="${first_step_id:-planning}"
+        local fallback_pipeline="${pipeline_name:-default}"
+        raw_decision="RETRY:${fallback_pipeline}:${first_step_id}"
+        instructions="${instructions:-Resume-decide agent did not produce a valid decision. Retrying from first pipeline step.}"
     fi
 
     # Strip whitespace
@@ -411,6 +439,55 @@ agent_run() {
     return 0
 }
 
+# Fallback decision extraction from the stream-JSON result text
+#
+# When XML tags are missing (agent hit max_turns or forgot tags), attempt to
+# recover the decision from the result summary text that Claude CLI writes.
+# Matches RETRY:pipeline:step patterns and bare decision keywords.
+#
+# Args:
+#   log_file - Path to the stream-JSON log file
+#
+# Returns: Extracted decision string or empty
+_fallback_extract_decision() {
+    local log_file="$1"
+
+    local result_text
+    result_text=$(_extract_result_text_from_stream_json "$log_file") || true
+
+    if [ -z "$result_text" ]; then
+        # No result line — also try full assistant text
+        result_text=$(_extract_text_from_stream_json "$log_file") || true
+    fi
+
+    [ -z "$result_text" ] && return 0
+
+    # Try structured RETRY:pipeline:step pattern first
+    local retry_match
+    retry_match=$(echo "$result_text" | grep -oE 'RETRY:[A-Za-z0-9_-]+:[A-Za-z0-9_-]+' | tail -1) || true
+    if [ -n "$retry_match" ]; then
+        echo "$retry_match"
+        return 0
+    fi
+
+    # Match bare decision keywords in the text (case-insensitive for natural language)
+    # Priority: COMPLETE > DEFER > ABORT (RETRY without step info isn't useful)
+    if echo "$result_text" | grep -qiE '\b(this is |decision:?\s*|should be |verdict:?\s*)COMPLETE\b'; then
+        echo "COMPLETE"
+        return 0
+    fi
+
+    if echo "$result_text" | grep -qiE '\b(this is |decision:?\s*|should be |verdict:?\s*)DEFER\b'; then
+        echo "DEFER"
+        return 0
+    fi
+
+    # Don't match ABORT from natural language — too dangerous as a false positive.
+    # If we can't confidently determine the decision, return empty and let the
+    # caller fall through to the RETRY-from-first-step default.
+    return 0
+}
+
 # Parse raw decision string into components
 #
 # Sets outer-scope variables: decision, resume_pipeline, resume_step_id, reason
@@ -480,24 +557,17 @@ _get_system_prompt() {
     cat << EOF
 RESUME DECISION AGENT — read-only analyst for interrupted pipeline workers.
 
+CRITICAL: Your response MUST contain <decision>VALUE</decision> and <instructions>...</instructions>
+tags. Without these tags your entire analysis is discarded. Output the tags BEFORE any final
+commentary — do not save them for last.
+
 WORKER DIRECTORY: $worker_dir
-
-## MANDATORY OUTPUT
-
-You MUST end your response with these two tags (not in code fences).
-The system parses them programmatically — omitting them discards your analysis.
-
-    <decision>COMPLETE</decision>
-    <decision>RETRY:pipeline:step_id</decision>
-    <decision>ABORT</decision>
-    <decision>DEFER</decision>
-
-    <instructions>Your analysis and guidance here</instructions>
 
 ## What You Do
 
 Analyze logs, result files, PRD status, and git history to find the best recovery point.
-You do NOT fix anything — you decide where to resume.
+You do NOT fix anything — you decide where to resume. Be efficient — read only what you
+need to make the decision. Do not exhaustively explore every file.
 
 ## Execution Restrictions
 
@@ -514,7 +584,7 @@ Key paths under \`$worker_dir/\`:
 - \`summaries/\`, \`conversations/\`, \`reports/\` — additional context
 - \`pr_url.txt\` — PR URL if one was created
 - \`workspace/\` — code (read-only, check \`git log\` for checkpoints)
-- Do NOT read \`logs/\` — raw JSON streams that exhaust context
+- Do NOT read \`logs/\` or \`conversations/\` — these exhaust context and are not needed
 
 ## Pipeline Steps
 
@@ -522,7 +592,17 @@ $(_generate_steps_table)
 
 Steps with **Commit After = Yes** are recovery checkpoints — resuming from the next step is safe.
 
+## Decision Values
+
+    <decision>COMPLETE</decision>
+    <decision>RETRY:pipeline:step_id</decision>
+    <decision>ABORT</decision>
+    <decision>DEFER</decision>
+
+## REMINDER — OUTPUT TAGS
+
 End your response with <decision>VALUE</decision> and <instructions>...</instructions>.
+These are not optional. The system parses them programmatically.
 EOF
 }
 
@@ -560,25 +640,28 @@ recovery checkpoints — resuming from the step after a checkpoint is always saf
 IMPORTANT: You are a read-only analyst. Do NOT run tests, builds, linters, or any project code.
 Make your decision purely from logs, result files, PRD status, and git history.
 
+**Be efficient with your turns.** Read the essential files (worker.log, results, PRD, git log)
+in parallel in your first 1-2 turns, then make your decision. Do NOT explore conversations/,
+logs/, or other verbose directories. You have a limited turn budget.
+
 ## Analysis Steps
 
-Perform these reads (in parallel where possible), then make your decision:
+Read these files (in parallel where possible), then output your decision:
 
-1. **Worker log** — Read \`$worker_dir/worker.log\`. Look for "PIPELINE STEP:", "STEP COMPLETED:",
-   "Result:", and ERROR markers to build a timeline of what ran and how it ended.
+1. **Worker log + result files + PRD** — Read all three in a single turn:
+   - \`$worker_dir/worker.log\` — look for "PIPELINE STEP:", "STEP COMPLETED:", "Result:", errors
+   - \`$worker_dir/results/\` — list and read \`*-result.json\` files for gate_result values
+   - \`$worker_dir/prd.md\` — count \`- [x]\` done vs \`- [ ]\` incomplete
 
-2. **Result files** — Read \`$worker_dir/results/*-result.json\`. Each contains \`gate_result\`
-   (PASS/FAIL/FIX/SKIP). A step is incomplete if the log shows it started but no result file exists.
+2. **Git state + PR** — In parallel with step 1:
+   - \`git -C $worker_dir/workspace log --oneline -10\`
+   - \`git -C $worker_dir/workspace status\`
+   - Check \`$worker_dir/pr_url.txt\` for an existing PR
 
-3. **PRD status** — Read \`$worker_dir/prd.md\`. Count \`- [x]\` (done), \`- [ ]\` (incomplete),
-   \`- [*]\` (failed). Also check \`$worker_dir/pr_url.txt\` for an existing PR.
+3. **Decision** — After reading the above, immediately output your decision tags.
+   Do NOT read additional files unless the above is genuinely ambiguous.
 
-4. **Git state** — Run \`git -C $worker_dir/workspace log --oneline -10\` and
-   \`git -C $worker_dir/workspace status\`. Commits from checkpoint steps are recovery points.
-
-5. **Summaries** (if they exist) — Read files in \`$worker_dir/summaries/\` for iteration context.
-
-Do NOT read the \`logs/\` directory — raw JSON streams will exhaust your context.
+Do NOT read \`logs/\` or \`conversations/\` — these are raw streams that exhaust context.
 
 ## Decision Criteria
 
@@ -586,24 +669,17 @@ $(_generate_decision_criteria)
 
 ## Important Considerations
 
-- **Read logs dynamically** — Don't assume specific phase names. Explore what actually exists.
-- **Trust evidence over claims** — Verify workspace diff matches what logs/PRD say happened.
-- **Consider workspace recoverability** — Steps with commit_after create safe recovery points.
 - **For RETRY, use format** \`RETRY:${pipeline_name}:STEP_ID\` (pipeline name from above).
+- **Trust evidence over claims** — verify workspace diff matches what logs/PRD say.
+- **Consider workspace recoverability** — steps with commit_after create safe recovery points.
 
-## MANDATORY OUTPUT
-
-After your analysis, you MUST output these two tags. The system parses them programmatically —
-without them your analysis is discarded. Do not wrap them in code fences.
+## MANDATORY OUTPUT — Output these tags immediately after your analysis
 
 <decision>VALUE</decision>
+<instructions>Brief analysis and guidance</instructions>
 
-VALUE is one of: COMPLETE, RETRY:${pipeline_name}:STEP_ID, ABORT, or DEFER
-
-<instructions>
-Brief analysis: what ran, what succeeded/failed, why you chose this decision,
-and guidance for the resumed step (if RETRY).
-</instructions>
+VALUE is one of: COMPLETE, RETRY:${pipeline_name}:STEP_ID, ABORT, or DEFER.
+Do NOT wrap in code fences. These tags are parsed programmatically — without them your work is lost.
 EOF
 }
 

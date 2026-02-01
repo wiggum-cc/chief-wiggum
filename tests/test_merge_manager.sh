@@ -36,8 +36,8 @@ setup() {
     mkdir -p "$WORKER_DIR" "$MOCK_BIN" "$WORKER_DIR/workspace"
 
     # Set short timeouts for tests
-    export MERGE_POLL_TIMEOUT=3
-    export MERGE_POLL_INTERVAL=1
+    export MERGE_POLL_TIMEOUT=2
+    export MERGE_POLL_INTERVAL=0.1
     export MAX_MERGE_ATTEMPTS=3
 
     # Initialize git state with a PR number
@@ -89,8 +89,8 @@ test_wait_for_mergeable_returns_1_when_conflicting() {
 test_wait_for_mergeable_returns_2_on_timeout() {
     # Always return UNKNOWN - should time out
     _mock_gh 'echo "UNKNOWN"'
-    MERGE_POLL_TIMEOUT=2
-    MERGE_POLL_INTERVAL=1
+    MERGE_POLL_TIMEOUT=1
+    MERGE_POLL_INTERVAL=0.1
 
     local result=0
     _wait_for_mergeable 42 "TASK-001" 2>/dev/null || result=$?
@@ -116,8 +116,8 @@ fi
 GHEOF
     chmod +x "$MOCK_BIN/gh"
 
-    export MERGE_POLL_TIMEOUT=10
-    export MERGE_POLL_INTERVAL=1
+    export MERGE_POLL_TIMEOUT=2
+    export MERGE_POLL_INTERVAL=0.1
 
     local result=0
     _wait_for_mergeable 42 "TASK-001" || result=$?

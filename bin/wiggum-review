@@ -19,11 +19,6 @@ source "$WIGGUM_HOME/lib/worker/git-state.sh"
 source "$WIGGUM_HOME/lib/runtime/runtime.sh"
 source "$WIGGUM_HOME/lib/backend/claude/usage-tracker.sh"
 
-# Recompute usage at startup (ensures rate limit checks use fresh data)
-if [ -d "$RALPH_DIR" ]; then
-    usage_tracker_write_shared "$RALPH_DIR" > /dev/null 2>&1 || true
-fi
-
 show_help() {
     cat << EOF
 wiggum review - Review and manage worker Pull Requests

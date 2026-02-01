@@ -22,6 +22,16 @@ setup() {
     mkdir -p "$RALPH_DIR/orchestrator"
     mkdir -p "$PROJECT_DIR"
 
+    # Mock gh CLI to avoid real GitHub API calls in gather tests
+    mkdir -p "$TEST_DIR/mock-bin"
+    cat > "$TEST_DIR/mock-bin/gh" << 'GHEOF'
+#!/usr/bin/env bash
+echo "UNKNOWN"
+GHEOF
+    chmod +x "$TEST_DIR/mock-bin/gh"
+    export PATH="$TEST_DIR/mock-bin:$PATH"
+    export WIGGUM_GH_TIMEOUT=1
+
     # Set approved user IDs so review gate is active (matches mock pr-reviews.json)
     export WIGGUM_APPROVED_USER_IDS="12345,67890"
 

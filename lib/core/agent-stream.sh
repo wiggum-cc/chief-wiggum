@@ -200,3 +200,25 @@ _extract_tag_content_from_stream_json() {
         END { print content }
     '
 }
+
+# Extract the "result" text field from the stream-JSON result line
+#
+# Claude CLI writes a final {"type":"result",...,"result":"<text>"} line.
+# This extracts that text, which is the agent's final output summary.
+#
+# Args:
+#   log_file - Path to the stream-JSON log file
+#
+# Returns: The result text, or empty string if not found
+_extract_result_text_from_stream_json() {
+    local log_file="$1"
+
+    if [ ! -f "$log_file" ]; then
+        return 1
+    fi
+
+    grep '"type":"result"' "$log_file" 2>/dev/null \
+        | tail -1 \
+        | jq -r '.result // empty' 2>/dev/null \
+        || true
+}

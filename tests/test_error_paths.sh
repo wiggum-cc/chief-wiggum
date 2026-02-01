@@ -47,17 +47,17 @@ test_file_lock_timeout_when_held() {
     (
         exec 200>"$lock_file"
         flock -x 200
-        sleep 10
+        sleep 3
     ) &
     local holder_pid=$!
 
     # Give the holder time to acquire the lock
-    sleep 0.5
+    sleep 0.1
 
     # Try to acquire with_file_lock using max_retries=1
-    # The flock -w 10 inside will timeout after 10s, but we wrap with timeout 3
+    # The flock -w 10 inside will timeout, but we wrap with timeout 1
     local result
-    timeout 3 bash -c "
+    timeout 1 bash -c "
         source '$WIGGUM_HOME/lib/core/file-lock.sh'
         with_file_lock '$lock_target' 1 true
     " 2>/dev/null
@@ -65,7 +65,7 @@ test_file_lock_timeout_when_held() {
 
     # Kill the holder
     kill $holder_pid 2>/dev/null
-    wait $holder_pid 2>/dev/null
+    wait $holder_pid 2>/dev/null || true
 
     # Should have failed (timeout from flock or from our timeout wrapper)
     assert_not_equals "0" "$result" "with_file_lock should fail/timeout when lock is held by another"

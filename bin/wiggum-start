@@ -43,11 +43,6 @@ source "$WIGGUM_HOME/lib/runtime/runtime.sh"
 source "$WIGGUM_HOME/lib/backend/claude/usage-tracker.sh"
 source "$WIGGUM_HOME/lib/github/issue-sync.sh"
 
-# Recompute usage at startup (ensures rate limit checks use fresh data)
-if [ -d "$RALPH_DIR" ]; then
-    usage_tracker_write_shared "$RALPH_DIR" > /dev/null 2>&1 || true
-fi
-
 # Default configuration
 MAX_ITERATIONS=20
 MAX_TURNS=50
@@ -197,6 +192,9 @@ do_start() {
 
         _msg "Starting worker $worker_id for task $task_id"
     fi
+
+    # Recompute usage before starting (ensures rate limit checks use fresh data)
+    usage_tracker_write_shared "$RALPH_DIR" > /dev/null 2>&1 || true
 
     # Security: Pass variables via environment exports, not string interpolation.
     # This prevents command injection if any variable contains shell metacharacters.

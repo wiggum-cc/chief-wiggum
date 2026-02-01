@@ -650,7 +650,7 @@ ${summary_prompt}"
             esac
         fi
 
-        sleep 2  # Prevent tight loop
+        sleep "${WIGGUM_LOOP_DELAY:-2}"  # Prevent tight loop (override with WIGGUM_LOOP_DELAY=0 in tests)
     done
 
     # Record end time

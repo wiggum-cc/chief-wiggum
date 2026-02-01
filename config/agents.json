@@ -174,7 +174,7 @@
     },
     "system.resume-decide": {
       "max_iterations": 1,
-      "max_turns": 25,
+      "max_turns": 50,
       "timeout_seconds": 300,
       "result_mappings": {
         "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },

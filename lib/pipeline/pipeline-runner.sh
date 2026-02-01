@@ -36,6 +36,17 @@ source "$WIGGUM_HOME/lib/core/agent-base.sh"
 _PIPELINE_LAST_STEP_ID=""
 _PIPELINE_LAST_GATE_RESULT=""
 
+# Reset all pipeline runner state (for test isolation without re-sourcing)
+_pipeline_runner_reset() {
+    _PIPELINE_LAST_STEP_ID=""
+    _PIPELINE_LAST_GATE_RESULT=""
+    _PIPELINE_NEXT_IDX=0
+    unset _PIPELINE_VISITS _PIPELINE_INLINE_VISITS _PIPELINE_ON_MAX_CASCADE
+    declare -gA _PIPELINE_VISITS=()
+    declare -gA _PIPELINE_INLINE_VISITS=()
+    declare -gA _PIPELINE_ON_MAX_CASCADE=()
+}
+
 # Get cached step result, or read from file if not cached
 #
 # Args:

@@ -121,9 +121,10 @@ test_ralph_loop_sigterm_shutdown() {
     source "$WIGGUM_HOME/lib/runtime/runtime.sh"
     source "$WIGGUM_HOME/lib/runtime/runtime-loop.sh"
 
-    # Use a slow mock so we can signal during execution
-    export MOCK_CLAUDE_DELAY="2"
+    # Use a slow-enough mock so we can signal during execution
+    export MOCK_CLAUDE_DELAY="0.3"
     export MOCK_CLAUDE_RESPONSE="Working..."
+    export WIGGUM_LOOP_DELAY="0"
 
     local workspace="$TEST_DIR/workspace"
     local output_dir="$TEST_DIR/output"
