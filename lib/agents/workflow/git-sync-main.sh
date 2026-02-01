@@ -61,6 +61,14 @@ agent_run() {
         return 1
     fi
 
+    # Pre-flight: abort stale MERGE_HEAD from previous incomplete merge.
+    # Without this, git merge fails immediately with
+    # "You have not concluded your merge (MERGE_HEAD exists)".
+    if git -C "$workspace" rev-parse --verify MERGE_HEAD &>/dev/null; then
+        log_warn "Stale MERGE_HEAD detected - aborting incomplete merge before retry"
+        git -C "$workspace" merge --abort 2>/dev/null || true
+    fi
+
     log "Merging origin/main into current branch..."
 
     # Set git identity for merge commits

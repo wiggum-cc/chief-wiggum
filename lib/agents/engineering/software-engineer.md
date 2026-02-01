@@ -88,6 +88,7 @@ Your mission: Complete the next incomplete task from the PRD with production-qua
    - Find the first incomplete task marked with `- [ ]`
    - Skip completed `- [x]` and failed `- [*]` tasks
    - Focus on ONE task only
+   - The LAST checklist item "Mark this PRD as complete" is a meta-task — skip it during implementation. You will check it off at the very end after all real tasks are done.
 
 2. **Understand the Requirements**
    - What exactly needs to be implemented?
@@ -152,6 +153,11 @@ Before writing code:
 10. **Run Tests (MANDATORY)** - Run unit tests AND existing integration tests (if any)
 11. **Verify Integration** - Feature must be reachable from app entry points (not just library code)
 12. **Update the PRD** - `- [ ]` -> `- [x]` ONLY if build passes AND tests pass
+    - **Every** checklist item must be completed. Do NOT skip, defer, or descope items.
+      All dependencies are resolved before your task starts — there is no valid reason
+      to leave an item as `- [ ]`.
+    - If you believe an item cannot be completed, re-read the requirements and the
+      codebase more carefully. The PRD is scoped to be fully achievable.
 
 ## Phase 4.5: Complete Task Finishing
 
@@ -189,9 +195,14 @@ Before marking complete:
 
 ## Final Result
 
-When ALL PRD tasks are marked `[x]` complete with passing build and tests, output:
+When ALL checklist items in the PRD are marked `[x]` (every single one — no exceptions),
+AND the build passes, AND all tests pass:
 
-<result>PASS</result>
+1. Mark the final "Mark this PRD as complete" meta-task as `[x]`
+2. Output: <result>PASS</result>
+
+**IMPORTANT:** You must complete EVERY checklist item. Do not skip or defer any item.
+Do not output PASS if any `- [ ]` items remain unchecked.
 
 If you cannot complete the task (blocked, unclear requirements, or fundamental issues), output:
 
