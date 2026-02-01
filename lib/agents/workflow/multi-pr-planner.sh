@@ -116,6 +116,14 @@ ${diff_output}
     log_file="$worker_dir/logs/${step_id}-$(epoch_now).log"
     mkdir -p "$(dirname "$log_file")"
 
+    # Ensure plans directory exists and clean old resolution plans for this batch
+    mkdir -p "$project_dir/.ralph/plans"
+    while read -r task_json; do
+        local tid
+        tid=$(echo "$task_json" | jq -r '.task_id')
+        rm -f "$project_dir/.ralph/plans/resolution-plan-${tid}.md"
+    done < <(jq -c '.tasks[]' "$batch_file")
+
     log "Running planner (max $max_turns turns)..."
 
     # Run one-shot Claude call
@@ -128,7 +136,7 @@ ${diff_output}
         return $agent_exit
     fi
 
-    # Extract and distribute plans
+    # Distribute plans from .ralph/plans/ to worker directories
     local plans_created=0
     local plans_failed=0
 
@@ -142,17 +150,25 @@ ${diff_output}
             task_worker_dir="$project_dir/$task_worker_dir"
         fi
 
-        # Extract plan for this task from log
-        local plan_content
-        plan_content=$(_extract_plan_for_task "$log_file" "$task_id")
+        local plan_file="$project_dir/.ralph/plans/resolution-plan-${task_id}.md"
 
-        if [ -n "$plan_content" ]; then
-            echo "$plan_content" > "$task_worker_dir/resolution-plan.md"
+        if [ -f "$plan_file" ] && [ -s "$plan_file" ]; then
+            cp "$plan_file" "$task_worker_dir/resolution-plan.md"
             log "Created resolution plan for $task_id"
             ((++plans_created)) || true
         else
-            log_warn "No plan extracted for $task_id"
-            ((++plans_failed)) || true
+            # Fallback: try XML extraction from log
+            local plan_content
+            plan_content=$(_extract_plan_for_task "$log_file" "$task_id")
+
+            if [ -n "$plan_content" ]; then
+                echo "$plan_content" > "$task_worker_dir/resolution-plan.md"
+                log "Created resolution plan for $task_id (from XML fallback)"
+                ((++plans_created)) || true
+            else
+                log_warn "No plan found for $task_id"
+                ((++plans_failed)) || true
+            fi
         fi
     done < <(jq -c '.tasks[]' "$batch_file")
 
@@ -199,11 +215,14 @@ Create specific, actionable resolution plans that:
 * Consider DEPENDENCIES - some changes logically depend on others
 * Define MERGE ORDER - specify which PR should merge first and why
 
-## Output Format
+## Output
 
-For each task, output a plan in this format:
+For each task, write a resolution plan file:
 
-<plan task_id="TASK-ID">
+    .ralph/plans/resolution-plan-{TASK-ID}.md
+
+Use the Write tool to create each file. The file must contain:
+
 # Resolution Plan for TASK-ID
 
 **Batch ID**: {batch_id}
@@ -235,9 +254,10 @@ Why this PR should merge at position N.
 ## Verification
 
 - [ ] Verification checklist items
-</plan>
 
-After all plans, provide the result:
+Do NOT write files anywhere else. Do NOT write to the project root.
+
+After writing all plan files, output your gate result as text:
 
 <result>PASS</result>
 
@@ -260,6 +280,15 @@ _get_user_prompt() {
     batch_id=$(jq -r '.batch_id' "$batch_file")
     common_files=$(jq -r '.common_files | @json' "$batch_file")
 
+    # Build explicit file path list for each task
+    local task_file_instructions=""
+    while read -r task_json; do
+        local tid
+        tid=$(echo "$task_json" | jq -r '.task_id')
+        task_file_instructions+="- Write ${tid}'s plan to \`.ralph/plans/resolution-plan-${tid}.md\`
+"
+    done < <(jq -c '.tasks[]' "$batch_file")
+
     cat << EOF
 CONFLICT BATCH RESOLUTION REQUEST:
 
@@ -275,10 +304,9 @@ $task_contexts
 1. Analyze each PR's changes to understand their semantic intent
 2. Identify any dependencies between the changes
 3. Determine the optimal merge order
-4. Create a resolution-plan.md for each task with specific instructions
+4. Use the Write tool to create a resolution plan file for each task:
 
-For each task, output a <plan task_id="TASK-ID"> block with the full plan content.
-
+${task_file_instructions}
 Important: The plans must be CONSISTENT - they should work together so that
 when executed in order, all PRs merge successfully.
 EOF

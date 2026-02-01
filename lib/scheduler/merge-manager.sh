@@ -115,7 +115,9 @@ _cleanup_batch_state() {
 
 # Clean up worker directory after PR is merged
 #
-# Unregisters the git worktree, then removes the entire worker directory.
+# Unregisters the git worktree, removes the workspace checkout to save space,
+# then moves the remaining worker directory (logs, output, reports, activity)
+# to .ralph/history/ for post-merge inspection.
 #
 # Args:
 #   worker_dir - Worker directory path
@@ -135,18 +137,23 @@ _cleanup_merged_pr_worktree() {
         fi
     fi
 
-    # Remove the entire worker directory
-    # Retry once after a brief delay to handle race with background build processes
-    # (e.g. cargo/rustc writing to target-shared while rm -rf is deleting)
-    if [ -d "$worker_dir" ]; then
-        rm -rf "$worker_dir" 2>/dev/null
-        if [ -d "$worker_dir" ]; then
-            sleep 1
-            rm -rf "$worker_dir" 2>/dev/null || true
-        fi
+    # Remove workspace checkout to save disk space (retry for busy files)
+    rm -rf "$workspace" 2>/dev/null
+    if [ -d "$workspace" ]; then
+        sleep 1
+        rm -rf "$workspace" 2>/dev/null || true
     fi
 
-    log "Worker directory removed for $worker_name"
+    # Archive remaining worker dir (logs, output, reports, activity) to history
+    if [ -d "$worker_dir" ]; then
+        local ralph_dir
+        ralph_dir=$(dirname "$(dirname "$worker_dir")")
+        local history_dir="$ralph_dir/history"
+        mkdir -p "$history_dir"
+        mv "$worker_dir" "$history_dir/$worker_name" 2>/dev/null || true
+    fi
+
+    log "Worker archived to history for $worker_name"
 }
 
 # Attempt to merge a PR for a worker

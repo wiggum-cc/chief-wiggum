@@ -260,10 +260,20 @@ GHEOF
 
     assert_equals "0" "$result" "Should return 0 on successful merge"
 
-    # Worker directory should be deleted after successful merge
+    # Worker directory should be moved to history after successful merge
     local dir_exists="no"
     [ -d "$WORKER_DIR" ] && dir_exists="yes"
-    assert_equals "no" "$dir_exists" "Worker directory should be removed after merge"
+    assert_equals "no" "$dir_exists" "Worker directory should be removed from workers/"
+
+    local history_dir
+    history_dir="$RALPH_DIR/history/$(basename "$WORKER_DIR")"
+    local history_exists="no"
+    [ -d "$history_dir" ] && history_exists="yes"
+    assert_equals "yes" "$history_exists" "Worker directory should be archived to history/"
+
+    local workspace_in_history="no"
+    [ -d "$history_dir/workspace" ] && workspace_in_history="yes"
+    assert_equals "no" "$workspace_in_history" "Workspace should not be in archived history"
 }
 
 # =============================================================================
