@@ -6,13 +6,15 @@
 #   - ralph_dir/plans       (.ralph/plans/)
 #   - ralph_dir/results     (.ralph/results/)
 #   - worker_dir/workspace  (the git worktree)
-#   - worker_dir/*          EXCEPT: checkpoints, logs, agent.pid, worker.log
+#   - worker_dir/*          with restrictions below
 #
-# Blocked paths in worker_dir:
+# Read-only paths in worker_dir (Read/Glob/Grep allowed, Write/Edit blocked):
 #   - checkpoints/  (internal state)
 #   - logs/         (raw claude logs)
-#   - agent.pid     (process management)
 #   - worker.log    (internal logging)
+#
+# Always-blocked paths in worker_dir:
+#   - agent.pid     (process management)
 
 # Read JSON input from stdin
 input=$(cat)
@@ -85,25 +87,48 @@ fi
 
 # Helper function to check if path is in blocked worker_dir locations
 # Returns 0 if blocked, 1 if allowed
+#
+# Args:
+#   abs_path - Absolute path to check
+#   tool     - Tool name (Read/Glob/Grep are read-only, Write/Edit are write)
+#
+# Read-only paths (blocked for Write/Edit, allowed for Read/Glob/Grep):
+#   - worker.log, logs/, checkpoints/
+# Always-blocked paths:
+#   - agent.pid (process management - never readable by agent)
 is_blocked_worker_path() {
     local abs_path="$1"
+    local check_tool="${2:-}"
 
     # Must have worker_dir to check
     [[ -z "$worker_dir_abs" ]] && return 1
 
-    # Check for blocked paths within worker_dir
-    # Blocked: checkpoints/, logs/, agent.pid, worker.log
-    if [[ "$abs_path" == "$worker_dir_abs/checkpoints"* ]]; then
-        return 0  # Blocked
-    fi
-    if [[ "$abs_path" == "$worker_dir_abs/logs"* ]]; then
-        return 0  # Blocked
-    fi
+    # agent.pid is always blocked (process management)
     if [[ "$abs_path" == "$worker_dir_abs/agent.pid" ]]; then
         return 0  # Blocked
     fi
-    if [[ "$abs_path" == "$worker_dir_abs/worker.log" ]]; then
-        return 0  # Blocked
+
+    # Read-only paths: checkpoints/, logs/, worker.log
+    # Blocked for write tools, allowed for read tools
+    local is_readonly_path=false
+    if [[ "$abs_path" == "$worker_dir_abs/checkpoints"* ]]; then
+        is_readonly_path=true
+    elif [[ "$abs_path" == "$worker_dir_abs/logs"* ]]; then
+        is_readonly_path=true
+    elif [[ "$abs_path" == "$worker_dir_abs/worker.log" ]]; then
+        is_readonly_path=true
+    fi
+
+    if [[ "$is_readonly_path" == "true" ]]; then
+        # Allow read-only tools
+        case "$check_tool" in
+            Read|Glob|Grep)
+                return 1  # Allowed (read-only access)
+                ;;
+            *)
+                return 0  # Blocked (write access)
+                ;;
+        esac
     fi
 
     return 1  # Not blocked
@@ -152,8 +177,8 @@ validate_path() {
 
     # 4. worker_dir/* (except blocked paths) - allowed
     if [[ -n "$worker_dir_abs" && "$abs_path" == "$worker_dir_abs"* ]]; then
-        # Check if it's a blocked path
-        if is_blocked_worker_path "$abs_path"; then
+        # Check if it's a blocked path (pass tool for read/write distinction)
+        if is_blocked_worker_path "$abs_path" "$tool"; then
             return 1  # Blocked worker path
         fi
         return 0  # Allowed worker path
@@ -179,12 +204,12 @@ emit_block_error() {
     echo "" >&2
 
     # Check if it's a blocked worker path
-    if is_blocked_worker_path "$abs_path"; then
+    if is_blocked_worker_path "$abs_path" "$tool"; then
         echo "This path is restricted within the worker directory:" >&2
-        echo "  - checkpoints/  (internal state)" >&2
-        echo "  - logs/         (raw logs)" >&2
-        echo "  - agent.pid     (process management)" >&2
-        echo "  - worker.log    (internal logging)" >&2
+        echo "  - agent.pid     (process management - always blocked)" >&2
+        echo "  - checkpoints/  (read-only)" >&2
+        echo "  - logs/         (read-only)" >&2
+        echo "  - worker.log    (read-only)" >&2
     else
         echo "Allowed paths:" >&2
         echo "  - workspace/           (your working directory)" >&2

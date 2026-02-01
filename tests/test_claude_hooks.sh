@@ -174,26 +174,50 @@ test_worker_summaries_allowed() {
 # Test: Blocked worker dir paths
 # =============================================================================
 
-test_worker_checkpoints_blocked() {
+test_worker_checkpoints_read_allowed() {
     local json='{"tool":"Read","tool_input":{"file_path":"'"$WORKER_DIR"'/checkpoints/checkpoint.json"}}'
 
     if run_hook "$json"; then
-        echo -e "  ${RED}✗${NC} Worker checkpoints should be blocked" >&2
-        FAILED_ASSERTIONS=$((FAILED_ASSERTIONS + 1))
+        echo -e "  ${GREEN}✓${NC} Worker checkpoints read allowed"
     else
-        echo -e "  ${GREEN}✓${NC} Worker checkpoints blocked"
+        echo -e "  ${RED}✗${NC} Worker checkpoints read should be allowed" >&2
+        FAILED_ASSERTIONS=$((FAILED_ASSERTIONS + 1))
     fi
     ASSERTION_COUNT=$((ASSERTION_COUNT + 1))
 }
 
-test_worker_logs_blocked() {
+test_worker_checkpoints_write_blocked() {
+    local json='{"tool":"Write","tool_input":{"file_path":"'"$WORKER_DIR"'/checkpoints/checkpoint.json"}}'
+
+    if run_hook "$json"; then
+        echo -e "  ${RED}✗${NC} Worker checkpoints write should be blocked" >&2
+        FAILED_ASSERTIONS=$((FAILED_ASSERTIONS + 1))
+    else
+        echo -e "  ${GREEN}✓${NC} Worker checkpoints write blocked"
+    fi
+    ASSERTION_COUNT=$((ASSERTION_COUNT + 1))
+}
+
+test_worker_logs_read_allowed() {
     local json='{"tool":"Read","tool_input":{"file_path":"'"$WORKER_DIR"'/logs/iteration-0.log"}}'
 
     if run_hook "$json"; then
-        echo -e "  ${RED}✗${NC} Worker logs should be blocked" >&2
+        echo -e "  ${GREEN}✓${NC} Worker logs read allowed"
+    else
+        echo -e "  ${RED}✗${NC} Worker logs read should be allowed" >&2
+        FAILED_ASSERTIONS=$((FAILED_ASSERTIONS + 1))
+    fi
+    ASSERTION_COUNT=$((ASSERTION_COUNT + 1))
+}
+
+test_worker_logs_edit_blocked() {
+    local json='{"tool":"Edit","tool_input":{"file_path":"'"$WORKER_DIR"'/logs/iteration-0.log"}}'
+
+    if run_hook "$json"; then
+        echo -e "  ${RED}✗${NC} Worker logs edit should be blocked" >&2
         FAILED_ASSERTIONS=$((FAILED_ASSERTIONS + 1))
     else
-        echo -e "  ${GREEN}✓${NC} Worker logs blocked"
+        echo -e "  ${GREEN}✓${NC} Worker logs edit blocked"
     fi
     ASSERTION_COUNT=$((ASSERTION_COUNT + 1))
 }
@@ -210,14 +234,26 @@ test_worker_agent_pid_blocked() {
     ASSERTION_COUNT=$((ASSERTION_COUNT + 1))
 }
 
-test_worker_log_blocked() {
+test_worker_log_read_allowed() {
     local json='{"tool":"Read","tool_input":{"file_path":"'"$WORKER_DIR"'/worker.log"}}'
 
     if run_hook "$json"; then
-        echo -e "  ${RED}✗${NC} Worker worker.log should be blocked" >&2
+        echo -e "  ${GREEN}✓${NC} Worker worker.log read allowed"
+    else
+        echo -e "  ${RED}✗${NC} Worker worker.log read should be allowed" >&2
+        FAILED_ASSERTIONS=$((FAILED_ASSERTIONS + 1))
+    fi
+    ASSERTION_COUNT=$((ASSERTION_COUNT + 1))
+}
+
+test_worker_log_write_blocked() {
+    local json='{"tool":"Write","tool_input":{"file_path":"'"$WORKER_DIR"'/worker.log"}}'
+
+    if run_hook "$json"; then
+        echo -e "  ${RED}✗${NC} Worker worker.log write should be blocked" >&2
         FAILED_ASSERTIONS=$((FAILED_ASSERTIONS + 1))
     else
-        echo -e "  ${GREEN}✓${NC} Worker worker.log blocked"
+        echo -e "  ${GREEN}✓${NC} Worker worker.log write blocked"
     fi
     ASSERTION_COUNT=$((ASSERTION_COUNT + 1))
 }
@@ -414,7 +450,7 @@ test_empty_tool_input_allowed() {
 # =============================================================================
 
 test_block_error_shows_path() {
-    local json='{"tool":"Read","tool_input":{"file_path":"'"$WORKER_DIR"'/checkpoints/foo"}}'
+    local json='{"tool":"Write","tool_input":{"file_path":"'"$WORKER_DIR"'/checkpoints/foo"}}'
     local output
     output=$(run_hook_with_stderr "$json") || true
 
@@ -460,11 +496,14 @@ run_test test_worker_prd_allowed
 run_test test_worker_task_comments_allowed
 run_test test_worker_summaries_allowed
 
-# Worker dir blocked tests
-run_test test_worker_checkpoints_blocked
-run_test test_worker_logs_blocked
+# Worker dir read-only tests (read allowed, write blocked)
+run_test test_worker_checkpoints_read_allowed
+run_test test_worker_checkpoints_write_blocked
+run_test test_worker_logs_read_allowed
+run_test test_worker_logs_edit_blocked
 run_test test_worker_agent_pid_blocked
-run_test test_worker_log_blocked
+run_test test_worker_log_read_allowed
+run_test test_worker_log_write_blocked
 
 # Ralph dir tests
 run_test test_ralph_plans_allowed
