@@ -24,16 +24,25 @@ teardown() {
     rm -rf "$TEST_DIR"
 }
 
+# Helper: generate N lines of ~80 bytes each to pass the fast-path byte check
+# (byte threshold = max_lines * 80 = 100 * 80 = 8000)
+_gen_lines() {
+    local file="$1"
+    local count="$2"
+    local prefix="${3:-[2024-01-26T10:30:00+0000] INFO: Log entry number}"
+    local i
+    for ((i = 1; i <= count; i++)); do
+        printf '%s %06d padding-to-ensure-sufficient-line-length\n' "$prefix" "$i" >> "$file"
+    done
+}
+
 # =============================================================================
 # Test: Small file is skipped (no rotation)
 # =============================================================================
 test_skip_small_file() {
     local log_file="$TEST_DIR/logs/small.log"
     # Create a 50-line file (below threshold of 100)
-    local i
-    for ((i = 1; i <= 50; i++)); do
-        echo "line $i" >> "$log_file"
-    done
+    _gen_lines "$log_file" 50
 
     log_rotation_check "$log_file"
 
@@ -56,10 +65,7 @@ test_skip_small_file() {
 test_rotate_large_file() {
     local log_file="$TEST_DIR/logs/orchestrator.log"
     # Create a 150-line file (above threshold of 100)
-    local i
-    for ((i = 1; i <= 150; i++)); do
-        echo "[2024-01-26T10:30:00+0000] INFO: Log message number $i" >> "$log_file"
-    done
+    _gen_lines "$log_file" 150
 
     log_rotation_check "$log_file"
 
@@ -91,10 +97,7 @@ test_rotate_large_file() {
 # =============================================================================
 test_archive_naming() {
     local log_file="$TEST_DIR/logs/test.log"
-    local i
-    for ((i = 1; i <= 150; i++)); do
-        echo "line $i" >> "$log_file"
-    done
+    _gen_lines "$log_file" 150
 
     log_rotation_check "$log_file"
 
@@ -126,14 +129,9 @@ test_audit_log_header_preservation() {
 # Project: /test/project
 # Started: 2024-01-26T10:00:00
 ============================
-entry1: data
-entry2: data
 EOF
-    # Add enough data lines to trigger rotation
-    local i
-    for ((i = 1; i <= 150; i++)); do
-        echo "audit entry $i" >> "$log_file"
-    done
+    # Add enough data lines to trigger rotation (long lines to pass byte check)
+    _gen_lines "$log_file" 150 "audit-entry"
 
     log_rotation_check "$log_file"
 
@@ -142,7 +140,7 @@ EOF
     assert_file_contains "$log_file" "============================" "Header separator should be preserved"
 
     # Data lines should NOT be in the live file
-    assert_file_not_contains "$log_file" "audit entry 1" "Data should be archived, not in live file"
+    assert_file_not_contains "$log_file" "audit-entry" "Data should be archived, not in live file"
 
     # Live file should only have header lines
     local line_count
@@ -157,7 +155,7 @@ EOF
 
     local archived_content
     archived_content=$(gzip -dc "$archive_file")
-    assert_output_contains "$archived_content" "audit entry 1" "Archive should contain data lines"
+    assert_output_contains "$archived_content" "audit-entry" "Archive should contain data lines"
     assert_output_not_contains "$archived_content" "# Audit Log" "Archive should not contain header"
 }
 
@@ -184,10 +182,8 @@ test_prune_old_archives() {
     assert_equals "3" "$count" "Should start with 3 archives"
 
     # Now create a file that triggers rotation (creates archive #4)
-    local i
-    for ((i = 1; i <= 150; i++)); do
-        echo "line $i" >> "$log_file"
-    done
+    _gen_lines "$log_file" 150
+
     log_rotation_check "$log_file"
 
     # Should have been pruned to max_archives (3)
@@ -207,10 +203,7 @@ test_disabled_via_env() {
     _LR_ENABLED="false"
 
     local log_file="$TEST_DIR/logs/disabled.log"
-    local i
-    for ((i = 1; i <= 150; i++)); do
-        echo "line $i" >> "$log_file"
-    done
+    _gen_lines "$log_file" 150
 
     log_rotation_check_all
 
@@ -232,10 +225,7 @@ test_disabled_via_env() {
 # =============================================================================
 test_jsonl_rotation() {
     local log_file="$TEST_DIR/logs/activity.jsonl"
-    local i
-    for ((i = 1; i <= 150; i++)); do
-        echo "{\"event\":\"test\",\"seq\":$i}" >> "$log_file"
-    done
+    _gen_lines "$log_file" 150 '{"event":"test","seq":'
 
     log_rotation_check_all
 
@@ -257,14 +247,9 @@ test_jsonl_rotation() {
 # =============================================================================
 test_check_all_multiple_files() {
     # Create two large files and one small file
-    local i
-    for ((i = 1; i <= 150; i++)); do
-        echo "line $i" >> "$TEST_DIR/logs/one.log"
-        echo "line $i" >> "$TEST_DIR/logs/two.log"
-    done
-    for ((i = 1; i <= 50; i++)); do
-        echo "line $i" >> "$TEST_DIR/logs/small.log"
-    done
+    _gen_lines "$TEST_DIR/logs/one.log" 150
+    _gen_lines "$TEST_DIR/logs/two.log" 150
+    _gen_lines "$TEST_DIR/logs/small.log" 50
 
     log_rotation_check_all
 
