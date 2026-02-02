@@ -297,6 +297,25 @@
       }
     },
     {
+      "id": "resume-decide",
+      "description": "Run resume-decide analysis for stopped workers",
+      "phase": "periodic",
+      "order": 55,
+      "schedule": {
+        "type": "interval",
+        "interval": 30,
+        "run_on_startup": true
+      },
+      "execution": {
+        "type": "function",
+        "function": "svc_orch_resume_decide"
+      },
+      "concurrency": {
+        "max_instances": 1,
+        "if_running": "skip"
+      }
+    },
+    {
       "id": "fix-workers",
       "description": "Spawn fix workers for PR comment issues",
       "phase": "periodic",

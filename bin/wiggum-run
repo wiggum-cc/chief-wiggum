@@ -199,6 +199,9 @@ main() {
     # Load resume queue configuration (initial_bonus, fail_penalty, min_retry_interval)
     load_resume_queue_config
 
+    # Load resume config (max_decide_concurrent, max_attempts, cooldown)
+    load_resume_config
+
     # Initialize activity log
     activity_init "$PROJECT_DIR"
 
@@ -233,10 +236,10 @@ main() {
     if [[ "$WIGGUM_NO_RESUME" == "true" ]]; then
         _SERVICE_JSON=$(echo "$_SERVICE_JSON" | jq '
             .services |= map(
-                if .id == "resume-poll"
+                if .id == "resume-poll" or .id == "resume-decide"
                 then .enabled = false
                 else . end)')
-        log "--no-resume: disabled resume-poll service, resume items excluded from unified queue"
+        log "--no-resume: disabled resume-poll, resume-decide services, resume items excluded from unified queue"
         _no_flags_applied=true
     fi
     if [[ "$WIGGUM_NO_FIX" == "true" ]]; then
@@ -280,6 +283,7 @@ main() {
     export FIX_WORKER_LIMIT FIX_WORKER_TIMEOUT RESOLVE_WORKER_TIMEOUT
     export AGING_FACTOR SIBLING_WIP_PENALTY PLAN_BONUS DEP_BONUS_PER_TASK
     export RESUME_INITIAL_BONUS RESUME_FAIL_PENALTY RESUME_MIN_RETRY_INTERVAL
+    export RESUME_MAX_DECIDE_CONCURRENT
     export MAX_SKIP_RETRIES PID_WAIT_TIMEOUT
 
     # Startup phase (sequential, synchronous)

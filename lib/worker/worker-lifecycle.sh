@@ -155,7 +155,8 @@ is_worker_running() {
     local worker_dir="$1"
 
     get_valid_worker_pid "$worker_dir/agent.pid" "bash" > /dev/null 2>&1 && return 0
-    get_valid_worker_pid "$worker_dir/resume.pid" "bash" > /dev/null 2>&1
+    get_valid_worker_pid "$worker_dir/resume.pid" "bash" > /dev/null 2>&1 && return 0
+    get_valid_worker_pid "$worker_dir/decide.pid" "bash" > /dev/null 2>&1
 }
 
 # Get worker PID or return error
@@ -269,6 +270,15 @@ scan_active_workers() {
                     pid_type="resume"
                 else
                     rm -f "$worker_dir/resume.pid"
+                fi
+            fi
+
+            if [ -z "$pid" ] && [ -f "$worker_dir/decide.pid" ]; then
+                pid=$(get_valid_worker_pid "$worker_dir/decide.pid" "bash") || true
+                if [ -n "$pid" ]; then
+                    pid_type="decide"
+                else
+                    rm -f "$worker_dir/decide.pid"
                 fi
             fi
 

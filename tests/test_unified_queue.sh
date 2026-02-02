@@ -61,7 +61,11 @@ teardown() {
     rm -rf "$TEST_DIR"
 }
 
-# Helper: create a fake resumable worker directory
+# Helper: create a fake resumable worker directory with RETRY decision
+# In the two-phase resume system, the unified queue only picks up workers
+# that already have a resume-decision.json with decision=RETRY (written by
+# the resume-decide service in Phase 1). This helper simulates that state.
+#
 # Args: task_id [attempt_count]
 _create_resumable_worker() {
     local task_id="$1"
@@ -82,6 +86,16 @@ _create_resumable_worker() {
     ]
 }
 PJSON
+
+    # Write RETRY decision file (simulates Phase 1 completion)
+    cat > "$worker_dir/resume-decision.json" << DJSON
+{
+    "decision": "RETRY",
+    "pipeline": null,
+    "resume_step": "execution",
+    "reason": "Test resume"
+}
+DJSON
 
     # Resume state with attempt count
     if [ "$attempts" -gt 0 ]; then
@@ -305,6 +319,15 @@ EOF
     ]
 }
 PJSON
+    # RETRY decision for two-phase resume system
+    cat > "$late_worker_dir/resume-decision.json" << 'DJSON'
+{
+    "decision": "RETRY",
+    "pipeline": null,
+    "resume_step": "docs",
+    "reason": "Test resume"
+}
+DJSON
 
     scheduler_tick
     local queue="$SCHED_UNIFIED_QUEUE"

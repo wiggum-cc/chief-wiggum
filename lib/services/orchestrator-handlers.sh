@@ -257,9 +257,43 @@ svc_orch_pool_ingest() {
     pool_ingest_pending "$RALPH_DIR"
 }
 
-# Poll background resume processes for completion
+# Poll background resume-decide processes for completion
 svc_orch_resume_poll() {
-    _poll_pending_resumes
+    _poll_pending_decides
+}
+
+# Run resume-decide analysis for stopped workers (Phase 1 of two-phase resume)
+#
+# Scans for stopped workers needing a decide phase, writes RETRY decisions
+# for interrupted steps (fast path), and launches LLM analysis in background
+# for completed steps. Decisions are picked up by svc_orch_task_spawner.
+svc_orch_resume_decide() {
+    local max_decide="${RESUME_MAX_DECIDE_CONCURRENT:-20}"
+    _poll_pending_decides
+
+    local decide_count="${#_PENDING_DECIDES[@]}"
+    local workers_needing_decide
+    workers_needing_decide=$(get_workers_needing_decide "$RALPH_DIR")
+
+    while read -r worker_dir task_id current_step worker_type; do
+        [ -n "$worker_dir" ] || continue
+        [ "$decide_count" -lt "$max_decide" ] || break
+
+        # For interrupted steps, write decision inline (fast, no background)
+        if [ -n "$current_step" ] && ! _step_has_result "$worker_dir" "$current_step"; then
+            jq -n --arg step "$current_step" '{
+                decision: "RETRY",
+                pipeline: null,
+                resume_step: $step,
+                reason: "Step interrupted, direct resume"
+            }' > "$worker_dir/resume-decision.json"
+            log "Direct RETRY decision for $task_id (interrupted at $current_step)"
+            continue
+        fi
+
+        _launch_decide_background "$worker_dir" "$task_id" "$worker_type"
+        ((++decide_count))
+    done <<< "$workers_needing_decide"
 }
 
 # Reap finished workers and run completion callbacks
@@ -449,13 +483,19 @@ svc_orch_task_spawner() {
                 fi
             fi
 
-            log "Initiating resume for $task_id (pipeline at: '$resume_step')"
-            _launch_resume_background "$worker_dir" "$task_id" "$worker_type"
-
-            if [[ "$worker_type" =~ ^(fix|resolve)$ ]]; then
-                ((++pending_priority_count))
+            log "Launching resume worker for $task_id (pipeline at: '$resume_step')"
+            if _launch_resume_worker "$worker_dir" "$task_id"; then
+                pool_add "$SPAWNED_WORKER_PID" "$worker_type" "$task_id"
+                scheduler_mark_event
+                audit_log_task_assigned "$task_id" "$SPAWNED_WORKER_ID" "$SPAWNED_WORKER_PID" 2>/dev/null || true
+                log "Resumed worker $SPAWNED_WORKER_ID for $task_id (PID: $SPAWNED_WORKER_PID)"
+                if [[ "$worker_type" =~ ^(fix|resolve)$ ]]; then
+                    ((++pending_priority_count))
+                else
+                    ((++pending_main_count))
+                fi
             else
-                ((++pending_main_count))
+                log_error "Failed to launch resume worker for $task_id"
             fi
         fi
     done <<< "$SCHED_UNIFIED_QUEUE"

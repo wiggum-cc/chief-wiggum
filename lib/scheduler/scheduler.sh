@@ -384,12 +384,20 @@ scheduler_is_complete() {
         fi
     done
 
-    # In resume-only mode, stay alive while there are pending resumes or resumable workers
+    # In resume-only mode, stay alive while there are pending decides, retry decisions, or resumable workers
     if [[ "$run_mode" == "resume-only" ]]; then
-        [[ ${#_PENDING_RESUMES[@]} -gt 0 ]] && return 1
-        local resumable
-        resumable=$(get_resumable_workers "$_SCHED_RALPH_DIR")
-        [[ -n "$resumable" ]] && return 1
+        # Check pending decide processes
+        if declare -p _PENDING_DECIDES &>/dev/null && [[ ${#_PENDING_DECIDES[@]} -gt 0 ]]; then
+            return 1
+        fi
+        # Check workers with RETRY decisions waiting to be spawned
+        local retry_workers
+        retry_workers=$(get_workers_with_retry_decision "$_SCHED_RALPH_DIR")
+        [[ -n "$retry_workers" ]] && return 1
+        # Check workers that still need a decide phase
+        local needing_decide
+        needing_decide=$(get_workers_needing_decide "$_SCHED_RALPH_DIR")
+        [[ -n "$needing_decide" ]] && return 1
     fi
 
     return 0
@@ -552,6 +560,123 @@ get_resumable_workers() {
     done
 }
 
+# Find workers that need a resume-decide analysis
+#
+# Scans for stopped workers eligible for the decide phase. These workers:
+#   - Have a workspace and prd.md (setup completed)
+#   - Are not currently running (no valid agent.pid/resume.pid/decide.pid)
+#   - Are not terminal failures
+#   - Are not in cooldown
+#   - Have not exceeded max resume attempts
+#   - Are not plan-only workers
+#   - Do NOT already have a resume-decision.json (decision pending or consumed)
+#   - Do NOT have an active decide.pid process
+#
+# Args:
+#   ralph_dir - Ralph directory path
+#
+# Returns: Lines of "worker_dir task_id current_step worker_type" for each worker
+get_workers_needing_decide() {
+    local ralph_dir="$1"
+    [ -d "$ralph_dir/workers" ] || return 0
+
+    for worker_dir in "$ralph_dir/workers"/worker-*; do
+        [ -d "$worker_dir" ] || continue
+
+        # Skip plan workers (read-only planning sessions)
+        [[ "$(basename "$worker_dir")" == *"-plan-"* ]] && continue
+
+        # Must have workspace and prd.md (setup was completed)
+        [ -d "$worker_dir/workspace" ] || continue
+        [ -f "$worker_dir/prd.md" ] || continue
+
+        # Skip if still running
+        is_worker_running "$worker_dir" && continue
+
+        # Skip terminal failures (last step + FAIL, or resume-state terminal)
+        _is_terminal_failure "$worker_dir" && continue
+
+        # Skip workers in cooldown (DEFER)
+        resume_state_is_cooling "$worker_dir" && continue
+
+        # Skip workers that exceeded max resume attempts
+        resume_state_max_exceeded "$worker_dir" && continue
+
+        # Skip if decision already exists (not yet consumed by spawner)
+        if [ -f "$worker_dir/resume-decision.json" ]; then
+            # If .consumed exists but worker isn't running, stale — remove and allow re-decide
+            if [ -f "$worker_dir/resume-decision.json.consumed" ] && ! is_worker_running "$worker_dir"; then
+                rm -f "$worker_dir/resume-decision.json.consumed"
+            else
+                continue
+            fi
+        fi
+
+        # Skip if decide process is already running
+        if [ -f "$worker_dir/decide.pid" ]; then
+            get_valid_worker_pid "$worker_dir/decide.pid" "bash" > /dev/null 2>&1 && continue
+            # Stale decide.pid — clean up
+            rm -f "$worker_dir/decide.pid"
+        fi
+
+        local task_id current_step worker_type
+        task_id=$(get_task_id_from_worker "$(basename "$worker_dir")")
+
+        # Get current step from pipeline config, default to execution
+        if [ -f "$worker_dir/pipeline-config.json" ]; then
+            current_step=$(jq -r '.current.step_id // "execution"' "$worker_dir/pipeline-config.json" 2>/dev/null)
+        else
+            current_step="execution"
+        fi
+
+        # Detect worker type from pipeline config, name pattern, and git-state
+        worker_type=$(_detect_worker_type "$worker_dir")
+
+        echo "$worker_dir $task_id $current_step $worker_type"
+    done
+}
+
+# Find workers with a RETRY resume decision ready for spawning
+#
+# Scans for workers that have a resume-decision.json with decision=RETRY
+# and are not yet consumed (no .consumed marker) and not currently running.
+#
+# Args:
+#   ralph_dir - Ralph directory path
+#
+# Returns: Lines of "worker_dir task_id resume_step worker_type" for each worker
+get_workers_with_retry_decision() {
+    local ralph_dir="$1"
+    [ -d "$ralph_dir/workers" ] || return 0
+
+    for worker_dir in "$ralph_dir/workers"/worker-*; do
+        [ -d "$worker_dir" ] || continue
+
+        # Must have a resume-decision.json
+        [ -f "$worker_dir/resume-decision.json" ] || continue
+
+        # Skip if already consumed
+        [ -f "$worker_dir/resume-decision.json.consumed" ] && continue
+
+        # Skip if worker is running
+        is_worker_running "$worker_dir" && continue
+
+        # Read decision
+        local decision
+        decision=$(jq -r '.decision // ""' "$worker_dir/resume-decision.json" 2>/dev/null)
+        [ "$decision" = "RETRY" ] || continue
+
+        local task_id resume_step worker_type
+        task_id=$(get_task_id_from_worker "$(basename "$worker_dir")")
+        resume_step=$(jq -r '.resume_step // "execution"' "$worker_dir/resume-decision.json" 2>/dev/null)
+        [ "$resume_step" = "null" ] && resume_step="execution"
+
+        worker_type=$(_detect_worker_type "$worker_dir")
+
+        echo "$worker_dir $task_id $resume_step $worker_type"
+    done
+}
+
 # Build a unified work queue merging new tasks and resume candidates
 #
 # Each line is: effective_pri|work_type|task_id|worker_dir|worker_type|resume_step
@@ -626,12 +751,12 @@ get_unified_work_queue() {
         queue+="${effective_pri}|new|${task_id}|||"$'\n'
     done
 
-    # --- Resume tasks ---
+    # --- Resume tasks (only workers with RETRY decision from two-phase resume) ---
     if [ "$no_resume" != "true" ]; then
-        local resumable
-        resumable=$(get_resumable_workers "$_SCHED_RALPH_DIR")
+        local retry_workers
+        retry_workers=$(get_workers_with_retry_decision "$_SCHED_RALPH_DIR")
 
-        while read -r worker_dir task_id current_step worker_type; do
+        while read -r worker_dir task_id resume_step worker_type; do
             [ -n "$worker_dir" ] || continue
 
             # Base priority from kanban
@@ -678,8 +803,8 @@ get_unified_work_queue() {
 
             [ "$effective_pri" -lt 0 ] && effective_pri=0
 
-            queue+="${effective_pri}|resume|${task_id}|${worker_dir}|${worker_type}|${current_step}"$'\n'
-        done <<< "$resumable"
+            queue+="${effective_pri}|resume|${task_id}|${worker_dir}|${worker_type}|${resume_step}"$'\n'
+        done <<< "$retry_workers"
     fi
 
     # Sort by effective_pri ascending and output
@@ -882,6 +1007,74 @@ scheduler_read_pending_resumes() {
     while IFS='|' read -r pid worker_dir task_id worker_type; do
         [ -n "$pid" ] || continue
         _PENDING_RESUMES[$pid]="$worker_dir|$task_id|$worker_type"
+    done <<< "$entries"
+
+    return 0
+}
+
+# Write pending decides to JSON file
+#
+# Args:
+#   state_dir - Directory to write pending-decides.json
+#   -         - Pending decides data is passed via _PENDING_DECIDES associative array
+#              (pid -> "worker_dir|task_id|worker_type")
+scheduler_write_pending_decides() {
+    local state_dir="$1"
+    local decides_file="$state_dir/pending-decides.json"
+
+    # Check if _PENDING_DECIDES exists
+    if ! declare -p _PENDING_DECIDES &>/dev/null; then
+        echo '{}' > "$decides_file"
+        return 0
+    fi
+
+    local json='{'
+    local first=true
+    for pid in "${!_PENDING_DECIDES[@]}"; do
+        local info="${_PENDING_DECIDES[$pid]}"
+        local worker_dir="${info%%|*}"
+        local rest="${info#*|}"
+        local task_id="${rest%%|*}"
+        local worker_type="${rest##*|}"
+
+        if [ "$first" = true ]; then
+            first=false
+        else
+            json+=","
+        fi
+        json+="\"$pid\":{\"worker_dir\":\"$worker_dir\",\"task_id\":\"$task_id\",\"worker_type\":\"$worker_type\"}"
+    done
+    json+='}'
+
+    echo "$json" > "$decides_file"
+}
+
+# Read pending decides from JSON file
+#
+# Loads pending-decides.json into _PENDING_DECIDES associative array.
+#
+# Args:
+#   state_dir - Directory containing pending-decides.json
+#
+# Returns: 0 on success, 1 if file not found
+scheduler_read_pending_decides() {
+    local state_dir="$1"
+    local decides_file="$state_dir/pending-decides.json"
+
+    [ -f "$decides_file" ] || return 1
+
+    # Ensure array exists
+    if ! declare -p _PENDING_DECIDES &>/dev/null; then
+        declare -gA _PENDING_DECIDES=()
+    fi
+
+    _PENDING_DECIDES=()
+    local entries
+    entries=$(jq -r 'to_entries[] | "\(.key)|\(.value.worker_dir)|\(.value.task_id)|\(.value.worker_type)"' "$decides_file" 2>/dev/null) || return 1
+
+    while IFS='|' read -r pid worker_dir task_id worker_type; do
+        [ -n "$pid" ] || continue
+        _PENDING_DECIDES[$pid]="$worker_dir|$task_id|$worker_type"
     done <<< "$entries"
 
     return 0

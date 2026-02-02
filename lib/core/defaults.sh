@@ -99,7 +99,7 @@ _load_config_cache() {
     fi
 
     # Single jq call extracts all values (performance optimization)
-    # Format: approved_user_ids|fix_max_iter|fix_max_turns|auto_commit|rate_limit|git_name|git_email|fix_worker_limit|lr_enabled|lr_max_lines|lr_max_archives|resume_max|resume_cooldown|resume_initial_bonus|resume_fail_penalty|resume_min_retry
+    # Format: approved_user_ids|fix_max_iter|fix_max_turns|auto_commit|rate_limit|git_name|git_email|fix_worker_limit|lr_enabled|lr_max_lines|lr_max_archives|resume_max|resume_cooldown|resume_initial_bonus|resume_fail_penalty|resume_min_retry|resume_max_decide
     local extracted
     extracted=$(jq -r '[
         (.review.approved_user_ids // [] | map(tostring) | join(",")),
@@ -117,7 +117,8 @@ _load_config_cache() {
         (.resume.cooldown_seconds // 3600),
         (.resume.initial_bonus // 20000),
         (.resume.fail_penalty // 8000),
-        (.resume.min_retry_interval // 30)
+        (.resume.min_retry_interval // 30),
+        (.resume.max_decide_concurrent // 20)
     ] | @tsv' "$config_file" 2>/dev/null) || true
 
     if [ -n "$extracted" ]; then
@@ -127,6 +128,7 @@ _load_config_cache() {
                          _CACHE_LOG_ROTATE_MAX_ARCHIVES _CACHE_RESUME_MAX_ATTEMPTS \
                          _CACHE_RESUME_COOLDOWN _CACHE_RESUME_INITIAL_BONUS \
                          _CACHE_RESUME_FAIL_PENALTY _CACHE_RESUME_MIN_RETRY \
+                         _CACHE_RESUME_MAX_DECIDE \
                          <<< "$extracted"
     fi
 
@@ -214,11 +216,15 @@ load_resume_config() {
     MAX_RESUME_ATTEMPTS="${WIGGUM_MAX_RESUME_ATTEMPTS:-${_CACHE_RESUME_MAX_ATTEMPTS:-}}"
     RESUME_COOLDOWN_SECONDS="${WIGGUM_RESUME_COOLDOWN:-${_CACHE_RESUME_COOLDOWN:-}}"
 
+    RESUME_MAX_DECIDE_CONCURRENT="${WIGGUM_RESUME_MAX_DECIDE_CONCURRENT:-${_CACHE_RESUME_MAX_DECIDE:-}}"
+
     # Fallback defaults if config doesn't exist or parsing fails
     MAX_RESUME_ATTEMPTS="${MAX_RESUME_ATTEMPTS:-5}"
     RESUME_COOLDOWN_SECONDS="${RESUME_COOLDOWN_SECONDS:-3600}"
+    RESUME_MAX_DECIDE_CONCURRENT="${RESUME_MAX_DECIDE_CONCURRENT:-20}"
     export MAX_RESUME_ATTEMPTS
     export RESUME_COOLDOWN_SECONDS
+    export RESUME_MAX_DECIDE_CONCURRENT
 }
 
 # Load resume queue config from config.json (with env var overrides)

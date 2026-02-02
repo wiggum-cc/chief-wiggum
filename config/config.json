@@ -73,7 +73,8 @@
     "cooldown_seconds": 3600,
     "initial_bonus": 20000,
     "fail_penalty": 8000,
-    "min_retry_interval": 30
+    "min_retry_interval": 30,
+    "max_decide_concurrent": 20
   },
   "review": {
     "approved_user_ids": [123998984,124862625,124581466,175728472],
