@@ -1408,7 +1408,30 @@ _poll_pending_resumes() {
                 activity_log "worker.resume_defer" "$(basename "$worker_dir")" "$task_id"
                 ;;
             *)
-                log_error "Resume failed for $task_id (exit code: $resume_exit)"
+                # Track the failure so resume_state_max_exceeded() eventually stops retrying.
+                # wiggum-resume only calls resume_state_increment after a successful
+                # resume-decide decision, so crashes before that leave state untouched.
+                local _err_step=""
+                if [[ -f "$worker_dir/pipeline-config.json" ]]; then
+                    _err_step=$(jq -r '.current.step_id // ""' "$worker_dir/pipeline-config.json" 2>/dev/null)
+                fi
+                resume_state_increment "$worker_dir" "ERROR" "" "${_err_step:-}" \
+                    "Resume process failed (exit code: $resume_exit)"
+
+                if resume_state_max_exceeded "$worker_dir"; then
+                    resume_state_set_terminal "$worker_dir" \
+                        "Max resume attempts exceeded after repeated errors (last exit: $resume_exit)"
+                    update_kanban_failed "$RALPH_DIR/kanban.md" "$task_id" || true
+                    log_error "Task $task_id marked FAILED — max resume attempts exceeded (exit code: $resume_exit)"
+                    activity_log "worker.resume_failed" "$(basename "$worker_dir")" "$task_id" \
+                        "exit_code=$resume_exit reason=max_attempts_exceeded"
+                    scheduler_mark_event
+                else
+                    resume_state_set_cooldown "$worker_dir" 120
+                    log_error "Resume failed for $task_id (exit code: $resume_exit) — will retry after cooldown"
+                    activity_log "worker.resume_error" "$(basename "$worker_dir")" "$task_id" \
+                        "exit_code=$resume_exit cooldown=120"
+                fi
                 ;;
         esac
     done

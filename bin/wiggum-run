@@ -65,6 +65,10 @@ SIBLING_WIP_PENALTY=20000  # Fixed-point penalty when sibling is WIP (20000 = 2.
 PLAN_BONUS=15000           # Fixed-point bonus for tasks with plans (15000 = 1.5)
 DEP_BONUS_PER_TASK=7000    # Fixed-point bonus per task blocked (7000 = 0.7)
 WIGGUM_RUN_MODE="default"  # default | fix-only | merge-only | resume-only
+WIGGUM_NO_RESUME=false     # --no-resume: disable resume-workers, resume-poll
+WIGGUM_NO_FIX=false        # --no-fix: disable fix-workers, multi-pr-planner
+WIGGUM_NO_MERGE=false      # --no-merge: disable resolve-workers
+WIGGUM_NO_SYNC=false       # --no-sync: disable github-issue-sync, github-plan-sync, pr-sync
 
 show_help() {
     cat << EOF
@@ -99,6 +103,12 @@ Options:
   -q, --quiet          Quiet mode (warnings and errors only)
   -h, --help           Show this help message
 
+Modifier Flags (combinable with each other and with modes):
+  --no-resume          Don't auto-resume stopped workers
+  --no-fix             Don't spawn fix workers or plan multi-PR fixes
+  --no-merge           Don't resolve/merge PRs
+  --no-sync            Don't sync with GitHub (issues, plans, PRs)
+
 Examples:
   wiggum run                              # Start orchestration with defaults
   wiggum run plan                         # Use planning mode for all workers
@@ -110,6 +120,9 @@ Examples:
   wiggum run --fix-only                   # Only fix and merge existing PRs
   wiggum run --merge-only                 # Only merge ready PRs
   wiggum run --resume-only                # Only resume stopped workers
+  wiggum run --no-sync                    # Run without GitHub sync
+  wiggum run --no-resume --no-fix         # No resume, no fix workers
+  wiggum run --fix-only --no-merge        # Fix PRs but don't merge them
 
 Behavior:
   - Chief assigns pending tasks [ ] to workers based on dependency graph
@@ -209,8 +222,47 @@ main() {
         log "Resume-only mode: disabled fix-workers, resolve-workers, multi-pr-planner, orphan-workspace services"
     fi
 
-    # Invalidate service config cache after run-mode modifications to _SERVICE_JSON
-    if [[ "$WIGGUM_RUN_MODE" != "default" ]]; then
+    # Apply --no-* modifier flags (combinable with each other and run modes)
+    local _no_flags_applied=false
+    if [[ "$WIGGUM_NO_RESUME" == "true" ]]; then
+        _SERVICE_JSON=$(echo "$_SERVICE_JSON" | jq '
+            .services |= map(
+                if .id == "resume-workers" or .id == "resume-poll"
+                then .enabled = false
+                else . end)')
+        log "--no-resume: disabled resume-workers, resume-poll services"
+        _no_flags_applied=true
+    fi
+    if [[ "$WIGGUM_NO_FIX" == "true" ]]; then
+        _SERVICE_JSON=$(echo "$_SERVICE_JSON" | jq '
+            .services |= map(
+                if .id == "fix-workers" or .id == "multi-pr-planner"
+                then .enabled = false
+                else . end)')
+        log "--no-fix: disabled fix-workers, multi-pr-planner services"
+        _no_flags_applied=true
+    fi
+    if [[ "$WIGGUM_NO_MERGE" == "true" ]]; then
+        _SERVICE_JSON=$(echo "$_SERVICE_JSON" | jq '
+            .services |= map(
+                if .id == "resolve-workers"
+                then .enabled = false
+                else . end)')
+        log "--no-merge: disabled resolve-workers service"
+        _no_flags_applied=true
+    fi
+    if [[ "$WIGGUM_NO_SYNC" == "true" ]]; then
+        _SERVICE_JSON=$(echo "$_SERVICE_JSON" | jq '
+            .services |= map(
+                if .id == "github-issue-sync" or .id == "github-plan-sync" or .id == "pr-sync"
+                then .enabled = false
+                else . end)')
+        log "--no-sync: disabled github-issue-sync, github-plan-sync, pr-sync services"
+        _no_flags_applied=true
+    fi
+
+    # Invalidate service config cache after run-mode or --no-* modifications to _SERVICE_JSON
+    if [[ "$WIGGUM_RUN_MODE" != "default" || "$_no_flags_applied" == "true" ]]; then
         _service_populate_cache
     fi
 
@@ -218,6 +270,7 @@ main() {
     export WIGGUM_HOME PROJECT_DIR RALPH_DIR
     export MAX_WORKERS MAX_ITERATIONS MAX_TURNS AGENT_TYPE
     export WIGGUM_RUN_MODE
+    export WIGGUM_NO_RESUME WIGGUM_NO_FIX WIGGUM_NO_MERGE WIGGUM_NO_SYNC
     export FIX_WORKER_LIMIT FIX_WORKER_TIMEOUT RESOLVE_WORKER_TIMEOUT
     export AGING_FACTOR SIBLING_WIP_PENALTY PLAN_BONUS DEP_BONUS_PER_TASK
     export MAX_SKIP_RETRIES PID_WAIT_TIMEOUT

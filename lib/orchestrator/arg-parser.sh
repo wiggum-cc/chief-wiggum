@@ -17,7 +17,8 @@ _ORCHESTRATOR_ARG_PARSER_LOADED=1
 # Sets global variables:
 #   MAX_WORKERS, MAX_ITERATIONS, MAX_TURNS, WIGGUM_RUN_MODE,
 #   WIGGUM_PLAN_MODE, WIGGUM_SMART_MODE, WIGGUM_PIPELINE,
-#   FIX_WORKER_LIMIT, FORCE_LOCK
+#   FIX_WORKER_LIMIT, FORCE_LOCK,
+#   WIGGUM_NO_RESUME, WIGGUM_NO_FIX, WIGGUM_NO_MERGE, WIGGUM_NO_SYNC
 #
 # Args:
 #   "$@" - Command line arguments (after verbose flags removed)
@@ -88,6 +89,26 @@ _parse_run_args() {
                 export WIGGUM_PIPELINE="$2"
                 shift 2
                 ;;
+            --no-resume)
+                # shellcheck disable=SC2034
+                WIGGUM_NO_RESUME=true
+                shift
+                ;;
+            --no-fix)
+                # shellcheck disable=SC2034
+                WIGGUM_NO_FIX=true
+                shift
+                ;;
+            --no-merge)
+                # shellcheck disable=SC2034
+                WIGGUM_NO_MERGE=true
+                shift
+                ;;
+            --no-sync)
+                # shellcheck disable=SC2034
+                WIGGUM_NO_SYNC=true
+                shift
+                ;;
             --force)
                 # shellcheck disable=SC2034
                 FORCE_LOCK=true
@@ -130,5 +151,19 @@ _parse_run_args() {
             echo "Error: --smart cannot be combined with --${WIGGUM_RUN_MODE}"
             exit $EXIT_USAGE
         fi
+    fi
+
+    # Validate --no-* flags don't contradict --*-only modes
+    if [[ "${WIGGUM_NO_RESUME:-false}" == "true" && "$WIGGUM_RUN_MODE" == "resume-only" ]]; then
+        echo "Error: --no-resume cannot be combined with --resume-only"
+        exit $EXIT_USAGE
+    fi
+    if [[ "${WIGGUM_NO_FIX:-false}" == "true" && "$WIGGUM_RUN_MODE" == "fix-only" ]]; then
+        echo "Error: --no-fix cannot be combined with --fix-only"
+        exit $EXIT_USAGE
+    fi
+    if [[ "${WIGGUM_NO_MERGE:-false}" == "true" && "$WIGGUM_RUN_MODE" == "merge-only" ]]; then
+        echo "Error: --no-merge cannot be combined with --merge-only"
+        exit $EXIT_USAGE
     fi
 }

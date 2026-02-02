@@ -69,6 +69,17 @@ resume_state_is_terminal() {
 # Kanban stubs
 get_task_status() { echo " "; }
 update_kanban_status() { return 0; }
+update_kanban_failed() { return 0; }
+
+# Resume state stubs for error recovery
+_RESUME_STATE_INCREMENT_CALLS=()
+resume_state_increment() { _RESUME_STATE_INCREMENT_CALLS+=("$1|$2|${3:-}|${4:-}|${5:-}"); }
+_RESUME_STATE_MAX_EXCEEDED=1
+resume_state_max_exceeded() { return "$_RESUME_STATE_MAX_EXCEEDED"; }
+resume_state_set_terminal() { _RESUME_STATE_TERMINAL_CALLS+=("$1|${2:-}"); }
+_RESUME_STATE_TERMINAL_CALLS=()
+_RESUME_COOLDOWN_SET=""
+resume_state_set_cooldown() { _RESUME_COOLDOWN_SET="$1|$2"; }
 
 # Smart mode stubs
 smart_assess_complexity() { echo "simple"; }
@@ -101,6 +112,10 @@ setup() {
     pool_init
     _PENDING_RESUMES=()
     _ACTIVITY_LOG_CALLS=()
+    _RESUME_STATE_INCREMENT_CALLS=()
+    _RESUME_STATE_TERMINAL_CALLS=()
+    _RESUME_STATE_MAX_EXCEEDED=1
+    _RESUME_COOLDOWN_SET=""
 }
 
 teardown() {
@@ -382,16 +397,15 @@ test_resume_pending_format_pipe_delimited() {
 
     _poll_pending_resumes
 
-    # Verify it processed correctly (the error log call should mention TST-001)
+    # With exit code 1, the default case now tracks the error via activity_log
     local found=false
     for call in "${_ACTIVITY_LOG_CALLS[@]}"; do
-        if [[ "$call" == *"TST-001"* ]]; then
+        if [[ "$call" == *"resume_error"* && "$call" == *"TST-001"* ]]; then
             found=true
             break
         fi
     done
-    # With exit code 1, it falls through to the default case (no activity_log)
-    # but the entry was still parsed and removed from _PENDING_RESUMES
+    assert_equals "true" "$found" "Should log resume_error activity for exit code 1"
     assert_equals "0" "${#_PENDING_RESUMES[@]}" "Entry should be fully processed"
 }
 
@@ -412,6 +426,87 @@ test_resume_pending_blank_lines_ignored() {
 
     # Should have processed the one real entry without errors
     assert_equals "0" "${#_PENDING_RESUMES[@]}" "Should process entry despite blank lines"
+}
+
+# =============================================================================
+# Error recovery tests
+# =============================================================================
+
+test_poll_error_exit_sets_cooldown() {
+    local worker_dir="$RALPH_DIR/workers/worker-TST-001-12345"
+    mkdir -p "$worker_dir"
+
+    # Exit code 1 = unexpected failure, max NOT exceeded
+    echo "1" > "$worker_dir/.resume-exit-code"
+    _RESUME_STATE_MAX_EXCEEDED=1  # return 1 = false (not exceeded)
+
+    echo "99999|$worker_dir|TST-001|main" > "$RALPH_DIR/orchestrator/resume-pending"
+
+    _poll_pending_resumes
+
+    # Verify resume_state_increment was called with ERROR decision
+    assert_equals "1" "${#_RESUME_STATE_INCREMENT_CALLS[@]}" \
+        "resume_state_increment should be called once"
+    local inc_call="${_RESUME_STATE_INCREMENT_CALLS[0]}"
+    local has_error="false"
+    [[ "$inc_call" == *"|ERROR|"* ]] && has_error="true"
+    assert_equals "true" "$has_error" "Should increment with ERROR decision"
+
+    # Verify cooldown was set to 120s
+    local has_cooldown="false"
+    [[ "$_RESUME_COOLDOWN_SET" == *"|120" ]] && has_cooldown="true"
+    assert_equals "true" "$has_cooldown" "Should set 120s cooldown"
+
+    # Verify resume_error activity was logged
+    local found=false
+    for call in "${_ACTIVITY_LOG_CALLS[@]}"; do
+        if [[ "$call" == *"resume_error"* && "$call" == *"TST-001"* ]]; then
+            found=true
+            break
+        fi
+    done
+    assert_equals "true" "$found" "Should log resume_error activity"
+}
+
+test_poll_error_exit_marks_failed_when_max_exceeded() {
+    local worker_dir="$RALPH_DIR/workers/worker-TST-001-12345"
+    mkdir -p "$worker_dir"
+
+    # Exit code 1 = unexpected failure, max IS exceeded
+    echo "1" > "$worker_dir/.resume-exit-code"
+    _RESUME_STATE_MAX_EXCEEDED=0  # return 0 = true (exceeded)
+
+    echo "99999|$worker_dir|TST-001|main" > "$RALPH_DIR/orchestrator/resume-pending"
+
+    # Track scheduler_mark_event calls
+    local _MARK_EVENT_CALLED=false
+    scheduler_mark_event() { _MARK_EVENT_CALLED=true; }
+
+    _poll_pending_resumes
+
+    # Verify resume_state_increment was called with ERROR
+    assert_equals "1" "${#_RESUME_STATE_INCREMENT_CALLS[@]}" \
+        "resume_state_increment should be called once"
+
+    # Verify terminal state was set
+    assert_equals "1" "${#_RESUME_STATE_TERMINAL_CALLS[@]}" \
+        "resume_state_set_terminal should be called once"
+
+    # Verify resume_failed activity was logged (not resume_error)
+    local found_failed=false
+    local found_error=false
+    for call in "${_ACTIVITY_LOG_CALLS[@]}"; do
+        [[ "$call" == *"resume_failed"* ]] && found_failed=true
+        [[ "$call" == *"resume_error"* ]] && found_error=true
+    done
+    assert_equals "true" "$found_failed" "Should log resume_failed activity"
+    assert_equals "false" "$found_error" "Should NOT log resume_error activity"
+
+    # Verify scheduler_mark_event was called
+    assert_equals "true" "$_MARK_EVENT_CALLED" "Should call scheduler_mark_event"
+
+    # No cooldown should be set (terminal, not retry)
+    assert_equals "" "$_RESUME_COOLDOWN_SET" "Should NOT set cooldown when max exceeded"
 }
 
 # =============================================================================
@@ -441,6 +536,11 @@ echo ""
 echo "=== File format tests ==="
 run_test test_resume_pending_format_pipe_delimited
 run_test test_resume_pending_blank_lines_ignored
+
+echo ""
+echo "=== Error recovery tests ==="
+run_test test_poll_error_exit_sets_cooldown
+run_test test_poll_error_exit_marks_failed_when_max_exceeded
 
 print_test_summary
 exit_with_test_result
