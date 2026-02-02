@@ -270,7 +270,8 @@
       "FAIL":    { "status": "failure", "exit_code": 10, "default_jump": "abort" },
       "FIX":     { "status": "partial", "exit_code": 0, "default_jump": "prev" },
       "SKIP":    { "status": "success", "exit_code": 0, "default_jump": "next" },
-      "UNKNOWN": { "status": "failure", "exit_code": 1, "default_jump": "abort" }
+      "UNKNOWN": { "status": "failure", "exit_code": 1, "default_jump": "abort" },
+      "MERGE_CONFLICT": { "status": "failure", "exit_code": 1, "default_jump": "abort" }
     }
   }
 }

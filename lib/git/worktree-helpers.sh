@@ -86,6 +86,27 @@ setup_worktree() {
         fi
     fi
 
+    # Pre-flight merge conflict check: detect unresolvable conflicts with
+    # origin/main BEFORE the pipeline starts. Failing fast here saves an
+    # entire pipeline run on work that can't be committed.
+    if [ "${WIGGUM_SKIP_MERGE_CHECK:-}" != "true" ]; then
+        local conflict_files
+        if conflict_files=$(git_worktree_check_mergeable "$workspace" "origin/main"); then
+            log_debug "Pre-flight merge check passed"
+        else
+            log_error "Pre-flight merge conflict detected — worktree cannot merge cleanly with origin/main"
+            if [ -n "$conflict_files" ]; then
+                log_error "Conflicting files:"
+                echo "$conflict_files" | while read -r f; do log_error "  $f"; done
+            fi
+            log_error "Aborting worker setup to avoid wasting pipeline stages on unresolvable conflicts"
+            # Clean up the worktree we just created
+            cd "$project_dir" || true
+            git worktree remove "$workspace" --force 2>/dev/null || rm -rf "$workspace"
+            return 1
+        fi
+    fi
+
     # Setup environment for workspace boundary enforcement
     export WORKER_WORKSPACE="$workspace"
     _write_workspace_hooks_config "$workspace"

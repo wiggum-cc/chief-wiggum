@@ -320,6 +320,14 @@ run_ralph_loop() {
             break
         fi
 
+        # Verify workspace still exists before each iteration.
+        # Catches cases where orchestrator cleaned up the workspace mid-loop.
+        if [ ! -d "$workspace" ]; then
+            log_error "Workspace no longer exists: $workspace — aborting ralph loop"
+            loop_stop_reason="workspace_deleted"
+            break
+        fi
+
         # Check rate limit via backend
         local _rl_ralph_dir="${RALPH_DIR:-}"
         if [ -z "$_rl_ralph_dir" ] && [ -n "$output_dir" ]; then
@@ -684,6 +692,15 @@ ${summary_prompt}"
     local end_time
     end_time=$(epoch_now)
     local duration=$((end_time - start_time))
+
+    if [ "$loop_stop_reason" = "workspace_deleted" ]; then
+        echo "[$(iso_now)] ERROR: LOOP_WORKSPACE_DELETED end_time=$end_time duration_sec=$duration iterations=$((iteration + 1))" >> "$output_dir/worker.log" 2>/dev/null || true
+        export RALPH_LOOP_STOP_REASON="workspace_deleted"
+        export RALPH_LOOP_LAST_SESSION_ID="$last_session_id"
+        _ralph_loop_completed_normally=true
+        trap - EXIT
+        return 1
+    fi
 
     if [ "$loop_stop_reason" = "fast_fail" ]; then
         echo "[$(iso_now)] ERROR: LOOP_FAST_FAIL end_time=$end_time duration_sec=$duration iterations=$((iteration + 1)) consecutive_failures=$consecutive_fast_fails" >> "$output_dir/worker.log" 2>/dev/null || true

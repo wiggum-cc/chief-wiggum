@@ -460,11 +460,24 @@ scheduler_get_dep_bonus_per_task() { echo "$_SCHED_DEP_BONUS_PER_TASK"; }
 scheduler_get_resume_initial_bonus() { echo "$_SCHED_RESUME_INITIAL_BONUS"; }
 scheduler_get_resume_fail_penalty() { echo "$_SCHED_RESUME_FAIL_PENALTY"; }
 
-# Check if worker hit terminal failure (last pipeline step + FAIL result)
+# Check if worker hit terminal failure
 #
-# A terminal failure means the worker completed all pipeline steps but the
-# final step resulted in FAIL. These workers should be cleaned up and
-# restarted fresh, not resumed.
+# Terminal failure means the worker cannot be usefully resumed and should be
+# cleaned up and restarted fresh. A worker is terminal when ANY of these hold:
+#
+# 1. resume-state marks it terminal (COMPLETE or ABORT decision from resume-decide)
+#    - Checked via resume_state_is_terminal()
+#
+# 2. Pipeline reached the LAST step AND that step's result is FAIL or MERGE_CONFLICT
+#    - All pipeline steps exhausted, nothing left to retry
+#    - Requires: pipeline-config.json with valid current.step_idx at last step
+#    - Requires: result file for current step with gate_result = FAIL or MERGE_CONFLICT
+#
+# NOT terminal (worker is resumable):
+# - No pipeline-config.json (worker never started pipeline — can retry from scratch)
+# - current_idx not at last step (pipeline has remaining steps)
+# - Last step result is PASS/FIX/SKIP/UNKNOWN (non-terminal outcomes)
+# - No result file for current step (step was interrupted before producing result)
 #
 # Args:
 #   worker_dir - Worker directory path
@@ -473,9 +486,10 @@ scheduler_get_resume_fail_penalty() { echo "$_SCHED_RESUME_FAIL_PENALTY"; }
 _is_terminal_failure() {
     local worker_dir="$1"
 
-    # Check resume-state first (covers COMPLETE and ABORT decisions)
+    # Criterion 1: resume-state marks terminal (COMPLETE or ABORT decisions)
     resume_state_is_terminal "$worker_dir" && return 0
 
+    # Criterion 2: pipeline completed to last step with FAIL result
     local config_file="$worker_dir/pipeline-config.json"
     [ -f "$config_file" ] || return 1
 
@@ -499,7 +513,8 @@ _is_terminal_failure() {
     [ -f "$result_file" ] || return 1
 
     gate_result=$(jq -r '.outputs.gate_result // ""' "$result_file" 2>/dev/null)
-    [ "$gate_result" = "FAIL" ]
+    # FAIL and MERGE_CONFLICT are both terminal at the last step
+    [ "$gate_result" = "FAIL" ] || [ "$gate_result" = "MERGE_CONFLICT" ]
 }
 
 # Find workers that can be resumed

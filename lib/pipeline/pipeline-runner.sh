@@ -37,15 +37,21 @@ source "$WIGGUM_HOME/lib/core/agent-stream.sh"
 _PIPELINE_LAST_STEP_ID=""
 _PIPELINE_LAST_GATE_RESULT=""
 
+# Circuit breaker: consecutive same-result tracking per step
+declare -gA _PIPELINE_CONSECUTIVE_RESULT=()   # step_id -> "result:count"
+_PIPELINE_CIRCUIT_BREAKER_THRESHOLD="${WIGGUM_CIRCUIT_BREAKER_THRESHOLD:-3}"
+
 # Reset all pipeline runner state (for test isolation without re-sourcing)
 _pipeline_runner_reset() {
     _PIPELINE_LAST_STEP_ID=""
     _PIPELINE_LAST_GATE_RESULT=""
     _PIPELINE_NEXT_IDX=0
-    unset _PIPELINE_VISITS _PIPELINE_INLINE_VISITS _PIPELINE_ON_MAX_CASCADE
+    _PIPELINE_CIRCUIT_BREAKER_THRESHOLD="${WIGGUM_CIRCUIT_BREAKER_THRESHOLD:-3}"
+    unset _PIPELINE_VISITS _PIPELINE_INLINE_VISITS _PIPELINE_ON_MAX_CASCADE _PIPELINE_CONSECUTIVE_RESULT
     declare -gA _PIPELINE_VISITS=()
     declare -gA _PIPELINE_INLINE_VISITS=()
     declare -gA _PIPELINE_ON_MAX_CASCADE=()
+    declare -gA _PIPELINE_CONSECUTIVE_RESULT=()
 }
 
 # Get cached step result, or read from file if not cached
@@ -78,6 +84,52 @@ _get_cached_step_result() {
 _clear_result_cache() {
     _PIPELINE_LAST_STEP_ID=""
     _PIPELINE_LAST_GATE_RESULT=""
+}
+
+# =============================================================================
+# CIRCUIT BREAKER: CONSECUTIVE SAME-RESULT DETECTION
+# =============================================================================
+# When a step produces the same non-terminal result (e.g., FIX) N times in a
+# row, escalate to FAIL. This prevents unfixable issues (like merge conflicts)
+# from burning pipeline iterations indefinitely.
+
+# Track a step result and check circuit breaker
+#
+# Args:
+#   step_id     - Pipeline step ID
+#   gate_result - The result to track
+#
+# Returns: 0 if circuit breaker NOT tripped, 1 if tripped (should escalate)
+_circuit_breaker_check() {
+    local step_id="$1"
+    local gate_result="$2"
+
+    # Only track non-terminal results that cause loops (FIX, UNKNOWN)
+    # PASS and FAIL are terminal for the step, SKIP moves forward
+    if [ "$gate_result" = "PASS" ] || [ "$gate_result" = "FAIL" ] || [ "$gate_result" = "SKIP" ]; then
+        _PIPELINE_CONSECUTIVE_RESULT[$step_id]=""
+        return 0
+    fi
+
+    local prev="${_PIPELINE_CONSECUTIVE_RESULT[$step_id]:-}"
+    local prev_result="${prev%%:*}"
+    local prev_count="${prev##*:}"
+    prev_count="${prev_count:-0}"
+
+    if [ "$prev_result" = "$gate_result" ]; then
+        ((++prev_count))
+    else
+        prev_count=1
+    fi
+
+    _PIPELINE_CONSECUTIVE_RESULT[$step_id]="${gate_result}:${prev_count}"
+
+    if [ "$prev_count" -ge "$_PIPELINE_CIRCUIT_BREAKER_THRESHOLD" ]; then
+        log_error "Circuit breaker: step '$step_id' returned '$gate_result' $prev_count consecutive times (threshold: $_PIPELINE_CIRCUIT_BREAKER_THRESHOLD)"
+        return 1
+    fi
+
+    return 0
 }
 
 # =============================================================================
@@ -455,6 +507,13 @@ _run_inline_agent() {
     export WIGGUM_STEP_ID="$handler_id"
     export WIGGUM_STEP_READONLY="$handler_readonly"
 
+    # Verify workspace exists before inline agent invocation
+    if [ ! -d "$workspace" ]; then
+        log_error "Workspace disappeared before inline agent '$handler_id': $workspace"
+        _PIPELINE_NEXT_IDX=-1
+        return
+    fi
+
     # Change to workspace directory before running the agent
     cd "$workspace" || {
         log_error "Cannot access workspace: $workspace"
@@ -494,6 +553,10 @@ _run_inline_agent() {
         fi
     fi
 
+    # Reset parent step's circuit breaker counter — the inline handler ran
+    # between parent re-runs, so consecutive same-result tracking restarts.
+    _PIPELINE_CONSECUTIVE_RESULT[$parent_id]=""
+
     # Default: re-run caller (parent step) - implicit jump:prev
     _PIPELINE_NEXT_IDX="$parent_idx"
 }
@@ -527,6 +590,7 @@ pipeline_run_all() {
     declare -gA _PIPELINE_VISITS=()
     declare -gA _PIPELINE_INLINE_VISITS=()
     declare -gA _PIPELINE_ON_MAX_CASCADE=()
+    declare -gA _PIPELINE_CONSECUTIVE_RESULT=()
 
     local current_idx=0
 
@@ -611,6 +675,17 @@ pipeline_run_all() {
         local gate_result
         gate_result=$(_get_cached_step_result "$worker_dir" "$step_id")
 
+        # Circuit breaker: if the same step returns the same non-terminal result
+        # (e.g., FIX) too many times in a row, escalate to FAIL. This prevents
+        # unfixable issues from burning iterations (e.g., merge conflicts causing
+        # repeated FIX loops in generic-fix agent).
+        if ! _circuit_breaker_check "$step_id" "$gate_result"; then
+            log_error "Escalating '$gate_result' to FAIL for step '$step_id' due to circuit breaker"
+            gate_result="FAIL"
+            agent_write_result "$worker_dir" "$gate_result"
+            _PIPELINE_LAST_GATE_RESULT="$gate_result"
+        fi
+
         # Dispatch on result (sets _PIPELINE_NEXT_IDX)
         _dispatch_on_result "$current_idx" "$gate_result" "$worker_dir" "$project_dir" "$workspace"
 
@@ -638,11 +713,12 @@ _pipeline_run_step() {
     local project_dir="$3"
     local workspace="$4"
 
-    local step_id step_agent step_readonly commit_after
+    local step_id step_agent step_readonly commit_after step_timeout
     step_id=$(pipeline_get "$idx" ".id")
     step_agent=$(pipeline_get "$idx" ".agent")
     step_readonly=$(pipeline_get "$idx" ".readonly" "false")
     commit_after=$(pipeline_get "$idx" ".commit_after" "false")
+    step_timeout=$(pipeline_get "$idx" ".timeout_seconds" "")
 
     # Emit activity log event
     local _worker_id
@@ -676,6 +752,18 @@ _pipeline_run_step() {
     # Export readonly flag for agent-registry's git checkpoint logic
     export WIGGUM_STEP_READONLY="$step_readonly"
 
+    # Verify workspace exists immediately before agent invocation.
+    # This catches cases where workspace was deleted mid-pipeline (e.g., by
+    # orchestrator cleanup) — without this check, the agent gets a confusing
+    # 0-second failure with no useful error.
+    if [ ! -d "$workspace" ]; then
+        log_error "Workspace disappeared before agent invocation: $workspace"
+        log_error "Step '$step_id' cannot proceed — aborting pipeline"
+        # Write a FAIL result so the step has a recorded outcome
+        agent_write_result "$worker_dir" "FAIL"
+        return 1
+    fi
+
     # Change to workspace directory before running the agent
     # Claude sessions are stored per-directory in .claude/, so agents must run
     # from the workspace to access sessions created by the executor
@@ -684,8 +772,37 @@ _pipeline_run_step() {
         return 1
     }
 
-    # Run the agent
-    run_sub_agent "$step_agent" "$worker_dir" "$project_dir"
+    # Resolve step timeout: step config > agent config > no timeout
+    if [ -z "$step_timeout" ]; then
+        step_timeout=$(jq -r ".agents[\"$step_agent\"].timeout_seconds // 0" \
+            "$WIGGUM_HOME/config/agents.json" 2>/dev/null)
+        step_timeout="${step_timeout:-0}"
+    fi
+
+    # Run the agent (with optional timeout enforcement)
+    if [ "${step_timeout:-0}" -gt 0 ]; then
+        log_debug "Step '$step_id' timeout: ${step_timeout}s"
+        export WIGGUM_STEP_TIMEOUT="$step_timeout"
+        local _step_timed_out=false
+        # Use timeout command if available; agents respect WIGGUM_STEP_TIMEOUT internally
+        # The outer timeout acts as a hard kill for runaway agents
+        if command -v timeout >/dev/null 2>&1; then
+            local _agent_exit=0
+            timeout --signal=TERM --kill-after=30 "$step_timeout" \
+                bash -c 'run_sub_agent "$1" "$2" "$3"' _ "$step_agent" "$worker_dir" "$project_dir" \
+                || _agent_exit=$?
+            if [ "$_agent_exit" -eq 124 ]; then
+                _step_timed_out=true
+                log_error "Step '$step_id' timed out after ${step_timeout}s"
+                agent_write_result "$worker_dir" "FAIL"
+            fi
+        else
+            run_sub_agent "$step_agent" "$worker_dir" "$project_dir"
+        fi
+        unset WIGGUM_STEP_TIMEOUT
+    else
+        run_sub_agent "$step_agent" "$worker_dir" "$project_dir"
+    fi
 
     unset WIGGUM_STEP_READONLY
 
@@ -707,12 +824,15 @@ _pipeline_run_step() {
     gate_result=$(agent_read_step_result "$worker_dir" "$step_id")
 
     # Override gate_result when commit failed due to conflict markers.
-    # The agent may report PASS but the work is uncommittable — FIX signals
-    # the pipeline to jump back and resolve the issue.
+    # The agent may report PASS but the work is uncommittable.
+    # Classify the failure: MERGE_CONFLICT aborts (fix agent can't resolve
+    # merge conflicts), FIX jumps to the fix agent for code-level issues.
     if [ "$commit_failed" = true ] && [ "$gate_result" = "PASS" ]; then
-        log_warn "Overriding gate_result PASS -> FIX: commit failed (likely conflict markers)"
-        gate_result="FIX"
-        # Rewrite the result file so downstream reads see FIX
+        local failure_type
+        failure_type=$(git_classify_commit_failure "$workspace")
+        log_warn "Overriding gate_result PASS -> $failure_type: commit failed"
+        gate_result="$failure_type"
+        # Rewrite the result file so downstream reads see the classified result
         agent_write_result "$worker_dir" "$gate_result"
     fi
 

@@ -44,6 +44,145 @@ git_staged_has_conflict_markers() {
     return 1
 }
 
+# Check if conflict markers are from an active git merge/rebase (not just stale markers in code)
+#
+# Returns: 0 if an active merge/rebase is in progress, 1 otherwise
+git_is_merge_in_progress() {
+    local workspace="$1"
+
+    # Check for active merge, rebase, or cherry-pick state
+    [ -f "$workspace/.git/MERGE_HEAD" ] && return 0
+    [ -d "$workspace/.git/rebase-merge" ] && return 0
+    [ -d "$workspace/.git/rebase-apply" ] && return 0
+    [ -f "$workspace/.git/CHERRY_PICK_HEAD" ] && return 0
+
+    # For worktrees, .git is a file pointing to the actual gitdir
+    if [ -f "$workspace/.git" ]; then
+        local gitdir
+        gitdir=$(git -C "$workspace" rev-parse --git-dir 2>/dev/null)
+        if [ -n "$gitdir" ]; then
+            [ -f "$gitdir/MERGE_HEAD" ] && return 0
+            [ -d "$gitdir/rebase-merge" ] && return 0
+            [ -d "$gitdir/rebase-apply" ] && return 0
+            [ -f "$gitdir/CHERRY_PICK_HEAD" ] && return 0
+        fi
+    fi
+
+    return 1
+}
+
+# Classify a commit failure as either a merge conflict or a code issue
+#
+# When conflict markers are detected after a commit attempt, this determines
+# whether they are from an unresolved git merge (MERGE_CONFLICT) or from
+# the agent having introduced/left conflict markers in code (FIX).
+#
+# Args:
+#   workspace - Directory containing the git repository
+#
+# Returns: echoes "MERGE_CONFLICT" or "FIX"
+git_classify_commit_failure() {
+    local workspace="$1"
+
+    # If a merge/rebase is actively in progress, it's a merge conflict
+    if git_is_merge_in_progress "$workspace"; then
+        echo "MERGE_CONFLICT"
+        return 0
+    fi
+
+    # Check if the conflict markers exist in files that differ from origin/main
+    # If the markers exist in files that diverge from main, it's likely from
+    # a merge that was resolved poorly (markers left behind from prior merge)
+    local marker_files
+    if marker_files=$(git_staged_has_conflict_markers "$workspace"); then
+        # Check if any conflicted files also show up in `git diff origin/main`
+        local main_diff_files
+        main_diff_files=$(git -C "$workspace" diff --name-only origin/main 2>/dev/null || true)
+
+        if [ -n "$main_diff_files" ]; then
+            local overlap
+            overlap=$(comm -12 <(echo "$marker_files" | sort) <(echo "$main_diff_files" | sort) 2>/dev/null || true)
+            if [ -n "$overlap" ]; then
+                # Markers in files that diverge from main — likely merge residue
+                echo "MERGE_CONFLICT"
+                return 0
+            fi
+        fi
+    fi
+
+    # Default: treat as a code issue fixable by the fix agent
+    echo "FIX"
+}
+
+# =============================================================================
+# PRE-FLIGHT MERGE CONFLICT CHECK
+# =============================================================================
+
+# Check if a workspace can merge cleanly with a target branch
+#
+# Performs a trial merge (--no-commit) against the target branch to detect
+# conflicts BEFORE starting a full pipeline. If conflicts exist, the worker
+# should fail fast rather than waste pipeline stages on work that can't be
+# committed.
+#
+# Args:
+#   workspace - Directory containing the git worktree
+#   target_branch - Branch to check mergeability against (default: origin/main)
+#
+# Returns: 0 if mergeable (no conflicts), 1 if conflicts detected
+# Echoes: conflicted file list when conflicts found
+git_worktree_check_mergeable() {
+    local workspace="$1"
+    local target_branch="${2:-origin/main}"
+
+    if [ ! -d "$workspace" ]; then
+        log_error "git_worktree_check_mergeable: workspace not found: $workspace"
+        return 1
+    fi
+
+    # Fetch latest target branch state
+    git -C "$workspace" fetch origin 2>/dev/null || {
+        log_warn "git_worktree_check_mergeable: fetch failed, skipping check"
+        return 0
+    }
+
+    # Check if target branch exists
+    if ! git -C "$workspace" rev-parse --verify "$target_branch" >/dev/null 2>&1; then
+        log_debug "git_worktree_check_mergeable: $target_branch not found, skipping check"
+        return 0
+    fi
+
+    # Check if worktree HEAD already includes the target (no divergence)
+    if git -C "$workspace" merge-base --is-ancestor "$target_branch" HEAD 2>/dev/null; then
+        log_debug "git_worktree_check_mergeable: HEAD already includes $target_branch"
+        return 0
+    fi
+
+    # Attempt a trial merge (--no-commit, --no-ff) to detect conflicts
+    local merge_exit=0
+    git -C "$workspace" merge --no-commit --no-ff "$target_branch" >/dev/null 2>&1 || merge_exit=$?
+
+    if [ "$merge_exit" -eq 0 ]; then
+        # Merge succeeded - abort the trial merge to restore original state
+        git -C "$workspace" merge --abort 2>/dev/null || git -C "$workspace" reset --merge 2>/dev/null || true
+        log_debug "git_worktree_check_mergeable: clean merge with $target_branch"
+        return 0
+    fi
+
+    # Merge failed - extract conflicted files
+    local conflict_files
+    conflict_files=$(git -C "$workspace" diff --name-only --diff-filter=U 2>/dev/null || true)
+
+    # Abort the trial merge to restore original state
+    git -C "$workspace" merge --abort 2>/dev/null || git -C "$workspace" reset --merge 2>/dev/null || true
+
+    if [ -n "$conflict_files" ]; then
+        echo "$conflict_files"
+    fi
+
+    return 1
+}
+
 # =============================================================================
 # GIT IDENTITY HELPER
 # =============================================================================

@@ -765,6 +765,125 @@ test_pipeline_emits_activity_events() {
 }
 
 # =============================================================================
+# Test: Circuit breaker escalates repeated FIX to FAIL
+# =============================================================================
+test_pipeline_circuit_breaker_escalates_repeated_fix() {
+    # Agent always returns FIX - circuit breaker should trigger after threshold
+    _create_mock_agent "always-fix-agent" "FIX"
+
+    _create_pipeline "$TEST_DIR/pipeline.json" '{
+        "name": "test-circuit-breaker",
+        "steps": [
+            {
+                "id": "fixer",
+                "agent": "always-fix-agent",
+                "max": 10,
+                "on_result": {
+                    "FIX": {"jump": "self"}
+                }
+            },
+            {"id": "after", "agent": "agent-after"}
+        ]
+    }'
+
+    unset _PIPELINE_RUNNER_LOADED 2>/dev/null || true
+    source "$WIGGUM_HOME/lib/pipeline/pipeline-runner.sh"
+
+    # Set low threshold for testing
+    export WIGGUM_CIRCUIT_BREAKER_THRESHOLD=3
+    _PIPELINE_CIRCUIT_BREAKER_THRESHOLD=3
+
+    : > "$TEST_DIR/agent_invocations.txt"
+    local exit_code=0
+    pipeline_run_all "$TEST_DIR/worker" "$TEST_DIR/project" "$TEST_DIR/worker/workspace" "" 2>/dev/null || exit_code=$?
+
+    # Pipeline should abort because circuit breaker escalates FIX to FAIL,
+    # and FAIL's default_jump is abort
+    assert_equals "1" "$exit_code" "Pipeline should abort after circuit breaker trips"
+
+    # Agent should run exactly 3 times (threshold)
+    local invocation_count
+    invocation_count=$(grep -c "always-fix-agent" "$TEST_DIR/agent_invocations.txt")
+    assert_equals "3" "$invocation_count" "Agent should run exactly threshold (3) times before circuit breaker"
+
+    unset WIGGUM_CIRCUIT_BREAKER_THRESHOLD
+}
+
+# =============================================================================
+# Test: Circuit breaker resets on different result
+# =============================================================================
+test_pipeline_circuit_breaker_resets_on_different_result() {
+    # Agent returns FIX, FIX, PASS - should NOT trip circuit breaker (threshold=3)
+    _create_counting_agent "mixed-agent" "FIX" "FIX" "PASS"
+
+    _create_pipeline "$TEST_DIR/pipeline.json" '{
+        "name": "test-cb-reset",
+        "steps": [
+            {
+                "id": "mixed",
+                "agent": "mixed-agent",
+                "max": 10,
+                "on_result": {
+                    "FIX": {"jump": "self"}
+                }
+            },
+            {"id": "after", "agent": "agent-after"}
+        ]
+    }'
+
+    unset _PIPELINE_RUNNER_LOADED 2>/dev/null || true
+    source "$WIGGUM_HOME/lib/pipeline/pipeline-runner.sh"
+
+    export WIGGUM_CIRCUIT_BREAKER_THRESHOLD=3
+    _PIPELINE_CIRCUIT_BREAKER_THRESHOLD=3
+
+    : > "$TEST_DIR/agent_invocations.txt"
+    local exit_code=0
+    pipeline_run_all "$TEST_DIR/worker" "$TEST_DIR/project" "$TEST_DIR/worker/workspace" "" || exit_code=$?
+
+    # Pipeline should succeed (FIX, FIX, PASS - only 2 consecutive FIXes, then PASS resets)
+    assert_equals "0" "$exit_code" "Pipeline should succeed when result changes before threshold"
+
+    local invocations
+    invocations=$(cat "$TEST_DIR/agent_invocations.txt")
+    assert_output_contains "$invocations" "agent-after" "After step should run"
+
+    unset WIGGUM_CIRCUIT_BREAKER_THRESHOLD
+}
+
+# =============================================================================
+# Test: Workspace disappearing before agent invocation is handled
+# =============================================================================
+test_pipeline_workspace_disappears_before_agent() {
+    _create_pipeline "$TEST_DIR/pipeline.json" '{
+        "name": "test-ws-disappear",
+        "steps": [
+            {"id": "step-1", "agent": "agent-1"}
+        ]
+    }'
+
+    unset _PIPELINE_RUNNER_LOADED 2>/dev/null || true
+    source "$WIGGUM_HOME/lib/pipeline/pipeline-runner.sh"
+
+    # Override run_sub_agent to delete workspace before the mock agent runs
+    # This simulates the workspace being deleted mid-pipeline
+    run_sub_agent() {
+        # Do nothing - the workspace check should catch the missing dir
+        :
+    }
+
+    # Remove workspace AFTER pipeline_run_all starts but before step execution
+    # We do this by removing it and relying on the pre-agent check
+    rm -rf "$TEST_DIR/worker/workspace"
+
+    : > "$TEST_DIR/agent_invocations.txt"
+    local exit_code=0
+    pipeline_run_all "$TEST_DIR/worker" "$TEST_DIR/project" "$TEST_DIR/worker/workspace" "" 2>/dev/null || exit_code=$?
+
+    assert_equals "1" "$exit_code" "Pipeline should abort when workspace disappears"
+}
+
+# =============================================================================
 # Run all tests
 # =============================================================================
 run_test test_pipeline_runs_steps_in_order
@@ -786,6 +905,9 @@ run_test test_pipeline_config_updates_current_step
 run_test test_pipeline_config_includes_inline_handlers
 run_test test_pipeline_aborts_on_missing_workspace
 run_test test_pipeline_emits_activity_events
+run_test test_pipeline_circuit_breaker_escalates_repeated_fix
+run_test test_pipeline_circuit_breaker_resets_on_different_result
+run_test test_pipeline_workspace_disappears_before_agent
 
 print_test_summary
 exit_with_test_result
