@@ -291,6 +291,112 @@ test_cleanup_reports_collapsed_ids() {
 }
 
 # =============================================================================
+# Cleanup with Sub-headings Tests
+# =============================================================================
+
+test_cleanup_sections_collapses_per_section() {
+    local tmp_dir
+    tmp_dir=$(create_test_dir)
+    cp "$FIXTURES_DIR/kanban-cleanup-sections.md" "$tmp_dir/kanban.md"
+
+    local output
+    output=$("$WIGGUM_HOME/bin/wiggum-validate" cleanup -f "$tmp_dir/kanban.md" 2>&1)
+    local exit_code=$?
+
+    assert_equals "0" "$exit_code" "Cleanup should exit 0"
+    # Completed blocks should be gone
+    assert_file_not_contains "$tmp_dir/kanban.md" "- [x] **[TASK-001]**" "TASK-001 block should be collapsed"
+    assert_file_not_contains "$tmp_dir/kanban.md" "- [x] **[TASK-003]**" "TASK-003 block should be collapsed"
+    assert_file_not_contains "$tmp_dir/kanban.md" "- [x] **[TASK-004]**" "TASK-004 block should be collapsed"
+    # Section headings preserved
+    assert_file_contains "$tmp_dir/kanban.md" "### Critical" "Critical section heading should be preserved"
+    assert_file_contains "$tmp_dir/kanban.md" "### High" "High section heading should be preserved"
+    assert_file_contains "$tmp_dir/kanban.md" "### Medium" "Medium section heading should be preserved"
+    # Per-section done comments
+    assert_file_contains "$tmp_dir/kanban.md" "<!-- done: TASK-001 -->" "Critical section should have its own done comment"
+    assert_file_contains "$tmp_dir/kanban.md" "<!-- done: TASK-003, TASK-004 -->" "High section should have its own done comment"
+    # Non-completed tasks remain
+    assert_file_contains "$tmp_dir/kanban.md" "**[TASK-002]**" "TASK-002 (pending) should remain"
+    assert_file_contains "$tmp_dir/kanban.md" "**[TASK-005]**" "TASK-005 (pending) should remain"
+    assert_file_contains "$tmp_dir/kanban.md" "**[TASK-006]**" "TASK-006 (pending) should remain"
+
+    rm -rf "$tmp_dir"
+}
+
+test_cleanup_sections_all_completed_in_section() {
+    local tmp_dir
+    tmp_dir=$(create_test_dir)
+    # Create kanban where one section has all tasks completed
+    cat > "$tmp_dir/kanban.md" << 'EOF'
+# Kanban Board
+
+## TASKS
+
+### Phase 1
+
+- [x] **[TASK-001]** Done task
+  - Description: Completed
+  - Priority: HIGH
+  - Dependencies: none
+
+- [x] **[TASK-002]** Also done
+  - Description: Completed too
+  - Priority: HIGH
+  - Dependencies: none
+
+### Phase 2
+
+- [ ] **[TASK-003]** Pending task
+  - Description: Not started
+  - Priority: MEDIUM
+  - Dependencies: none
+EOF
+
+    "$WIGGUM_HOME/bin/wiggum-validate" cleanup -f "$tmp_dir/kanban.md" >/dev/null 2>&1
+
+    # Phase 1 heading should remain with done comment
+    assert_file_contains "$tmp_dir/kanban.md" "### Phase 1" "Section heading should be preserved even when all tasks collapsed"
+    assert_file_contains "$tmp_dir/kanban.md" "<!-- done: TASK-001, TASK-002 -->" "Done comment should list all section IDs"
+    # Phase 2 should be untouched
+    assert_file_contains "$tmp_dir/kanban.md" "### Phase 2" "Phase 2 heading should remain"
+    assert_file_contains "$tmp_dir/kanban.md" "**[TASK-003]**" "Pending task should remain"
+
+    rm -rf "$tmp_dir"
+}
+
+test_cleanup_sections_no_headings_still_works() {
+    local tmp_dir
+    tmp_dir=$(create_test_dir)
+    cp "$FIXTURES_DIR/kanban-cleanup-mixed.md" "$tmp_dir/kanban.md"
+
+    local output
+    output=$("$WIGGUM_HOME/bin/wiggum-validate" cleanup -f "$tmp_dir/kanban.md" 2>&1)
+    local exit_code=$?
+
+    assert_equals "0" "$exit_code" "Cleanup should still work without sub-headings"
+    assert_file_contains "$tmp_dir/kanban.md" "<!-- done: TASK-001, TASK-004 -->" "Done comment should list collapsed IDs"
+    assert_file_contains "$tmp_dir/kanban.md" "**[TASK-002]**" "Non-completed tasks should remain"
+
+    rm -rf "$tmp_dir"
+}
+
+test_cleanup_sections_reports_all_collapsed() {
+    local tmp_dir
+    tmp_dir=$(create_test_dir)
+    cp "$FIXTURES_DIR/kanban-cleanup-sections.md" "$tmp_dir/kanban.md"
+
+    local output
+    output=$("$WIGGUM_HOME/bin/wiggum-validate" cleanup -f "$tmp_dir/kanban.md" 2>&1)
+
+    assert_output_contains "$output" "Collapsed 3 completed task(s)" "Should report total collapsed count across sections"
+    assert_output_contains "$output" "TASK-001" "Should list TASK-001"
+    assert_output_contains "$output" "TASK-003" "Should list TASK-003"
+    assert_output_contains "$output" "TASK-004" "Should list TASK-004"
+
+    rm -rf "$tmp_dir"
+}
+
+# =============================================================================
 # Run All Tests
 # =============================================================================
 
@@ -316,6 +422,10 @@ run_test test_cleanup_no_completed
 run_test test_cleanup_quiet_mode
 run_test test_cleanup_file_not_found
 run_test test_cleanup_reports_collapsed_ids
+run_test test_cleanup_sections_collapses_per_section
+run_test test_cleanup_sections_all_completed_in_section
+run_test test_cleanup_sections_no_headings_still_works
+run_test test_cleanup_sections_reports_all_collapsed
 
 print_test_summary
 exit_with_test_result
