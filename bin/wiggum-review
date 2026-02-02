@@ -340,7 +340,7 @@ cmd_global_sync() {
 
                 if [ -n "$worker_dir" ] && [ -d "$worker_dir" ]; then
                     output_dir="$worker_dir"
-                    sync_pr_comments "$task_id" "$output_dir"
+                    sync_pr_comments "$task_id" "$output_dir" >/dev/null
 
                     # Only mark as needing fix if there are actually relevant comments from approved authors
                     local relevant_comment_count=0
@@ -361,7 +361,7 @@ cmd_global_sync() {
                     # Save comments to review directory for reference
                     output_dir="$RALPH_DIR/review"
                     mkdir -p "$output_dir"
-                    sync_pr_comments "$task_id" "$output_dir"
+                    sync_pr_comments "$task_id" "$output_dir" >/dev/null
 
                     # Only queue for workspace creation if there are relevant comments
                     local relevant_comment_count=0
@@ -450,7 +450,7 @@ cmd_task_sync() {
         done
     fi
 
-    sync_pr_comments "$patterns" "$output_dir"
+    sync_pr_comments "$patterns" "$output_dir" >/dev/null
 }
 
 # Fix PR comments for a task (async launch)

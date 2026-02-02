@@ -26,7 +26,7 @@ github_issue_add_label() {
 
     local exit_code=0
     timeout "${WIGGUM_GH_TIMEOUT:-30}" gh issue edit "$issue_number" \
-        --add-label "$label" 2>/dev/null || exit_code=$?
+        --add-label "$label" >/dev/null 2>&1 || exit_code=$?
 
     if [ "$exit_code" -ne 0 ]; then
         log_warn "Failed to add label '$label' to issue #$issue_number (exit: $exit_code)"
@@ -48,7 +48,7 @@ github_issue_remove_label() {
 
     local exit_code=0
     timeout "${WIGGUM_GH_TIMEOUT:-30}" gh issue edit "$issue_number" \
-        --remove-label "$label" 2>/dev/null || exit_code=$?
+        --remove-label "$label" >/dev/null 2>&1 || exit_code=$?
 
     # Label removal failure is non-critical (label might not be present)
     if [ "$exit_code" -ne 0 ]; then
@@ -101,7 +101,7 @@ github_issue_post_comment() {
 
     local exit_code=0
     timeout "${WIGGUM_GH_TIMEOUT:-30}" gh issue comment "$issue_number" \
-        --body "$body" 2>/dev/null || exit_code=$?
+        --body "$body" >/dev/null 2>&1 || exit_code=$?
 
     if [ "$exit_code" -ne 0 ]; then
         log_warn "Failed to post comment on issue #$issue_number (exit: $exit_code)"
@@ -219,7 +219,7 @@ github_issue_close() {
 
     local exit_code=0
     timeout "${WIGGUM_GH_TIMEOUT:-30}" gh issue close "$issue_number" \
-        2>/dev/null || exit_code=$?
+        >/dev/null 2>&1 || exit_code=$?
 
     if [ "$exit_code" -ne 0 ]; then
         log_warn "Failed to close issue #$issue_number (exit: $exit_code)"
@@ -239,7 +239,7 @@ github_issue_reopen() {
 
     local exit_code=0
     timeout "${WIGGUM_GH_TIMEOUT:-30}" gh issue reopen "$issue_number" \
-        2>/dev/null || exit_code=$?
+        >/dev/null 2>&1 || exit_code=$?
 
     if [ "$exit_code" -ne 0 ]; then
         log_warn "Failed to reopen issue #$issue_number (exit: $exit_code)"
