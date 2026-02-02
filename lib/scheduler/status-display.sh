@@ -88,12 +88,12 @@ compute_status_counts() {
         error_lines=$(grep -i "ERROR\|WARN" "$ralph_dir/logs/workers.log" 2>/dev/null || true)
 
         if [[ -n "$error_lines" && -n "$cutoff_time" ]]; then
-            error_count=$(echo "$error_lines" | awk -v cutoff="$cutoff_time" '
-                match($0, /\[([0-9T:+-]+)\]/, ts) {
-                    if (ts[1] >= cutoff) count++
-                }
-                END { print count+0 }
-            ')
+            error_count=$(echo "$error_lines" | awk -v cutoff="$cutoff_time" '{
+                    if (match($0, /\[[0-9T:+-]+\]/)) {
+                        ts = substr($0, RSTART+1, RLENGTH-2)
+                        if (ts >= cutoff) count++
+                    }
+                } END { print count+0 }')
         elif [[ -n "$error_lines" ]]; then
             error_count=$(echo "$error_lines" | wc -l)
             error_count=$((error_count))  # trim whitespace
@@ -381,12 +381,12 @@ _log_detailed_status() {
         error_lines=$(grep -i "ERROR\|WARN" "$ralph_dir/logs/workers.log" 2>/dev/null || true)
 
         if [[ -n "$error_lines" && -n "$cutoff_time" ]]; then
-            recent_errors=$(echo "$error_lines" | \
-                awk -v cutoff="$cutoff_time" '
-                    match($0, /\[([0-9T:+-]+)\]/, ts) {
-                        if (ts[1] >= cutoff) print
+            recent_errors=$(echo "$error_lines" | awk -v cutoff="$cutoff_time" '{
+                    if (match($0, /\[[0-9T:+-]+\]/)) {
+                        ts = substr($0, RSTART+1, RLENGTH-2)
+                        if (ts >= cutoff) print
                     }
-                ' | tail -n 5)
+                }' | tail -n 5)
         elif [[ -n "$error_lines" ]]; then
             recent_errors=$(echo "$error_lines" | tail -n 5)
         else
