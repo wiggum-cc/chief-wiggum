@@ -1527,7 +1527,17 @@ _launch_resume_worker() {
     fi
 
     local step_idx
-    step_idx=$(pipeline_find_step_index "$resume_step")
+    step_idx=$(pipeline_find_step_index "$resume_step") || true
+    if [ "$step_idx" = "-1" ]; then
+        # Check if it's an inline step (e.g., "test-fix" inside test's on_result)
+        local parent_step
+        parent_step=$(pipeline_resolve_inline_to_parent "$resume_step")
+        if [ -n "$parent_step" ]; then
+            log "Mapping inline resume step '$resume_step' to parent step '$parent_step' for $task_id"
+            resume_step="$parent_step"
+            step_idx=$(pipeline_find_step_index "$resume_step") || true
+        fi
+    fi
     if [ "$step_idx" = "-1" ]; then
         log_error "Invalid resume step '$resume_step' for $task_id"
         return 1

@@ -393,6 +393,31 @@ pipeline_find_step_index() {
     return 1
 }
 
+# Resolve an inline step ID (from on_result handlers) to its parent step ID
+#
+# Inline steps like "audit-fix" or "test-fix" are defined inside on_result
+# handlers of top-level steps. Since they are not top-level pipeline steps,
+# pipeline_find_step_index() returns -1 for them. This function finds the
+# parent top-level step that contains the inline step definition.
+#
+# Args:
+#   inline_step_id - The inline step ID to resolve (e.g., "audit-fix")
+#
+# Returns: Parent step ID via stdout (e.g., "audit"), or empty string if not found
+pipeline_resolve_inline_to_parent() {
+    local inline_step_id="$1"
+
+    local result
+    result=$(_pipeline_jq '
+        .steps[] |
+        select(.on_result != null) |
+        select([.on_result | to_entries[] | select(.value | type == "object" and has("id")) | .value.id] | index($sid) != null) |
+        .id
+    ' -r --arg sid "$inline_step_id" 2>/dev/null | head -1) || true
+
+    echo "${result:-}"
+}
+
 # Get the number of steps in the loaded pipeline
 pipeline_step_count() {
     echo "$_PIPELINE_STEP_COUNT"
