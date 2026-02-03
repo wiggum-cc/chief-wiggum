@@ -773,6 +773,21 @@ orch_create_orphan_pr_workspaces() {
     create_orphan_pr_workspaces "$ralph_dir" "$project_dir"
 }
 
+# Recover workers stuck in "failed" git-state
+#
+# Scans for failed workers and re-enters them into the fix/resolve cycle
+# if recovery is possible. Called before spawning fix/resolve workers so
+# recovered workers become candidates for the next cycle.
+#
+# Globals:
+#   RALPH_DIR - Required
+orch_recover_failed_workers() {
+    local ralph_dir="${RALPH_DIR:-}"
+    [ -n "$ralph_dir" ] || return 1
+
+    recover_failed_workers "$ralph_dir"
+}
+
 # Wrapper for spawn_fix_workers
 #
 # Globals:
@@ -786,6 +801,10 @@ orch_spawn_fix_workers() {
 
     [ -n "$ralph_dir" ] || return 1
     [ -n "$project_dir" ] || return 1
+
+    # Recover failed workers before spawning fix workers so they
+    # become candidates for the fix/resolve cycle
+    recover_failed_workers "$ralph_dir"
 
     spawn_fix_workers "$ralph_dir" "$project_dir" "$limit"
 }

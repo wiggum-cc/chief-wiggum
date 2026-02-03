@@ -789,21 +789,36 @@ _pipeline_run_step() {
         log_debug "Step '$step_id' timeout: ${step_timeout}s"
         export WIGGUM_STEP_TIMEOUT="$step_timeout"
         local _step_timed_out=false
-        # Use timeout command if available; agents respect WIGGUM_STEP_TIMEOUT internally
-        # The outer timeout acts as a hard kill for runaway agents
-        if command -v timeout >/dev/null 2>&1; then
-            local _agent_exit=0
-            timeout --signal=TERM --kill-after=30 "$step_timeout" \
-                bash -c 'run_sub_agent "$1" "$2" "$3"' _ "$step_agent" "$worker_dir" "$project_dir" \
-                || _agent_exit=$?
-            if [ "$_agent_exit" -eq 124 ]; then
-                _step_timed_out=true
-                log_error "Step '$step_id' timed out after ${step_timeout}s"
-                agent_write_result "$worker_dir" "FAIL"
-            fi
-        else
+
+        # Run agent in a subshell (preserves shell functions) with a watchdog.
+        # Previous approach used `bash -c 'run_sub_agent ...'` which fails because
+        # run_sub_agent is a shell function not available in the new bash process.
+        local _agent_exit=0
+        (
             run_sub_agent "$step_agent" "$worker_dir" "$project_dir"
+        ) &
+        local _agent_pid=$!
+
+        # Watchdog: kill the subshell after timeout
+        (
+            sleep "$step_timeout"
+            kill -TERM "$_agent_pid" 2>/dev/null
+            sleep 30
+            kill -KILL "$_agent_pid" 2>/dev/null
+        ) &
+        local _watchdog_pid=$!
+
+        wait "$_agent_pid" 2>/dev/null || _agent_exit=$?
+        # Clean up watchdog
+        kill "$_watchdog_pid" 2>/dev/null; wait "$_watchdog_pid" 2>/dev/null || true
+
+        # 143 = SIGTERM (128+15), 137 = SIGKILL (128+9)
+        if [ "$_agent_exit" -eq 143 ] || [ "$_agent_exit" -eq 137 ]; then
+            _step_timed_out=true
+            log_error "Step '$step_id' timed out after ${step_timeout}s"
+            agent_write_result "$worker_dir" "FAIL"
         fi
+
         unset WIGGUM_STEP_TIMEOUT
     else
         run_sub_agent "$step_agent" "$worker_dir" "$project_dir"

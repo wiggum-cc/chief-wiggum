@@ -298,6 +298,55 @@ git_state_get_last_push() {
     jq -r '.last_push_at // "null"' "$state_file"
 }
 
+# Reset merge attempts counter to 0
+#
+# Args:
+#   worker_dir - Worker directory path
+#
+# Returns: 1 if state file doesn't exist
+git_state_reset_merge_attempts() {
+    local worker_dir="$1"
+    local state_file="$worker_dir/git-state.json"
+
+    [ -f "$state_file" ] || return 1
+
+    jq '.merge_attempts = 0' "$state_file" > "$state_file.tmp" \
+        && mv "$state_file.tmp" "$state_file"
+}
+
+# Increment recovery attempts counter
+#
+# Tracks how many times a worker has been recovered from "failed" state.
+# Used to prevent infinite recovery loops.
+#
+# Args:
+#   worker_dir - Worker directory path
+#
+# Returns: 1 if state file doesn't exist
+git_state_inc_recovery_attempts() {
+    local worker_dir="$1"
+    local state_file="$worker_dir/git-state.json"
+
+    [ -f "$state_file" ] || return 1
+
+    jq '.recovery_attempts = ((.recovery_attempts // 0) + 1)' "$state_file" > "$state_file.tmp" \
+        && mv "$state_file.tmp" "$state_file"
+}
+
+# Get recovery attempts count
+#
+# Args:
+#   worker_dir - Worker directory path
+#
+# Returns: recovery attempts count (0 if not set or file missing)
+git_state_get_recovery_attempts() {
+    local worker_dir="$1"
+    local state_file="$worker_dir/git-state.json"
+
+    [ -f "$state_file" ] || { echo "0"; return 0; }
+    jq -r '.recovery_attempts // 0' "$state_file"
+}
+
 # Clear/reset state file (for testing or recovery)
 #
 # Args:

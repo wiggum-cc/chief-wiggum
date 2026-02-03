@@ -72,6 +72,10 @@ export STUCK_WORKER_THRESHOLD
 WIGGUM_MAX_STEP_RETRIES="${WIGGUM_MAX_STEP_RETRIES:-3}"
 export WIGGUM_MAX_STEP_RETRIES
 
+# Max recovery attempts for failed workers before marking permanently failed
+WIGGUM_MAX_RECOVERY_ATTEMPTS="${WIGGUM_MAX_RECOVERY_ATTEMPTS:-2}"
+export WIGGUM_MAX_RECOVERY_ATTEMPTS
+
 # Max cooldown for pre-worker check failures (seconds)
 WIGGUM_PRE_WORKER_MAX_COOLDOWN="${WIGGUM_PRE_WORKER_MAX_COOLDOWN:-300}"
 export WIGGUM_PRE_WORKER_MAX_COOLDOWN
@@ -107,7 +111,8 @@ _load_config_cache() {
     fi
 
     # Single jq call extracts all values (performance optimization)
-    # Format: approved_user_ids|fix_max_iter|fix_max_turns|auto_commit|rate_limit|git_name|git_email|fix_worker_limit|lr_enabled|lr_max_lines|lr_max_archives|resume_max|resume_cooldown|resume_initial_bonus|resume_fail_penalty|resume_min_retry|resume_max_decide
+    # Uses RS (\x1e) separator instead of @tsv to avoid empty-field collapse
+    # (bash treats tab as whitespace, so consecutive tabs merge)
     local extracted
     extracted=$(jq -r '[
         (.review.approved_user_ids // [] | map(tostring) | join(",")),
@@ -127,10 +132,10 @@ _load_config_cache() {
         (.resume.fail_penalty // 8000),
         (.resume.min_retry_interval // 30),
         (.resume.max_decide_concurrent // 20)
-    ] | @tsv' "$config_file" 2>/dev/null) || true
+    ] | join("\u001e")' "$config_file" 2>/dev/null) || true
 
     if [ -n "$extracted" ]; then
-        IFS=$'\t' read -r _CACHE_APPROVED_USER_IDS _CACHE_FIX_MAX_ITER _CACHE_FIX_MAX_TURNS \
+        IFS=$'\x1e' read -r _CACHE_APPROVED_USER_IDS _CACHE_FIX_MAX_ITER _CACHE_FIX_MAX_TURNS \
                          _CACHE_AUTO_COMMIT _CACHE_RATE_LIMIT _CACHE_GIT_NAME _CACHE_GIT_EMAIL \
                          _CACHE_FIX_WORKER_LIMIT _CACHE_LOG_ROTATE_ENABLED _CACHE_LOG_ROTATE_LINES \
                          _CACHE_LOG_ROTATE_MAX_ARCHIVES _CACHE_RESUME_MAX_ATTEMPTS \

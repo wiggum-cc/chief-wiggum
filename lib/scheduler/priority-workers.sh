@@ -151,6 +151,109 @@ _priority_capacity_sync() {
     ) 200>"${_PRIORITY_CAPACITY_FILE}.lock"
 }
 
+# Check if a failed worker should be marked permanently failed in kanban
+#
+# Called after setting git-state to "failed". If the worker has exceeded
+# max recovery attempts, marks the kanban task as [*] (failed).
+#
+# Args:
+#   worker_dir  - Worker directory path
+#   kanban_file - Path to kanban.md
+#   task_id     - Task identifier
+_check_permanent_failure() {
+    local worker_dir="$1"
+    local kanban_file="$2"
+    local task_id="$3"
+
+    local _recovery_count
+    _recovery_count=$(git_state_get_recovery_attempts "$worker_dir")
+    _recovery_count="${_recovery_count:-0}"
+
+    if [ "$_recovery_count" -ge "${WIGGUM_MAX_RECOVERY_ATTEMPTS:-2}" ]; then
+        update_kanban_failed "$kanban_file" "$task_id"
+        log_error "$task_id: permanently failed after $_recovery_count recovery attempts"
+    fi
+}
+
+# Recover workers stuck in "failed" git-state
+#
+# Scans for workers with "failed" git-state and re-enters them into
+# the fix/resolve cycle if recovery is possible. This implements
+# self-healing for the cascade where run_sub_agent failures leave
+# workers permanently stuck.
+#
+# Recovery logic:
+#   - If last failure reason contains "merge" or "conflict": reset merge_attempts,
+#     set state to needs_resolve
+#   - If last failure reason is "UNKNOWN" result: set state to needs_fix
+#   - If max recovery attempts exceeded: mark kanban [*] and leave as failed
+#
+# Args:
+#   ralph_dir - Ralph directory path
+recover_failed_workers() {
+    local ralph_dir="$1"
+    local kanban_file="$ralph_dir/kanban.md"
+    local max_recovery="${WIGGUM_MAX_RECOVERY_ATTEMPTS:-2}"
+
+    [ -d "$ralph_dir/workers" ] || return 0
+
+    for worker_dir in "$ralph_dir/workers"/worker-*; do
+        [ -d "$worker_dir" ] || continue
+
+        # Only process workers in "failed" state
+        git_state_is "$worker_dir" "failed" || continue
+
+        local worker_id task_id
+        worker_id=$(basename "$worker_dir")
+        task_id=$(get_task_id_from_worker "$worker_id")
+
+        # Only recover tasks that are still [P] (pending approval) - not already [*] or [x]
+        if [ -f "$kanban_file" ]; then
+            local task_status
+            task_status=$(get_task_status "$kanban_file" "$task_id")
+            if [[ "$task_status" != "P" && "$task_status" != "=" ]]; then
+                continue
+            fi
+        fi
+
+        # Check recovery attempts
+        local recovery_count
+        recovery_count=$(git_state_get_recovery_attempts "$worker_dir")
+        recovery_count="${recovery_count:-0}"
+
+        if [ "$recovery_count" -ge "$max_recovery" ]; then
+            update_kanban_failed "$kanban_file" "$task_id"
+            log_error "$task_id: permanently failed after $recovery_count recovery attempts - marking [*]"
+            continue
+        fi
+
+        # Classify failure reason from last transition
+        local last_reason
+        last_reason=$(jq -r '.transitions[-1].reason // ""' "$worker_dir/git-state.json" 2>/dev/null)
+
+        git_state_inc_recovery_attempts "$worker_dir"
+
+        if echo "$last_reason" | grep -qiE "(merge|conflict)"; then
+            # Merge/conflict related failure - reset merge attempts and retry resolution
+            git_state_reset_merge_attempts "$worker_dir"
+            git_state_set "$worker_dir" "needs_resolve" "priority-workers.recover_failed_workers" \
+                "Recovery attempt $((recovery_count + 1)): re-entering resolve cycle (was: $last_reason)"
+            log "Recovered $task_id from failed state -> needs_resolve (attempt $((recovery_count + 1))/$max_recovery)"
+        elif echo "$last_reason" | grep -qiE "UNKNOWN"; then
+            # Unknown result - retry via fix cycle
+            git_state_set "$worker_dir" "needs_fix" "priority-workers.recover_failed_workers" \
+                "Recovery attempt $((recovery_count + 1)): re-entering fix cycle (was: $last_reason)"
+            log "Recovered $task_id from failed state -> needs_fix (attempt $((recovery_count + 1))/$max_recovery)"
+        else
+            # Other failure (workspace missing, agent crash, etc.) - try resolve
+            git_state_reset_merge_attempts "$worker_dir"
+            git_state_set "$worker_dir" "needs_resolve" "priority-workers.recover_failed_workers" \
+                "Recovery attempt $((recovery_count + 1)): re-entering resolve cycle (was: $last_reason)"
+            log "Recovered $task_id from failed state -> needs_resolve (attempt $((recovery_count + 1))/$max_recovery)"
+        fi
+    done
+}
+
 # Reconstruct workspace from PR branch if missing
 #
 # When a worker directory exists but the workspace is missing (e.g., cleaned up,
@@ -643,6 +746,7 @@ spawn_resolve_workers() {
         if [ "$merge_attempts" -ge "${MAX_MERGE_ATTEMPTS:-3}" ]; then
             log_error "Max merge attempts ($merge_attempts) reached for $task_id - marking as failed"
             git_state_set "$worker_dir" "failed" "priority-workers.spawn_resolve_workers" "Max merge attempts exceeded after resolution"
+            _check_permanent_failure "$worker_dir" "$kanban_file" "$task_id"
             # Clean up batch context if present
             if [ -f "$worker_dir/batch-context.json" ]; then
                 rm -f "$worker_dir/batch-context.json"
@@ -727,6 +831,9 @@ _spawn_simple_resolve_worker() {
             current_state=$(git_state_get "$worker_dir" 2>/dev/null || echo "unknown")
             if [[ "$current_state" != "merged" && "$current_state" != "failed" ]]; then
                 git_state_set "$worker_dir" "failed" "priority-workers._spawn_simple_resolve_worker" "Workspace missing and reconstruction failed"
+                local _rdir
+                _rdir=$(dirname "$(dirname "$worker_dir")")
+                _check_permanent_failure "$worker_dir" "$_rdir/kanban.md" "$task_id"
             fi
             return 1
         fi
@@ -806,6 +913,7 @@ _spawn_batch_resolve_worker() {
                     git_state_set "$worker_dir" "merged" "priority-workers._spawn_batch_resolve_worker" "PR confirmed merged"
                 else
                     git_state_set "$worker_dir" "failed" "priority-workers._spawn_batch_resolve_worker" "Workspace missing and reconstruction failed, PR status: $merge_status"
+                    _check_permanent_failure "$worker_dir" "$(dirname "$(dirname "$worker_dir")")/kanban.md" "$task_id"
                 fi
             fi
             return 1
@@ -861,6 +969,7 @@ _spawn_batch_resolve_worker() {
     else
         log_error "Failed to get worker PID for $task_id - agent.pid not created"
         git_state_set "$worker_dir" "failed" "priority-workers.spawn_resolve_workers" "Worker failed to start"
+        _check_permanent_failure "$worker_dir" "$(dirname "$(dirname "$worker_dir")")/kanban.md" "$task_id"
         return 1
     fi
 }
@@ -1046,6 +1155,9 @@ handle_fix_worker_completion() {
         return 1
     else
         git_state_set "$worker_dir" "failed" "priority-workers.handle_fix_worker_completion" "Fix agent returned: $gate_result"
+        local _rdir
+        _rdir=$(dirname "$(dirname "$worker_dir")")
+        _check_permanent_failure "$worker_dir" "$_rdir/kanban.md" "$task_id"
         log_error "Fix failed for $task_id (result: $gate_result)"
         return 1
     fi
@@ -1066,6 +1178,9 @@ handle_resolve_worker_completion() {
     local workspace="$worker_dir/workspace"
     if [ ! -d "$workspace" ]; then
         git_state_set "$worker_dir" "failed" "priority-workers.handle_resolve_worker_completion" "Workspace not found"
+        local _rdir
+        _rdir=$(dirname "$(dirname "$worker_dir")")
+        _check_permanent_failure "$worker_dir" "$_rdir/kanban.md" "$task_id"
         return 1
     fi
 
@@ -1103,6 +1218,9 @@ handle_resolve_worker_completion() {
         local count
         count=$(echo "$remaining_conflicts" | wc -l)
         git_state_set "$worker_dir" "failed" "priority-workers.handle_resolve_worker_completion" "$count files still have conflicts"
+        local _rdir
+        _rdir=$(dirname "$(dirname "$worker_dir")")
+        _check_permanent_failure "$worker_dir" "$_rdir/kanban.md" "$task_id"
         log_error "Resolver failed for $task_id - $count files still have conflicts"
         return 1
     fi

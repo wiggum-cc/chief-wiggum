@@ -17,8 +17,33 @@ source "$WIGGUM_HOME/lib/worker/git-state.sh"
 source "$WIGGUM_HOME/lib/core/logger.sh"
 source "$WIGGUM_HOME/lib/core/file-lock.sh"
 source "$WIGGUM_HOME/lib/core/defaults.sh"
+source "$WIGGUM_HOME/lib/tasks/task-parser.sh"
 source "$WIGGUM_HOME/lib/scheduler/conflict-queue.sh"
 source "$WIGGUM_HOME/lib/scheduler/batch-coordination.sh"
+
+# Check if a failed worker should be marked permanently failed in kanban
+#
+# Called after setting git-state to "failed". If the worker has exceeded
+# max recovery attempts, marks the kanban task as [*] (failed).
+#
+# Args:
+#   worker_dir  - Worker directory path
+#   kanban_file - Path to kanban.md
+#   task_id     - Task identifier
+_mm_check_permanent_failure() {
+    local worker_dir="$1"
+    local kanban_file="$2"
+    local task_id="$3"
+
+    local _recovery_count
+    _recovery_count=$(git_state_get_recovery_attempts "$worker_dir")
+    _recovery_count="${_recovery_count:-0}"
+
+    if [ "$_recovery_count" -ge "${WIGGUM_MAX_RECOVERY_ATTEMPTS:-2}" ]; then
+        update_kanban_failed "$kanban_file" "$task_id"
+        log_error "$task_id: permanently failed after $_recovery_count recovery attempts"
+    fi
+}
 
 # Seconds to wait for GitHub to report PR as mergeable after a push
 MERGE_POLL_TIMEOUT="${WIGGUM_MERGE_POLL_TIMEOUT:-30}"
@@ -199,6 +224,7 @@ attempt_pr_merge() {
     merge_attempts=$(git_state_get_merge_attempts "$worker_dir")
     if [ "$merge_attempts" -ge "$MAX_MERGE_ATTEMPTS" ]; then
         git_state_set "$worker_dir" "failed" "merge-manager.attempt_pr_merge" "Max merge attempts ($MAX_MERGE_ATTEMPTS) already reached"
+        _mm_check_permanent_failure "$worker_dir" "$ralph_dir/kanban.md" "$task_id"
         log_error "Max merge attempts already reached for $task_id (at $merge_attempts attempts)"
         return 2
     fi
@@ -238,6 +264,7 @@ attempt_pr_merge() {
             return 1
         else
             git_state_set "$worker_dir" "failed" "merge-manager.attempt_pr_merge" "Max merge attempts ($MAX_MERGE_ATTEMPTS) exceeded"
+            _mm_check_permanent_failure "$worker_dir" "$ralph_dir/kanban.md" "$task_id"
             log_error "Max merge attempts exceeded for $task_id"
             return 2
         fi
@@ -294,6 +321,7 @@ attempt_pr_merge() {
     if echo "$merge_output" | grep -qiE "(out of date|branch.*behind|is not up to date)"; then
         git_state_set_error "$worker_dir" "Branch out of date: $merge_output"
         git_state_set "$worker_dir" "failed" "merge-manager.attempt_pr_merge" "Branch is out of date - needs rebase (not a conflict)"
+        _mm_check_permanent_failure "$worker_dir" "$ralph_dir/kanban.md" "$task_id"
         log_error "Merge failed for $task_id: branch is out of date with base branch"
         return 2
     fi
@@ -301,6 +329,7 @@ attempt_pr_merge() {
     if echo "$merge_output" | grep -qiE "(local changes.*overwritten|uncommitted changes|working tree.*not clean)"; then
         git_state_set_error "$worker_dir" "Dirty working tree: $merge_output"
         git_state_set "$worker_dir" "failed" "merge-manager.attempt_pr_merge" "Working tree has uncommitted changes"
+        _mm_check_permanent_failure "$worker_dir" "$ralph_dir/kanban.md" "$task_id"
         log_error "Merge failed for $task_id: working tree has uncommitted changes"
         return 2
     fi
@@ -331,6 +360,7 @@ attempt_pr_merge() {
             return 1
         else
             git_state_set "$worker_dir" "failed" "merge-manager.attempt_pr_merge" "Max merge attempts ($MAX_MERGE_ATTEMPTS) exceeded"
+            _mm_check_permanent_failure "$worker_dir" "$ralph_dir/kanban.md" "$task_id"
             log_error "Max merge attempts exceeded for $task_id"
             return 2
         fi
@@ -350,6 +380,7 @@ attempt_pr_merge() {
     # Other merge failure (unrecoverable)
     git_state_set_error "$worker_dir" "Merge failed: $merge_output"
     git_state_set "$worker_dir" "failed" "merge-manager.attempt_pr_merge" "Merge failed: ${merge_output:0:100}"
+    _mm_check_permanent_failure "$worker_dir" "$ralph_dir/kanban.md" "$task_id"
     log_error "Merge failed for $task_id: $merge_output"
     return 2
 }

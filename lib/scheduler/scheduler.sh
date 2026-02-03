@@ -340,7 +340,33 @@ scheduler_is_complete() {
     # In fix-only/merge-only modes, don't wait for pending tasks - we're not processing them
     if [[ "$run_mode" == "default" ]]; then
         if [ -n "$SCHED_PENDING_TASKS" ]; then
-            return 1
+            # Filter out tasks that are permanently blocked (all unsatisfied deps at [*] or [N])
+            local _kanban_file="$_SCHED_RALPH_DIR/kanban.md"
+            local _actionable_pending=0
+            local _task_id
+            for _task_id in $SCHED_PENDING_TASKS; do
+                local _unsatisfied
+                _unsatisfied=$(get_unsatisfied_dependencies "$_kanban_file" "$_task_id")
+                if [ -z "$_unsatisfied" ]; then
+                    ((_actionable_pending++)) || true  # No deps or all satisfied
+                else
+                    # Check if any unsatisfied dep is still alive (not [*] or [N])
+                    local _has_alive_dep=false
+                    local _dep
+                    for _dep in $_unsatisfied; do
+                        local _dep_status
+                        _dep_status=$(get_task_status "$_kanban_file" "$_dep")
+                        if [[ "$_dep_status" != "*" && "$_dep_status" != "N" ]]; then
+                            _has_alive_dep=true
+                            break
+                        fi
+                    done
+                    $_has_alive_dep && ((_actionable_pending++)) || true
+                fi
+            done
+            if [ "$_actionable_pending" -gt 0 ]; then
+                return 1
+            fi
         fi
     fi
 
