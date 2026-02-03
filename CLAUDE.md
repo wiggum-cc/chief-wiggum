@@ -56,14 +56,14 @@ WIGGUM_LOG_LEVEL=debug wiggum run           # Verbose logging
 | `lib/git/` | Git worktree operations, PR creation |
 | `lib/utils/` | Logging, metrics, cost calculation |
 | `config/` | Pipeline, agents, and schema definitions (JSON) |
-| `docs/` | Architecture, pipeline schema, agent dev guide, protocol |
+| `spec/` | Architecture, pipeline schema, agent dev guide, protocol |
 | `tests/` | Test suite (35+ test files) |
 | `skills/` | Claude Code skill definitions |
 | `tui/` | Python Textual-based monitoring UI |
 
 ### Runtime Abstraction (`lib/runtime/`)
 
-Backend-agnostic execution layer. See `docs/RUNTIME-SCHEMA.md` for the full specification.
+Backend-agnostic execution layer. See `spec/RUNTIME-SCHEMA.md` for the full specification.
 
 1. **runtime.sh** - Backend loader + public API (`run_agent_once`, `run_agent_resume`)
 2. **runtime-loop.sh** - Iterative loop with optional supervision (`run_ralph_loop`)
@@ -186,17 +186,6 @@ assert_match "regex" "$output"
 assert_file_exists "/path"
 ```
 
-## Documentation
-
-| Document | Purpose |
-|----------|---------|
-| `docs/ARCHITECTURE.md` | Developer guide, component overview, internals |
-| `docs/PIPELINE-SCHEMA.md` | Pipeline configuration schema and step definitions |
-| `docs/AGENT_DEV_GUIDE.md` | Writing custom agents, lifecycle hooks |
-| `docs/PROTOCOL.md` | Inter-agent communication, data passing mechanisms |
-| `docs/AUDIT_LOG.md` | Security audit trail format and events |
-| `docs/RUNTIME-SCHEMA.md` | Runtime abstraction, backend interface, execution patterns |
-
 ## Spec-Driven Development
 
 Chief Wiggum follows spec-driven development: specifications define behavior before implementation, and code is validated against specs.
@@ -213,12 +202,7 @@ Chief Wiggum follows spec-driven development: specifications define behavior bef
 | Document | Scope | Examples |
 |----------|-------|----------|
 | `CLAUDE.md` | Project-wide conventions | Coding style, exit codes, file structure |
-| `docs/ARCHITECTURE.md` | System design | Component boundaries, data flow |
-| `docs/PIPELINE-SCHEMA.md` | Pipeline contracts | Step definitions, result mappings |
-| `docs/AGENT_DEV_GUIDE.md` | Agent interfaces | `agent_run()` signature, lifecycle hooks |
-| `docs/PROTOCOL.md` | Inter-component communication | File formats, event schemas |
-| `docs/SERVICES.md` | Service definitions | `wiggum run` schedular managed services |
-| `docs/RUNTIME-SCHEMA.md` | Runtime abstraction | Backend interface, execution patterns |
+| `spec/` | System specifications | Full system specification |
 | `config/agents.json` | Agent configuration | Iteration limits, result mappings |
 
 ### When Writing New Code
