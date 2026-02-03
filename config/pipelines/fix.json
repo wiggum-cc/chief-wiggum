@@ -8,8 +8,7 @@
       "max": 3,
       "commit_after": true,
       "on_result": {
-        "SKIP": { "jump": "sync-main" },
-        "MERGE_CONFLICT": { "jump": "sync-main" }
+        "SKIP": { "jump": "sync-main" }
       }
     },
     {
