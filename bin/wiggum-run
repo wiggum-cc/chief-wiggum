@@ -73,6 +73,7 @@ WIGGUM_NO_RESUME=false     # --no-resume: disable resume-workers, resume-poll
 WIGGUM_NO_FIX=false        # --no-fix: disable fix-workers, multi-pr-planner
 WIGGUM_NO_MERGE=false      # --no-merge: disable resolve-workers
 WIGGUM_NO_SYNC=false       # --no-sync: disable github-issue-sync, github-plan-sync, pr-sync
+WIGGUM_USE_PYTHON=false    # --python: use Python service scheduler
 
 show_help() {
     cat << EOF
@@ -100,6 +101,7 @@ Options:
   --max-turns N        Maximum turns per Claude session (default: 50)
   --fix-agents N       Maximum concurrent fix/resolve workers (default: 2, or config)
   --pipeline NAME      Pipeline config to use (from config/pipelines/ or config/)
+  --python             Use Python service scheduler (reduced fork overhead)
   --force              Override stale orchestrator lock
   -v, --verbose        Verbose output (same as default)
   -vv                  Debug output (detailed diagnostics)
@@ -286,6 +288,18 @@ main() {
     export RESUME_INITIAL_BONUS RESUME_FAIL_PENALTY RESUME_MIN_RETRY_INTERVAL
     export RESUME_MAX_DECIDE_CONCURRENT
     export MAX_SKIP_RETRIES PID_WAIT_TIMEOUT
+
+    # --python: hand off to Python service scheduler
+    # All config is already exported; Python reads env vars + services.json
+    if [[ "$WIGGUM_USE_PYTHON" == "true" ]]; then
+        local py_args=("--run-mode" "$WIGGUM_RUN_MODE")
+        [[ "$WIGGUM_NO_RESUME" == "true" ]] && py_args+=("--no-resume")
+        [[ "$WIGGUM_NO_FIX" == "true" ]] && py_args+=("--no-fix")
+        [[ "$WIGGUM_NO_MERGE" == "true" ]] && py_args+=("--no-merge")
+        [[ "$WIGGUM_NO_SYNC" == "true" ]] && py_args+=("--no-sync")
+        log "Handing off to Python orchestrator"
+        exec "$WIGGUM_HOME/bin/wiggum-run-py" "${py_args[@]}"
+    fi
 
     # Startup phase (sequential, synchronous)
     # Runs: validate-kanban, init-scheduler, preflight-git, preflight-ssh,

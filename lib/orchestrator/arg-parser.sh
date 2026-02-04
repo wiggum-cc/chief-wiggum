@@ -17,7 +17,7 @@ _ORCHESTRATOR_ARG_PARSER_LOADED=1
 # Sets global variables:
 #   MAX_WORKERS, MAX_ITERATIONS, MAX_TURNS, WIGGUM_RUN_MODE,
 #   WIGGUM_PLAN_MODE, WIGGUM_SMART_MODE, WIGGUM_PIPELINE,
-#   FIX_WORKER_LIMIT, FORCE_LOCK,
+#   FIX_WORKER_LIMIT, FORCE_LOCK, WIGGUM_USE_PYTHON,
 #   WIGGUM_NO_RESUME, WIGGUM_NO_FIX, WIGGUM_NO_MERGE, WIGGUM_NO_SYNC
 #
 # Args:
@@ -107,6 +107,11 @@ _parse_run_args() {
             --no-sync)
                 # shellcheck disable=SC2034
                 WIGGUM_NO_SYNC=true
+                shift
+                ;;
+            --python)
+                # shellcheck disable=SC2034
+                WIGGUM_USE_PYTHON=true
                 shift
                 ;;
             --force)
