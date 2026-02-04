@@ -313,11 +313,11 @@ cmd_global_sync() {
             local current_status
             current_status=$(get_task_status "$kanban" "$task_id")
 
-            if [ "$current_status" = "P" ]; then
+            if [ "$current_status" != "x" ]; then
                 log "  $task_id: merged"
                 update_kanban_status "$kanban" "$task_id" "x"
-                # Update PR label from pending-approval to completed
-                github_pr_sync_task_status "$RALPH_DIR" "$task_id" "x" "P" || true
+                # Update PR label to completed (mirror issue label logic)
+                github_pr_sync_task_status "$RALPH_DIR" "$task_id" "x" "$current_status" || true
                 ((++merged_count))
             fi
         fi
