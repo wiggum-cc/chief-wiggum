@@ -278,6 +278,19 @@ if [[ "$tool" == "Bash" && -n "$command" ]]; then
         exit 2
     fi
 
+    # Block commands that may leak secret tokens
+    if echo "$command" | grep -qE 'ANTHROPIC_AUTH_TOKEN|GITHUB_PAT_TOKEN|WIGGUM_SECRET_'; then
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
+        echo "❌ SECRET LEAK BLOCKED" >&2
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
+        echo "" >&2
+        echo "Command references secret environment variables." >&2
+        echo "Commands must not access or expose authentication tokens." >&2
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
+        log_hook_decision "BLOCK" "$tool" "secret-ref" "command references secret token"
+        exit 2
+    fi
+
     # Check for cd commands that try to escape allowed boundaries
     if echo "$command" | grep -qE 'cd[[:space:]]+'; then
         cd_target=$(echo "$command" | grep -oE 'cd[[:space:]]+("[^"]+"|'\''[^'\'']+'\''|[^;|&[:space:]]+)' | sed -E 's/cd[[:space:]]+//; s/^["'\'']//; s/["'\'']$//' | head -1)

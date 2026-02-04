@@ -10,6 +10,7 @@ source "$WIGGUM_HOME/lib/core/defaults.sh"
 source "$WIGGUM_HOME/lib/utils/calculate-cost.sh"
 source "$WIGGUM_HOME/lib/worker/git-state.sh"
 source "$WIGGUM_HOME/lib/github/issue-state.sh"
+source "$WIGGUM_HOME/lib/github/pr-labels.sh"
 source "$WIGGUM_HOME/lib/core/platform.sh"
 source "$WIGGUM_HOME/lib/utils/activity-log.sh"
 
@@ -557,6 +558,13 @@ ${closes_section}${metrics_section}
         fi
         if [ -n "$pr_number" ]; then
             git_state_set_pr "$worker_dir" "$pr_number" 2>/dev/null || log_warn "Failed to save PR number to git-state.json"
+
+            # Add pending-approval status label to the new PR
+            local pr_status_label
+            pr_status_label=$(github_sync_get_status_label "P")
+            if [ -n "$pr_status_label" ]; then
+                github_pr_add_label "$pr_number" "$pr_status_label" || true
+            fi
         else
             log_warn "Could not determine PR number - conflict resolution may not work"
         fi

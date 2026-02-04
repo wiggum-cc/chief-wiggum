@@ -19,6 +19,7 @@ source "$WIGGUM_HOME/lib/worker/agent-registry.sh"
 source "$WIGGUM_HOME/lib/worker/git-state.sh"
 source "$WIGGUM_HOME/lib/runtime/runtime.sh"
 source "$WIGGUM_HOME/lib/backend/claude/usage-tracker.sh"
+source "$WIGGUM_HOME/lib/github/pr-labels.sh"
 
 show_help() {
     cat << 'EOF'
@@ -315,6 +316,8 @@ cmd_global_sync() {
             if [ "$current_status" = "P" ]; then
                 log "  $task_id: merged"
                 update_kanban_status "$kanban" "$task_id" "x"
+                # Update PR label from pending-approval to completed
+                github_pr_sync_task_status "$RALPH_DIR" "$task_id" "x" "P" || true
                 ((++merged_count))
             fi
         fi
@@ -435,6 +438,8 @@ cmd_task_sync() {
                     pr_number=$(echo "$pr" | jq -r '.number')
                     log "PR #$pr_number ($task_id): Merged - updating [$current_status] -> [x]"
                     update_kanban_status "$kanban" "$task_id" "x"
+                    # Update PR label to completed
+                    github_pr_sync_task_status "$RALPH_DIR" "$task_id" "x" "$current_status" || true
                 fi
             fi
         done

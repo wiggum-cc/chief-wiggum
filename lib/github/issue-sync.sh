@@ -20,6 +20,7 @@ source "$WIGGUM_HOME/lib/github/issue-config.sh"
 source "$WIGGUM_HOME/lib/github/issue-state.sh"
 source "$WIGGUM_HOME/lib/github/issue-parser.sh"
 source "$WIGGUM_HOME/lib/github/issue-writer.sh"
+source "$WIGGUM_HOME/lib/github/pr-labels.sh"
 source "$WIGGUM_HOME/lib/tasks/task-parser.sh"
 source "$WIGGUM_HOME/lib/core/platform.sh"
 
@@ -572,9 +573,12 @@ github_issue_sync_up() {
             continue
         fi
 
-        # Perform the update
+        # Perform the update (issue + PR labels)
         github_issue_update_status "$issue_number" "$current_status" "$last_synced_status" \
             "$last_remote_state" "$dry_run"
+        if [ "$dry_run" != "true" ]; then
+            github_pr_sync_task_status "$ralph_dir" "$task_id" "$current_status" "$last_synced_status" || true
+        fi
 
         # Determine new remote state after our update
         local new_remote_state="$last_remote_state"
@@ -901,9 +905,10 @@ github_issue_sync_task_status() {
     # Skip if status hasn't changed
     [ "$new_status" != "$last_synced_status" ] || return 0
 
-    # Update GitHub issue
+    # Update GitHub issue and PR labels
     github_issue_update_status "$issue_number" "$new_status" "$last_synced_status" \
         "$last_remote_state" "false"
+    github_pr_sync_task_status "$ralph_dir" "$task_id" "$new_status" "$last_synced_status" || true
 
     # Determine new remote state
     local new_remote_state="$last_remote_state"
