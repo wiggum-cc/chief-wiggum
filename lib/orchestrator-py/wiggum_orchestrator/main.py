@@ -134,7 +134,12 @@ def _acquire_lock(pid_file: str, force: bool = False) -> bool:
         except (ValueError, OSError):
             existing_pid = 0
 
-        if existing_pid > 0:
+        # When launched via `wiggum run --python`, the bash orchestrator
+        # writes its PID then exec's into us. exec preserves the PID, so
+        # we find our own PID in the lock file — just take ownership.
+        if existing_pid == os.getpid():
+            pass  # We already own this lock
+        elif existing_pid > 0:
             try:
                 os.kill(existing_pid, 0)
                 # Process alive — check if it's actually an orchestrator
