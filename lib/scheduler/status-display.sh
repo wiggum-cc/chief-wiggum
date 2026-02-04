@@ -76,28 +76,12 @@ compute_status_counts() {
     # --- Cyclic count ---
     cyclic_count=${#_csc_cyclic_ref[@]}
 
-    # --- Error count (time-filtered from workers.log) ---
-    if [[ -f "$ralph_dir/logs/workers.log" ]]; then
-        local error_max_age="${ERROR_LOG_MAX_AGE:-3600}"
-        local cutoff_time
-        cutoff_time=$(iso_from_epoch "$(($(epoch_now) - error_max_age))" 2>/dev/null || \
-                      date -v-"${error_max_age}"S -Iseconds 2>/dev/null || \
-                      echo "")
-
-        local error_lines=""
-        error_lines=$(grep -i "ERROR\|WARN" "$ralph_dir/logs/workers.log" 2>/dev/null || true)
-
-        if [[ -n "$error_lines" && -n "$cutoff_time" ]]; then
-            error_count=$(echo "$error_lines" | awk -v cutoff="$cutoff_time" '{
-                    if (match($0, /\[[0-9T:+-]+\]/)) {
-                        ts = substr($0, RSTART+1, RLENGTH-2)
-                        if (ts >= cutoff) count++
-                    }
-                } END { print count+0 }')
-        elif [[ -n "$error_lines" ]]; then
-            error_count=$(echo "$error_lines" | wc -l)
-            error_count=$((error_count))  # trim whitespace
-        fi
+    # --- Error count (failed [*] tasks in kanban) ---
+    local failed_tasks
+    failed_tasks=$(get_failed_tasks "$ralph_dir/kanban.md" 2>/dev/null || true)
+    if [[ -n "$failed_tasks" ]]; then
+        error_count=$(echo "$failed_tasks" | wc -w)
+        error_count=$((error_count))  # trim whitespace
     fi
 
     # --- Stuck count (activity idle threshold) ---
