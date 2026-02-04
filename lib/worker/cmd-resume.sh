@@ -424,6 +424,11 @@ _read_resume_decision() {
         # Direct resume: step was interrupted mid-execution
         decision="RETRY"
         resume_step_id="$current_step"
+        # Read pipeline name from pipeline-config.json so we load the correct pipeline
+        if [ -f "$worker_dir/pipeline-config.json" ]; then
+            resume_pipeline=$(jq -r '.pipeline.name // ""' "$worker_dir/pipeline-config.json" 2>/dev/null)
+            if [[ "$resume_pipeline" == "null" ]]; then resume_pipeline=""; fi
+        fi
         return
     fi
 

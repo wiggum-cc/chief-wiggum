@@ -1329,9 +1329,14 @@ _resume_decide_for_worker() {
 
     # Fast path: interrupted step (no result file) → direct RETRY
     if [ -n "$current_step" ] && ! _step_has_result "$worker_dir" "$current_step"; then
-        jq -n --arg step "$current_step" '{
+        local _fast_pipeline=""
+        if [ -f "$worker_dir/pipeline-config.json" ]; then
+            _fast_pipeline=$(jq -r '.pipeline.name // ""' "$worker_dir/pipeline-config.json" 2>/dev/null)
+            [[ "$_fast_pipeline" == "null" ]] && _fast_pipeline=""
+        fi
+        jq -n --arg step "$current_step" --arg pipe "$_fast_pipeline" '{
             decision: "RETRY",
-            pipeline: null,
+            pipeline: $pipe,
             resume_step: $step,
             reason: "Step interrupted, direct resume"
         }' > "$worker_dir/resume-decision.json"
