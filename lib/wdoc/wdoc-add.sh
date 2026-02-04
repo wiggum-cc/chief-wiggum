@@ -2,8 +2,8 @@
 # wdoc-add.sh - Download documentation and clone source for packages
 #
 # Handles `wdoc add` by downloading web docs via wget --mirror and
-# cloning git repos. HTML is converted to markdown via pandoc (preferred)
-# or a stdlib Python fallback.
+# cloning git repos. HTML is converted to markdown via a stdlib Python
+# converter that extracts main content and strips site chrome.
 #
 # Storage layout under .ralph/docs/<package>/:
 #   web-raw/  - Original mirrored HTML
@@ -160,8 +160,8 @@ _wdoc_convert_html_to_md() {
 
     mkdir -p "$md_dir"
 
-    # Use the Python converter — it handles content extraction (stripping
-    # nav/sidebar/footer chrome) which pandoc cannot do on its own.
+    # Use the Python converter — it extracts the main content area and
+    # strips nav/sidebar/footer chrome before converting to markdown.
     log_debug "Converting HTML to markdown using html2md.py"
     local exit_code=0
     python3 "$WIGGUM_HOME/lib/wdoc/html2md.py" "$raw_dir" "$md_dir" 2>&1 || exit_code=$?

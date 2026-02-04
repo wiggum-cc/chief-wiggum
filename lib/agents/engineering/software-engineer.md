@@ -61,6 +61,30 @@ PRD: ../prd.md
 - Provide actionable error messages for debugging
 - Validate inputs from untrusted sources
 
+## Package Documentation (wdoc)
+
+When you need documentation for third-party packages or libraries:
+
+```bash
+# Check what packages have docs available
+wdoc list
+
+# Download docs for a package (do this first if not listed)
+wdoc add --name <package> --doc <docs-url>
+wdoc add --name <package> --doc <docs-url> --src <git-repo-url>
+
+# Ask a question about a package
+wdoc ask --name <package> --ask "How do I ...?"
+
+# Followup question in the same session
+wdoc ask --name <package> --ask "What about ...?" --session-id <uuid>
+```
+
+- Run `wdoc list` first — if the package isn't registered, `wdoc add` it
+- `wdoc ask` launches an agent that reads the downloaded docs/source and returns an answer
+- The last line of output contains `[wdoc:session:<uuid>]` — use it for followups
+- Use `wdoc ask` instead of guessing at APIs — it has the actual docs
+
 ## Workspace Security
 
 CRITICAL: You MUST NOT access files outside your workspace.
@@ -113,6 +137,7 @@ Before writing ANY code, understand the existing codebase:
    - What existing code will you interact with?
    - What APIs or interfaces must you follow?
    - Are there shared utilities you should use?
+   - For third-party library APIs, use `wdoc ask --name <pkg> --ask "..."` if the package is registered (`wdoc list`)
 
 ## Phase 2.5: Spec Alignment Check
 
