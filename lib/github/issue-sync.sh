@@ -16,6 +16,7 @@ _GITHUB_ISSUE_SYNC_LOADED=1
 
 source "$WIGGUM_HOME/lib/core/logger.sh"
 source "$WIGGUM_HOME/lib/core/file-lock.sh"
+source "$WIGGUM_HOME/lib/core/gh-error.sh"
 source "$WIGGUM_HOME/lib/github/issue-config.sh"
 source "$WIGGUM_HOME/lib/github/issue-state.sh"
 source "$WIGGUM_HOME/lib/github/issue-parser.sh"
@@ -34,9 +35,11 @@ source "$WIGGUM_HOME/lib/core/platform.sh"
 #   label_filter - Required label name
 #
 # Returns: JSON array on stdout, "[]" on failure
+# Sets: GH_LAST_WAS_NETWORK_ERROR if network error detected
 _github_fetch_open_issues() {
     local label_filter="$1"
 
+    GH_LAST_WAS_NETWORK_ERROR=false
     local result exit_code=0
     result=$(timeout "${WIGGUM_GH_TIMEOUT:-30}" gh issue list \
         --label "$label_filter" \
@@ -46,7 +49,10 @@ _github_fetch_open_issues() {
         2>&1) || exit_code=$?
 
     if [ "$exit_code" -ne 0 ]; then
-        if [ "$exit_code" -eq 124 ]; then
+        if gh_is_network_error "$exit_code" "$result"; then
+            GH_LAST_WAS_NETWORK_ERROR=true
+            log_error "$(gh_format_error "$exit_code" "$result" "fetching open issues")"
+        elif [ "$exit_code" -eq 124 ]; then
             log_error "GitHub issue list timeout"
         else
             log_error "GitHub issue list failed (exit: $exit_code)"
@@ -65,9 +71,11 @@ _github_fetch_open_issues() {
 #   label_filter - Required label name
 #
 # Returns: JSON array on stdout, "[]" on failure
+# Sets: GH_LAST_WAS_NETWORK_ERROR if network error detected
 _github_fetch_closed_issues() {
     local label_filter="$1"
 
+    GH_LAST_WAS_NETWORK_ERROR=false
     local result exit_code=0
     result=$(timeout "${WIGGUM_GH_TIMEOUT:-30}" gh issue list \
         --label "$label_filter" \
@@ -77,7 +85,10 @@ _github_fetch_closed_issues() {
         2>&1) || exit_code=$?
 
     if [ "$exit_code" -ne 0 ]; then
-        if [ "$exit_code" -eq 124 ]; then
+        if gh_is_network_error "$exit_code" "$result"; then
+            GH_LAST_WAS_NETWORK_ERROR=true
+            log_error "$(gh_format_error "$exit_code" "$result" "fetching closed issues")"
+        elif [ "$exit_code" -eq 124 ]; then
             log_error "GitHub closed issue list timeout"
         else
             log_error "GitHub closed issue list failed (exit: $exit_code)"
@@ -325,7 +336,12 @@ github_issue_sync_down() {
     # --- Process OPEN issues ---
     log_debug "Fetching open issues with label '$GITHUB_SYNC_LABEL_FILTER'..."
     local open_issues
-    open_issues=$(_github_fetch_open_issues "$GITHUB_SYNC_LABEL_FILTER") || return 1
+    open_issues=$(_github_fetch_open_issues "$GITHUB_SYNC_LABEL_FILTER") || {
+        if [ "$GH_LAST_WAS_NETWORK_ERROR" = true ]; then
+            log_warn "Skipping issue down-sync cycle due to network error"
+        fi
+        return 1
+    }
 
     local issue_count
     issue_count=$(echo "$open_issues" | jq 'length')
@@ -844,7 +860,7 @@ github_issue_sync_up_create() {
 #   ralph_dir - Path to .ralph directory
 #   dry_run   - "true" to only show planned changes
 #
-# Returns: 0 on success
+# Returns: 0 on success, 1 on failure (network error = skip cycle)
 github_issue_sync() {
     local ralph_dir="$1"
     local dry_run="${2:-false}"
@@ -853,7 +869,11 @@ github_issue_sync() {
 
     # Down sync first (new issues -> kanban)
     github_issue_sync_down "$ralph_dir" "$dry_run" || {
-        log_error "Down-sync failed"
+        if [ "$GH_LAST_WAS_NETWORK_ERROR" = true ]; then
+            log_warn "GitHub issue sync: skipping cycle due to network error (will retry later)"
+        else
+            log_error "Down-sync failed"
+        fi
         return 1
     }
 

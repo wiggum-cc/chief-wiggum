@@ -15,6 +15,7 @@ _GITHUB_PLAN_SYNC_LOADED=1
 source "$WIGGUM_HOME/lib/core/logger.sh"
 source "$WIGGUM_HOME/lib/core/platform.sh"
 source "$WIGGUM_HOME/lib/core/exit-codes.sh"
+source "$WIGGUM_HOME/lib/core/gh-error.sh"
 source "$WIGGUM_HOME/lib/github/issue-state.sh"
 source "$WIGGUM_HOME/lib/core/safe-path.sh"
 
@@ -34,19 +35,26 @@ PLAN_COMMENT_MARKER="<!-- wiggum:plan -->"
 #   issue_number - GitHub issue number
 #
 # Returns: JSON string on stdout, or empty string if no plan comment exists
+# Sets: GH_LAST_WAS_NETWORK_ERROR if network error detected
 github_plan_find_comment() {
     local issue_number="$1"
 
+    GH_LAST_WAS_NETWORK_ERROR=false
     local exit_code=0
     local result
     result=$(timeout "${WIGGUM_GH_TIMEOUT:-30}" gh api \
         "repos/{owner}/{repo}/issues/${issue_number}/comments" \
         --paginate \
         --jq '[.[] | select(.body | startswith("<!-- wiggum:plan -->"))] | .[0] // empty | {id, body}' \
-        2>/dev/null) || exit_code=$?
+        2>&1) || exit_code=$?
 
     if [ "$exit_code" -ne 0 ]; then
-        log_warn "Failed to fetch comments for issue #$issue_number (exit: $exit_code)"
+        if gh_is_network_error "$exit_code" "$result"; then
+            GH_LAST_WAS_NETWORK_ERROR=true
+            log_warn "$(gh_format_error "$exit_code" "$result" "fetching comments for issue #$issue_number")"
+        else
+            log_warn "Failed to fetch comments for issue #$issue_number (exit: $exit_code)"
+        fi
         return 1
     fi
 
@@ -62,6 +70,7 @@ github_plan_find_comment() {
 #   content      - Plan content (without marker)
 #
 # Returns: comment ID on stdout, 1 on failure
+# Sets: GH_LAST_WAS_NETWORK_ERROR if network error detected
 github_plan_create_comment() {
     local issue_number="$1"
     local content="$2"
@@ -69,6 +78,7 @@ github_plan_create_comment() {
     local body="${PLAN_COMMENT_MARKER}
 ${content}"
 
+    GH_LAST_WAS_NETWORK_ERROR=false
     local exit_code=0
     local result
     result=$(timeout "${WIGGUM_GH_TIMEOUT:-30}" gh api \
@@ -76,10 +86,15 @@ ${content}"
         -X POST \
         --field body="$body" \
         --jq '.id' \
-        2>/dev/null) || exit_code=$?
+        2>&1) || exit_code=$?
 
     if [ "$exit_code" -ne 0 ] || [ -z "$result" ]; then
-        log_error "Failed to create plan comment on issue #$issue_number (exit: $exit_code)"
+        if gh_is_network_error "$exit_code" "$result"; then
+            GH_LAST_WAS_NETWORK_ERROR=true
+            log_error "$(gh_format_error "$exit_code" "$result" "creating plan comment on issue #$issue_number")"
+        else
+            log_error "Failed to create plan comment on issue #$issue_number (exit: $exit_code)"
+        fi
         return 1
     fi
 
@@ -93,6 +108,7 @@ ${content}"
 #   content    - Plan content (without marker)
 #
 # Returns: 0 on success, 1 on failure
+# Sets: GH_LAST_WAS_NETWORK_ERROR if network error detected
 github_plan_update_comment() {
     local comment_id="$1"
     local content="$2"
@@ -100,15 +116,22 @@ github_plan_update_comment() {
     local body="${PLAN_COMMENT_MARKER}
 ${content}"
 
+    GH_LAST_WAS_NETWORK_ERROR=false
     local exit_code=0
-    timeout "${WIGGUM_GH_TIMEOUT:-30}" gh api \
+    local result
+    result=$(timeout "${WIGGUM_GH_TIMEOUT:-30}" gh api \
         "repos/{owner}/{repo}/issues/comments/${comment_id}" \
         -X PATCH \
         --field body="$body" \
-        >/dev/null 2>&1 || exit_code=$?
+        2>&1) || exit_code=$?
 
     if [ "$exit_code" -ne 0 ]; then
-        log_error "Failed to update plan comment $comment_id (exit: $exit_code)"
+        if gh_is_network_error "$exit_code" "$result"; then
+            GH_LAST_WAS_NETWORK_ERROR=true
+            log_error "$(gh_format_error "$exit_code" "$result" "updating plan comment $comment_id")"
+        else
+            log_error "Failed to update plan comment $comment_id (exit: $exit_code)"
+        fi
         return 1
     fi
     return 0
@@ -395,10 +418,12 @@ github_plan_sync_all() {
     fi
 
     local had_conflict="false"
+    local had_network_error="false"
     local synced=0
     local skipped=0
     local conflicts=0
     local errors=0
+    local network_errors=0
 
     local tid
     for tid in "${!task_ids[@]}"; do
@@ -438,11 +463,21 @@ github_plan_sync_all() {
         case "$exit_code" in
             0) ((++synced)) ;;
             1) ((++conflicts)); had_conflict="true" ;;
-            *) ((++errors)) ;;
+            *)
+                ((++errors))
+                if [ "$GH_LAST_WAS_NETWORK_ERROR" = true ]; then
+                    ((++network_errors))
+                    had_network_error="true"
+                fi
+                ;;
         esac
     done
 
-    log_info "Plan sync: $synced synced, $skipped skipped, $conflicts conflicts, $errors errors"
+    if [ "$had_network_error" = "true" ]; then
+        log_warn "Plan sync: $synced synced, $skipped skipped, $conflicts conflicts, $errors errors ($network_errors network errors - will retry later)"
+    else
+        log_info "Plan sync: $synced synced, $skipped skipped, $conflicts conflicts, $errors errors"
+    fi
 
     if [ "$had_conflict" = "true" ]; then
         return 1

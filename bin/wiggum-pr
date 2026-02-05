@@ -12,6 +12,7 @@ source "$WIGGUM_HOME/lib/core/safe-path.sh"
 source "$WIGGUM_HOME/lib/core/verbose-flags.sh"
 source "$WIGGUM_HOME/lib/core/logger.sh"
 source "$WIGGUM_HOME/lib/core/file-lock.sh"
+source "$WIGGUM_HOME/lib/core/gh-error.sh"
 source "$WIGGUM_HOME/lib/tasks/task-parser.sh"
 source "$WIGGUM_HOME/lib/git/pr-comments.sh"
 source "$WIGGUM_HOME/lib/git/git-operations.sh"
@@ -285,8 +286,20 @@ cmd_global_sync() {
 
     # Get all task/* PRs (both open and merged)
     log "Syncing PRs..."
-    local all_prs
-    all_prs=$(gh pr list --search "head:task/" --state all --json number,headRefName,state,mergedAt 2>/dev/null || echo "[]")
+    local all_prs gh_exit=0 gh_output
+    gh_output=$(gh pr list --search "head:task/" --state all --json number,headRefName,state,mergedAt 2>&1) || gh_exit=$?
+
+    if [ "$gh_exit" -ne 0 ]; then
+        if gh_is_network_error "$gh_exit" "$gh_output"; then
+            log_error "$(gh_format_error "$gh_exit" "$gh_output" "listing PRs")"
+            return 1
+        fi
+        log_error "Failed to list PRs (exit: $gh_exit)"
+        log_debug "Output: $gh_output"
+        all_prs="[]"
+    else
+        all_prs="$gh_output"
+    fi
 
     local pr_count
     pr_count=$(echo "$all_prs" | jq 'length')

@@ -36,6 +36,7 @@
 _ORCHESTRATOR_FUNCTIONS_LOADED=1
 
 source "$WIGGUM_HOME/lib/core/safe-path.sh"
+source "$WIGGUM_HOME/lib/core/gh-error.sh"
 source "$WIGGUM_HOME/lib/github/issue-sync.sh"
 
 # These functions depend on scheduler module components
@@ -45,12 +46,13 @@ source "$WIGGUM_HOME/lib/github/issue-sync.sh"
 #
 # This is a standalone version of the sync logic that can be called
 # by the service scheduler.
+# Network errors skip the current cycle (will retry next cycle).
 #
 # Globals:
 #   RALPH_DIR   - Required
 #   PROJECT_DIR - Required
 #
-# Returns: 0 on success, 1 on failure
+# Returns: 0 on success (or network error - skips cycle), 1 on permanent failure
 orch_run_periodic_sync() {
     local ralph_dir="${RALPH_DIR:-}"
     local project_dir="${PROJECT_DIR:-}"
@@ -62,6 +64,11 @@ orch_run_periodic_sync() {
     sync_output=$("$WIGGUM_HOME/bin/wiggum-pr" sync 2>&1) || sync_exit=$?
 
     if [ $sync_exit -ne 0 ]; then
+        # Check for network errors - skip cycle gracefully
+        if gh_is_network_error "$sync_exit" "$sync_output"; then
+            log_warn "PR sync: skipping cycle due to network error (will retry later)"
+            return 0
+        fi
         log_error "Periodic sync failed"
         echo "$sync_output" | sed 's/^/  [sync] /'
         return 1
@@ -873,12 +880,13 @@ orch_update_aging() {
 #
 # Called as a periodic service to sync issues.
 # Loads config, checks if enabled, and runs the sync engine.
+# Network errors skip the current cycle (will retry next cycle).
 #
 # Globals:
 #   RALPH_DIR   - Required
 #   WIGGUM_HOME - Required
 #
-# Returns: 0 on success, 1 on failure
+# Returns: 0 on success (or network error - skips cycle), 1 on permanent failure
 orch_github_issue_sync() {
     local ralph_dir="${RALPH_DIR:-}"
     [ -n "$ralph_dir" ] || { log_error "RALPH_DIR not set"; return 1; }
@@ -902,6 +910,11 @@ orch_github_issue_sync() {
     github_issue_sync "$ralph_dir" "false" || sync_exit=$?
 
     if [ "$sync_exit" -ne 0 ]; then
+        # Network errors: skip cycle gracefully (return 0 so service continues)
+        if [ "${GH_LAST_WAS_NETWORK_ERROR:-false}" = true ]; then
+            log_debug "GitHub issue sync: skipping cycle due to network error"
+            return 0
+        fi
         log_error "GitHub issue sync failed"
         return 1
     fi
@@ -913,8 +926,9 @@ orch_github_issue_sync() {
 #
 # Runs bidirectional sync for all tracked plans. Uses the same
 # github.issue_sync.enabled gate as issue sync.
+# Network errors skip the current cycle (will retry next cycle).
 #
-# Returns: 0 on success, 1 on failure
+# Returns: 0 on success (or network error - skips cycle), 1 on failure
 orch_github_plan_sync() {
     local ralph_dir="${RALPH_DIR:-}"
     [ -n "$ralph_dir" ] || { log_error "RALPH_DIR not set"; return 1; }
@@ -938,7 +952,11 @@ orch_github_plan_sync() {
     github_plan_sync "$ralph_dir" "" "false" "" || sync_exit=$?
 
     if [ "$sync_exit" -ne 0 ]; then
-        log_warn "GitHub plan sync completed with conflicts"
+        # Network errors are already logged with "will retry later" message
+        # Don't log additional warnings for them
+        if [ "${GH_LAST_WAS_NETWORK_ERROR:-false}" != true ]; then
+            log_warn "GitHub plan sync completed with conflicts"
+        fi
     fi
 
     return 0

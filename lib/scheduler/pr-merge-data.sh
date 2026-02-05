@@ -475,11 +475,11 @@ pr_merge_gather_all() {
         # Must have workspace
         [ -d "$worker_dir/workspace" ] || continue
 
-        # Skip if running
-        if [ -f "$worker_dir/worker.pid" ]; then
+        # Skip if agent is running (fix pipeline may still be in progress)
+        if [ -f "$worker_dir/agent.pid" ]; then
             local pid
-            pid=$(cat "$worker_dir/worker.pid")
-            if ps -p "$pid" >/dev/null 2>&1; then
+            pid=$(cat "$worker_dir/agent.pid" 2>/dev/null || true)
+            if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
                 continue
             fi
         fi
