@@ -6,7 +6,7 @@
 #   wiggum github down                    Pull issues -> kanban only
 #   wiggum github up                      Push kanban -> GitHub only
 #   wiggum github sync up <TASK-ID|all>   Create GitHub issues for untracked tasks
-#   wiggum github plan-sync [TASK-ID]     Sync plan files with GitHub issue comments
+#   wiggum github plan sync [TASK-ID|all] Sync plan files with GitHub issue comments
 #   wiggum github status                  Show sync state summary
 #   wiggum github --dry-run               Show planned changes without writing
 set -euo pipefail
@@ -36,7 +36,7 @@ Commands:
 
 Options:
   --dry-run              Show planned changes without writing
-  --force up|down        Resolve plan-sync conflicts (up=local wins, down=remote wins)
+  --force up|down        Resolve plan sync conflicts (up=local wins, down=remote wins)
   -y                     Skip confirmation prompt (for sync up)
   -h, --help             Show this help
 
