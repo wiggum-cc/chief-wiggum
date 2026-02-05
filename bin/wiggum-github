@@ -47,12 +47,12 @@ Examples:
   wiggum github sync up TASK-333             # Create issue for one task
   wiggum github sync up all                  # Create issues for all untracked
   wiggum github sync up all -y               # Skip confirmation
-  wiggum github plan-sync                    # Sync non-terminal plans
-  wiggum github plan-sync all                # Sync all plans (including completed)
-  wiggum github plan-sync TASK-001           # Sync one task's plan
-  wiggum github plan-sync --dry-run          # Preview plan-sync changes
-  wiggum github plan-sync --force up         # Push local plans (resolve conflicts)
-  wiggum github plan-sync --force down       # Pull remote plans (resolve conflicts)
+  wiggum github plan sync                    # Sync non-terminal plans
+  wiggum github plan sync all                # Sync all plans (including completed)
+  wiggum github plan sync TASK-001           # Sync one task's plan
+  wiggum github plan sync --dry-run          # Preview plan sync changes
+  wiggum github plan sync --force up         # Push local plans (resolve conflicts)
+  wiggum github plan sync --force down       # Pull remote plans (resolve conflicts)
   wiggum github --dry-run                    # Preview changes
   wiggum github status                       # Show state
 
