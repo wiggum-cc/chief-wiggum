@@ -31,7 +31,7 @@ Commands:
   down                         Pull GitHub issues to local kanban only
   up                           Push local kanban status to GitHub only
   sync up <TASK-ID|all> [-y]   Create GitHub issues for untracked kanban tasks
-  plan-sync [TASK-ID]          Sync plan files with GitHub issue comments
+  plan-sync [TASK-ID|all]      Sync plan files with GitHub issue comments
   status                       Show sync state summary
 
 Options:
@@ -47,7 +47,8 @@ Examples:
   wiggum github sync up TASK-333             # Create issue for one task
   wiggum github sync up all                  # Create issues for all untracked
   wiggum github sync up all -y               # Skip confirmation
-  wiggum github plan-sync                    # Sync all plans
+  wiggum github plan-sync                    # Sync non-terminal plans
+  wiggum github plan-sync all                # Sync all plans (including completed)
   wiggum github plan-sync TASK-001           # Sync one task's plan
   wiggum github plan-sync --dry-run          # Preview plan-sync changes
   wiggum github plan-sync --force up         # Push local plans (resolve conflicts)

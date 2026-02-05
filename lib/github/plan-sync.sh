@@ -354,15 +354,17 @@ github_plan_sync_task() {
 # plan_comment_id, filtered to tasks that have a mapped issue_number.
 #
 # Args:
-#   ralph_dir - Path to .ralph directory
-#   dry_run   - "true" to preview changes without executing
-#   force     - "" (none), "up" (push local), or "down" (pull remote)
+#   ralph_dir         - Path to .ralph directory
+#   dry_run           - "true" to preview changes without executing
+#   force             - "" (none), "up" (push local), or "down" (pull remote)
+#   include_terminal  - "true" to sync terminal-status tasks (x, *, N)
 #
 # Returns: 0 on success, 1 if any conflicts
 github_plan_sync_all() {
     local ralph_dir="$1"
     local dry_run="${2:-false}"
     local force="${3:-}"
+    local include_terminal="${4:-false}"
 
     local -A task_ids=()
 
@@ -417,16 +419,18 @@ github_plan_sync_all() {
             continue
         fi
 
-        # Skip completed/terminal tasks to reduce API overhead
-        local synced_status
-        synced_status=$(echo "$task_state" | jq -r '.last_synced_status // " "')
-        case "$synced_status" in
-            x|"*"|N)
-                log_debug "$tid: terminal status ($synced_status), skipping"
-                ((++skipped))
-                continue
-                ;;
-        esac
+        # Skip completed/terminal tasks to reduce API overhead (unless include_terminal)
+        if [ "$include_terminal" != "true" ]; then
+            local synced_status
+            synced_status=$(echo "$task_state" | jq -r '.last_synced_status // " "')
+            case "$synced_status" in
+                x|"*"|N)
+                    log_debug "$tid: terminal status ($synced_status), skipping"
+                    ((++skipped))
+                    continue
+                    ;;
+            esac
+        fi
 
         local exit_code=0
         github_plan_sync_task "$ralph_dir" "$tid" "$dry_run" "$force" || exit_code=$?
@@ -454,7 +458,7 @@ github_plan_sync_all() {
 #
 # Args:
 #   ralph_dir - Path to .ralph directory
-#   task_id   - Optional task ID to sync (empty = all)
+#   task_id   - Optional task ID to sync (empty = non-terminal, "all" = all tasks)
 #   dry_run   - "true" to preview changes
 #   force     - "" (none), "up", or "down"
 #
@@ -465,9 +469,11 @@ github_plan_sync() {
     local dry_run="${3:-false}"
     local force="${4:-}"
 
-    if [ -n "$task_id" ]; then
+    if [ "$task_id" = "all" ]; then
+        github_plan_sync_all "$ralph_dir" "$dry_run" "$force" "true"
+    elif [ -n "$task_id" ]; then
         github_plan_sync_task "$ralph_dir" "$task_id" "$dry_run" "$force"
     else
-        github_plan_sync_all "$ralph_dir" "$dry_run" "$force"
+        github_plan_sync_all "$ralph_dir" "$dry_run" "$force" "false"
     fi
 }

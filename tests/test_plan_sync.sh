@@ -484,6 +484,41 @@ test_explicit_task_id_syncs_completed() {
     assert_equals "70000" "$comment_id" "Should have synced despite completed status"
 }
 
+test_sync_all_with_include_terminal() {
+    # Completed task (status "x") — should be synced when include_terminal=true
+    _create_tracked_task "TASK-DONE2" 230 '{"last_synced_status": "x"}'
+    printf '%s\n' "completed plan 2" > "$TEST_DIR/plans/TASK-DONE2.md"
+
+    # Failed task (status "*") — should also be synced
+    _create_tracked_task "TASK-FAIL2" 231 '{"last_synced_status": "*"}'
+    printf '%s\n' "failed plan 2" > "$TEST_DIR/plans/TASK-FAIL2.md"
+
+    # Active task — should be synced as usual
+    _create_tracked_task "TASK-ACTIVE2" 232
+    printf '%s\n' "active plan 2" > "$TEST_DIR/plans/TASK-ACTIVE2.md"
+
+    _setup_gh_mock_detailed "" '80000' ""
+
+    local output
+    output=$(github_plan_sync_all "$TEST_DIR" "false" "" "true" 2>&1)
+
+    assert_output_contains "$output" "3 synced" "Should sync all tasks including terminal"
+    assert_output_contains "$output" "0 skipped" "Should not skip any tasks"
+}
+
+test_github_plan_sync_all_keyword() {
+    # Test that github_plan_sync routes "all" to include_terminal=true
+    _create_tracked_task "TASK-TERM" 240 '{"last_synced_status": "x"}'
+    printf '%s\n' "terminal task plan" > "$TEST_DIR/plans/TASK-TERM.md"
+
+    _setup_gh_mock_detailed "" '90000' ""
+
+    local output
+    output=$(github_plan_sync "$TEST_DIR" "all" "false" "" 2>&1)
+
+    assert_output_contains "$output" "1 synced" "Should sync terminal task via 'all' keyword"
+}
+
 # =============================================================================
 # Run all tests
 # =============================================================================
@@ -505,6 +540,8 @@ run_test test_sync_all_no_plans
 run_test test_sync_all_skips_completed_tasks
 run_test test_sync_all_skips_failed_and_not_planned
 run_test test_explicit_task_id_syncs_completed
+run_test test_sync_all_with_include_terminal
+run_test test_github_plan_sync_all_keyword
 
 print_test_summary
 exit_with_test_result

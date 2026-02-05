@@ -1,12 +1,14 @@
 | name | description |
 |------|-------------|
-| wiggum-plan | Create implementation plans through systematic multi-phase workflow: discovery, exploration, clarifying questions, architecture design, plan writing, kanban entry, and summary. Planning only - never implements. Always writes plan to `.ralph/plans/TASK-ID.md` before adding task to kanban. |
+| wiggum-plan | Create implementation plans through systematic multi-phase workflow: discovery, exploration, clarifying questions, architecture design, plan writing, kanban entry, and summary. Planning only - NEVER implements. Always writes plan to `.ralph/plans/TASK-ID.md` before adding task to kanban. |
 
 # Wiggum Plan
 
 ## Purpose
 
-Create implementation plans through a systematic 7-phase workflow that ensures deep codebase understanding and thoughtful architecture decisions. This skill is for **planning only** - it never implements code.
+Create implementation plans through a systematic 7-phase workflow that ensures deep codebase understanding and thoughtful architecture decisions. This skill is for **planning only** - it NEVER implements code.
+
+**CRITICAL**: This skill produces `.ralph/plans/TASK-ID.md` files. It does NOT implement anything. Every invocation must result in a written plan file (or a list of unplanned tasks in Mode 3).
 
 ## Input
 
@@ -17,24 +19,112 @@ Create implementation plans through a systematic 7-phase workflow that ensures d
 2. Create the implementation plan in `.ralph/plans/TASK-ID.md`
 3. Add the task to `.ralph/kanban.md`
 
+**Mode 3 - No Argument (Audit Mode)**: When invoked with no argument, the skill will:
+1. Read `.ralph/kanban.md` to find all pending/in-progress tasks
+2. Check `.ralph/plans/` to identify which tasks already have plans
+3. List all tasks that do NOT have a plan file
+4. Group unplanned tasks into logical clusters based on:
+   - Shared dependencies (tasks depending on or blocked by the same tasks)
+   - Related functionality (similar descriptions, overlapping scope)
+   - Sequential work (tasks that would naturally be planned together)
+5. Present the grouped list to the user with suggestions for which groups to plan next
+6. **Do NOT automatically create plans** - let the user choose which task(s) to plan
+
 ## When This Skill is Invoked
 
 **Manual invocation:**
+- `/wiggum-plan TASK-ID` - Plan a specific existing task
+- `/wiggum-plan "description"` - Design and plan a new task
+- `/wiggum-plan` (no argument) - Audit: list all tasks without plans, grouped logically
+
+**Use cases:**
 - Before implementing a complex task
 - When a task needs architectural analysis
 - To document approach before handing to a worker
+- To see what tasks still need planning (audit mode)
+- To identify which tasks should be planned together
 
 **From other skills:**
 - After `/kanban` creates tasks that need detailed planning
 
 ## Critical Rules
 
-1. **NEVER implement** - This skill produces plans, not code
-2. **ALWAYS write the plan file** - Every session must end with writing `.ralph/plans/TASK-ID.md`
-3. **Multiple iterations allowed** - Explore, ask questions, explore more as needed
-4. **READ-ONLY exploration** - Only modify the kanban file (when creating tasks) and plan file
-5. **Create task when needed** - If no valid task ID is provided, design the task and determine the ID first, but write the kanban entry only after the plan is written
-6. **Clarifying questions are critical** - Never skip Phase 3; it's one of the most important phases
+1. **NEVER implement** - This skill produces plans, not code. Do NOT write, edit, or create any code files. Do NOT run implementation commands. Your ONLY output is the plan file.
+2. **NEVER enter plan mode** - Do NOT use the `EnterPlanMode` tool. This skill IS the planning mechanism. You explore, research, ask questions, and write the plan file directly. Claude Code's built-in plan mode is redundant and would create confusion.
+3. **ALWAYS write the plan file** - Every session (except Mode 3 audit) MUST end with writing `.ralph/plans/TASK-ID.md`. The plan file is your deliverable. If you don't write the plan file, the session failed.
+3. **Check existing task IDs first** - Before creating any plan, read `.ralph/kanban.md` to understand:
+   - Which task IDs already exist (avoid duplicates/conflicts)
+   - The highest task number (for ID assignment if creating new tasks)
+   - Task prefixes used in this project
+4. **Check related tasks** - Before planning, read descriptions AND existing plans of:
+   - Tasks this one depends on (what do they provide?)
+   - Tasks that depend on this one (what do they expect?)
+   - Tasks with similar scope or overlapping functionality
+   - Any task referenced in the Description or Scope
+5. **Multiple iterations allowed** - Explore, ask questions, explore more as needed
+6. **READ-ONLY exploration** - Only modify the kanban file (when creating tasks) and plan file
+7. **Create task when needed** - If no valid task ID is provided, design the task and determine the ID first, but write the kanban entry only after the plan is written
+8. **Clarifying questions are critical** - Never skip Phase 3; it's one of the most important phases
+
+## Mode 3: Audit Workflow (No Argument)
+
+When invoked without any argument, execute this audit workflow instead of the planning phases:
+
+### Step 1: Scan Kanban
+- Read `.ralph/kanban.md` completely
+- Extract all tasks with status `[ ]` (Pending) or `[=]` (In-progress)
+- Note their IDs, descriptions, priorities, and dependencies
+
+### Step 2: Check for Existing Plans
+- List all files in `.ralph/plans/`
+- For each pending/in-progress task, check if `.ralph/plans/TASK-ID.md` exists
+- Create two lists: tasks WITH plans, tasks WITHOUT plans
+
+### Step 3: Group Unplanned Tasks
+Group tasks WITHOUT plans into logical clusters:
+
+**Grouping criteria (in order of priority):**
+1. **Dependency chains**: Tasks that depend on each other or share common dependencies
+2. **Functional area**: Tasks touching the same module, feature, or subsystem
+3. **Scope overlap**: Tasks with similar descriptions or complementary functionality
+4. **Sequential candidates**: Tasks that would naturally flow from one to the next
+
+### Step 4: Present Findings
+Output a structured report:
+
+```markdown
+## Unplanned Tasks Audit
+
+### Tasks WITH Plans (ready for execution)
+- [TASK-ID] Description... → `.ralph/plans/TASK-ID.md`
+
+### Tasks WITHOUT Plans
+
+#### Group 1: [Group Name - e.g., "Rate Limiting & Circuit Breaker"]
+**Why grouped**: [Shared dependency on X, both touch Y module]
+**Suggested planning order**: TASK-A → TASK-B
+- [ ] **[TASK-A]** Description...
+  - Priority: X | Dependencies: Y
+- [ ] **[TASK-B]** Description...
+  - Priority: X | Dependencies: TASK-A
+
+#### Group 2: [Group Name]
+...
+
+### Standalone Tasks (no clear grouping)
+- [ ] **[TASK-X]** Description...
+
+### Recommended Next Steps
+1. Plan [Group 1] first because [reason]
+2. Consider planning [TASK-X] and [TASK-Y] together because [reason]
+```
+
+### Step 5: Await User Selection
+- Do NOT automatically start planning
+- Let the user choose which task or group to plan
+- If user selects a task, transition to the normal planning workflow (Phase 0 or Phase 1)
+
+---
 
 ## Core Workflow: 7 Phases
 
@@ -44,11 +134,17 @@ Create implementation plans through a systematic 7-phase workflow that ensures d
 
 When the input is a description rather than a task ID:
 
-**Analyze existing kanban:**
-- Read `.ralph/kanban.md`
-- Identify the highest task number for ID assignment
-- Note existing dependencies and task prefixes used
-- Check for similar/related pending tasks
+**Analyze existing kanban (REQUIRED):**
+- Read `.ralph/kanban.md` completely
+- Identify the highest task number for ID assignment (e.g., if TASK-036 exists, next is TASK-037)
+- Note task prefixes used in this project (TASK-, FEAT-, BUG-, etc.)
+- Check for similar/related pending tasks — these may need to be planned together or sequenced
+
+**Check existing plans for related tasks:**
+- List all files in `.ralph/plans/`
+- For tasks with similar scope, read their existing plans
+- Note patterns, decisions, and architectural context from related plans
+- Identify if this new task conflicts with or complements existing plans
 
 **Clarify requirements with AskUserQuestion:**
 - Scope: What should be included/excluded?
@@ -80,8 +176,15 @@ For task format details, see `/kanban` skill references:
 - For existing tasks: Read `.ralph/kanban.md` and find the task entry for the given ID
 - For new tasks (from Phase 0): Use the task details held in memory from the design phase
 - Extract Description, Scope, Acceptance Criteria, Dependencies
-- Check dependent tasks to understand what they provide
 - Classify the task: is this a bug fix, a new feature, a refactor, or a behavioral change?
+
+**Read related tasks and their plans (REQUIRED):**
+- For each task in the Dependencies field: read its kanban entry AND check if `.ralph/plans/TASK-ID.md` exists
+- If a dependency has a plan, read it — understand what that task provides, its architectural decisions, interface changes
+- Search kanban for tasks that depend on THIS task — read their entries to understand what they expect
+- Search for tasks with overlapping scope or similar descriptions
+- Check `.ralph/plans/` for any related plans that might inform this work
+- Document: What context do related tasks provide? What constraints do they impose?
 
 **Read project-level instructions:**
 - Read `CLAUDE.md` or `AGENTS.md` at the project root (if they exist) for conventions and constraints
@@ -296,17 +399,21 @@ Now that the plan is written, add the task entry to `.ralph/kanban.md`:
 
 ## Key Principles
 
-1. **Research before exploring** - Understand requirements, specs, and system architecture before diving into code
-2. **Specs are source of truth** - Explore `spec/` to understand existing specifications; plan must account for spec fit and required changes
-3. **Follow the phases** - Task Design → Research → Exploration → Questions → Architecture → Plan → Kanban → Summary
-4. **Parallel exploration** - Analyze similar features, architecture, integration points, and interfaces/coupling together
-5. **Minimize interface surface** - Prefer designs that reduce coupling between modules, not extend it
-6. **Questions are critical** - Phase 3 is one of the most important; never skip it
-7. **Multiple approaches** - Present 2-3 architecture options with trade-off analysis
-8. **Get approval** - Confirm architecture choice before writing plan
-9. **Ground in findings** - Every option must reference actual codebase patterns and spec documents
-10. **Always write plan** - Session must end with `.ralph/plans/TASK-ID.md`
-11. **Never implement** - Planning only, no code changes
+1. **NEVER implement** - Planning only, no code changes. Your deliverable is a `.ralph/plans/TASK-ID.md` file, not code.
+2. **NEVER enter plan mode** - Do NOT use `EnterPlanMode`. This skill IS the planning mechanism.
+3. **ALWAYS write the plan file** - Every planning session must result in writing `.ralph/plans/TASK-ID.md`. If you don't write the file, you failed.
+4. **Check existing task IDs first** - Read kanban before creating plans to understand the task landscape
+5. **Check related tasks and plans** - Read dependency tasks and their plans; understand what they provide and expect
+6. **Research before exploring** - Understand requirements, specs, and system architecture before diving into code
+7. **Specs are source of truth** - Explore `spec/` to understand existing specifications; plan must account for spec fit and required changes
+8. **Follow the phases** - Task Design → Research → Exploration → Questions → Architecture → Plan → Kanban → Summary
+9. **Parallel exploration** - Analyze similar features, architecture, integration points, and interfaces/coupling together
+10. **Minimize interface surface** - Prefer designs that reduce coupling between modules, not extend it
+11. **Questions are critical** - Phase 3 is one of the most important; never skip it
+12. **Multiple approaches** - Present 2-3 architecture options with trade-off analysis
+13. **Get approval** - Confirm architecture choice before writing plan
+14. **Ground in findings** - Every option must reference actual codebase patterns and spec documents
+15. **Audit mode for no argument** - When invoked without argument, list unplanned tasks grouped logically; don't auto-plan
 
 ## Progressive Disclosure
 
