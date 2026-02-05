@@ -31,7 +31,7 @@ Commands:
   down                         Pull GitHub issues to local kanban only
   up                           Push local kanban status to GitHub only
   sync up <TASK-ID|all> [-y]   Create GitHub issues for untracked kanban tasks
-  plan-sync [TASK-ID|all]      Sync plan files with GitHub issue comments
+  plan sync [TASK-ID|all]      Sync plan files with GitHub issue comments
   status                       Show sync state summary
 
 Options:
