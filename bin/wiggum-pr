@@ -341,8 +341,14 @@ cmd_global_sync() {
 
             log "  $task_id: merged"
             update_kanban_status "$kanban" "$task_id" "x"
-            # Update issue and PR labels to completed
+            # Update issue labels to completed
             github_issue_sync_task_status "$RALPH_DIR" "$task_id" "x" || true
+            # Update PR labels to completed (directly, since we have pr_number and worker may be archived)
+            [ -n "${GITHUB_SYNC_STATUS_LABELS:-}" ] || load_github_sync_config
+            local old_label new_label
+            old_label=$(github_sync_get_status_label "P")
+            new_label=$(github_sync_get_status_label "x")
+            github_pr_set_status_label "$pr_number" "$new_label" "$old_label" || true
 
             # Archive worker directory now that PR is merged
             local worker_dir
@@ -474,8 +480,12 @@ cmd_task_sync() {
                 pr_number=$(echo "$pr" | jq -r '.number')
                 log "PR #$pr_number ($task_id): Merged - updating [$current_status] -> [x]"
                 update_kanban_status "$kanban" "$task_id" "x"
-                # Update PR label to completed
-                github_pr_sync_task_status "$RALPH_DIR" "$task_id" "x" "$current_status" || true
+                # Update PR label to completed (directly, since we have pr_number and worker may be archived)
+                [ -n "${GITHUB_SYNC_STATUS_LABELS:-}" ] || load_github_sync_config
+                local old_label new_label
+                old_label=$(github_sync_get_status_label "$current_status")
+                new_label=$(github_sync_get_status_label "x")
+                github_pr_set_status_label "$pr_number" "$new_label" "$old_label" || true
 
                 # Archive worker directory now that PR is merged
                 local worker_dir
