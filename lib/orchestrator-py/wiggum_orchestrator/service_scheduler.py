@@ -220,13 +220,17 @@ class ServiceScheduler:
                 log.log_debug(f"Service {svc.id} already running in background")
                 return
 
+        proc = None
         if svc.exec_type == "function":
             proc = self._executor.run_function_background(svc)
+        elif svc.exec_type == "command":
+            proc = self._executor.run_command_background(svc)
+
+        if proc:
             self._background_procs[svc.id] = (proc, svc)
             self._state.mark_started(svc.id, pid=proc.pid)
             log.log_debug(f"Started {svc.id} in background (PID {proc.pid})")
         else:
-            # Fall back to synchronous for non-function types
             log.log_warn(f"Background not supported for {svc.exec_type}, running sync")
             self._run_single_service(svc)
 

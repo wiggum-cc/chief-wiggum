@@ -176,3 +176,20 @@ class ServiceExecutor:
             stderr=subprocess.DEVNULL,
         )
         return proc
+
+    def run_command_background(self, svc: ServiceConfig) -> subprocess.Popen:
+        """Run a command-type service in background.
+
+        Returns:
+            Popen handle for the background process.
+        """
+        cmd_str = svc.exec_command
+        log.log_debug(f"Command background: {cmd_str}")
+        proc = subprocess.Popen(
+            ["bash", "-c", cmd_str],
+            env=self._env,
+            cwd=self._env.get("PROJECT_DIR"),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return proc
