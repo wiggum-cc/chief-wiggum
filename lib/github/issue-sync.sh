@@ -252,7 +252,7 @@ _parse_kanban_task_fields() {
 
     END {
         if (brief != "" || desc != "") {
-            print brief "\t" desc "\t" pri "\t" deps "\t" status
+            print brief "\x1e" desc "\x1e" pri "\x1e" deps "\x1e" status
         }
     }
     ' "$kanban_file")
@@ -260,7 +260,7 @@ _parse_kanban_task_fields() {
     [ -n "$raw" ] || return 0
 
     local _brief _desc _pri _deps _status
-    IFS=$'\t' read -r _brief _desc _pri _deps _status <<< "$raw"
+    IFS=$'\x1e' read -r _brief _desc _pri _deps _status <<< "$raw"
 
     jq -n \
         --arg brief "${_brief:-}" \

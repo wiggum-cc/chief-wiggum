@@ -71,7 +71,7 @@ validate_config() {
             (.review.fix_max_turns // 30),
             (if .review.approved_user_ids then (.review.approved_user_ids | type) else "null" end),
             (keys | join(","))
-        ] | @tsv
+        ] | join("\u001e")
     ' "$config_file" 2>/dev/null)
 
     if [ -z "$extracted" ]; then
@@ -81,7 +81,7 @@ validate_config() {
 
     # Parse extracted values
     local section_flags max_iter sleep_sec hooks_enabled fix_max_iter fix_max_turns approved_type actual_keys
-    IFS=$'\t' read -r section_flags max_iter sleep_sec hooks_enabled fix_max_iter fix_max_turns approved_type actual_keys <<< "$extracted"
+    IFS=$'\x1e' read -r section_flags max_iter sleep_sec hooks_enabled fix_max_iter fix_max_turns approved_type actual_keys <<< "$extracted"
 
     # Check optional sections and warn if missing
     local sections=("workers" "hooks" "paths" "review")
@@ -182,7 +182,7 @@ validate_agents_config() {
             (if .agents then "1" else "0" end),
             (if .defaults then "1" else "0" end),
             (.agents | keys | join(","))
-        ] | @tsv
+        ] | join("\u001e")
     ' "$agents_file" 2>/dev/null)
 
     if [ -z "$extracted" ]; then
@@ -190,9 +190,9 @@ validate_agents_config() {
         return 1
     fi
 
-    # Parse extracted values - handle tab-separated
+    # Parse extracted values
     local has_agents has_defaults agent_names_csv
-    IFS=$'\t' read -r has_agents has_defaults agent_names_csv <<< "$extracted"
+    IFS=$'\x1e' read -r has_agents has_defaults agent_names_csv <<< "$extracted"
 
     # Check required sections exist
     if [ "$has_agents" = "0" ]; then
@@ -259,7 +259,7 @@ _validate_agent_params() {
             ($path.supervisor_interval // \"null\"),
             ($path.max_restarts // \"null\"),
             ($path.auto_commit // \"null\")
-        ] | @tsv
+        ] | join(\"\u001e\")
     " "$file" 2>/dev/null)
 
     if [ -z "$extracted" ]; then
@@ -269,7 +269,7 @@ _validate_agent_params() {
 
     # Parse extracted values
     local max_iter max_turns timeout interval restarts auto_commit
-    IFS=$'\t' read -r max_iter max_turns timeout interval restarts auto_commit <<< "$extracted"
+    IFS=$'\x1e' read -r max_iter max_turns timeout interval restarts auto_commit <<< "$extracted"
 
     # Check max_iterations
     if [ "$max_iter" != "null" ]; then

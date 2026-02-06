@@ -140,17 +140,24 @@ find_prs_by_task_patterns() {
         prs=$(_gh_pr_list_with_error_handling "head:task/$pattern" "$json_fields" "$WIGGUM_GH_TIMEOUT" "--state open")
 
         # If not found, try partial match by listing all task/* branches and filtering
-        if [ "$(echo "$prs" | jq 'length')" -eq 0 ]; then
+        local _prs_len
+        _prs_len=$(echo "$prs" | jq 'length // 0')
+        _prs_len="${_prs_len:-0}"
+        if [ "$_prs_len" -eq 0 ]; then
             local all_task_prs
             all_task_prs=$(_gh_pr_list_with_error_handling "head:task/" "$json_fields" "$WIGGUM_GH_TIMEOUT" "--state open")
             prs=$(echo "$all_task_prs" | jq --arg pat "$pattern" '[.[] | select(.headRefName | contains($pat))]')
         fi
 
         # If still not found, search all states (merged/closed)
-        if [ "$(echo "$prs" | jq 'length')" -eq 0 ]; then
+        _prs_len=$(echo "$prs" | jq 'length // 0')
+        _prs_len="${_prs_len:-0}"
+        if [ "$_prs_len" -eq 0 ]; then
             prs=$(_gh_pr_list_with_error_handling "head:task/$pattern" "$json_fields" "$WIGGUM_GH_TIMEOUT" "--state all")
 
-            if [ "$(echo "$prs" | jq 'length')" -eq 0 ]; then
+            _prs_len=$(echo "$prs" | jq 'length // 0')
+            _prs_len="${_prs_len:-0}"
+            if [ "$_prs_len" -eq 0 ]; then
                 local all_task_prs
                 all_task_prs=$(_gh_pr_list_with_error_handling "head:task/" "$json_fields" "$WIGGUM_GH_TIMEOUT" "--state all")
                 prs=$(echo "$all_task_prs" | jq --arg pat "$pattern" '[.[] | select(.headRefName | contains($pat))]')
@@ -420,7 +427,8 @@ sync_pr_comments() {
     # Find matching PRs
     local prs pr_count
     prs=$(find_prs_by_task_patterns "$patterns")
-    pr_count=$(echo "$prs" | jq 'length')
+    pr_count=$(echo "$prs" | jq 'length // 0')
+    pr_count="${pr_count:-0}"
 
     if [ "$pr_count" -eq 0 ]; then
         log_debug "No PRs found matching: $patterns"

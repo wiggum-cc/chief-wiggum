@@ -128,7 +128,7 @@ _compute_worker_metrics() {
             local hours=$((worker_time_seconds / 3600))
             local minutes=$(((worker_time_seconds % 3600) / 60))
             local seconds=$((worker_time_seconds % 60))
-            worker_time_formatted=$(printf "%02d:%02d:%02d" $hours $minutes $seconds)
+            worker_time_formatted=$(printf "%02d:%02d:%02d" "$hours" "$minutes" "$seconds")
         fi
     fi
 
@@ -311,7 +311,7 @@ export_metrics() {
     local total_minutes=$(((total_time_seconds % 3600) / 60))
     local total_seconds=$((total_time_seconds % 60))
     local total_time_formatted
-    total_time_formatted=$(printf "%02d:%02d:%02d" $total_hours $total_minutes $total_seconds)
+    total_time_formatted=$(printf "%02d:%02d:%02d" "$total_hours" "$total_minutes" "$total_seconds")
 
     # Build final JSON
     local metrics_json

@@ -55,7 +55,7 @@ _pipeline_cache_steps() {
     # Single jq call extracts all steps as compact JSON with their index
     # Output format: idx<TAB>step_id<TAB>compact_json per line
     local cache_data
-    cache_data=$(_pipeline_jq '.steps | to_entries | .[] | [.key, .value.id, (.value | tojson)] | @tsv' -r 2>/dev/null)
+    cache_data=$(_pipeline_jq '.steps | to_entries | .[] | [(.key | tostring), .value.id, (.value | tojson)] | join("\u001e")' -r 2>/dev/null)
 
     if [ -z "$cache_data" ]; then
         log_warn "Failed to cache pipeline steps, falling back to uncached access"
@@ -63,7 +63,7 @@ _pipeline_cache_steps() {
     fi
 
     # Populate associative arrays
-    while IFS=$'\t' read -r idx step_id step_json; do
+    while IFS=$'\x1e' read -r idx step_id step_json; do
         [ -z "$idx" ] && continue
         _PIPELINE_STEP_BY_INDEX[$idx]="$step_json"
         _PIPELINE_ID_TO_INDEX[$step_id]="$idx"

@@ -46,38 +46,47 @@ calculate_worker_cost() {
     local totals
     totals=$(find "$log_dir" -type f -name "*.log" -exec grep '"type":"result"' {} \; | \
         jq -s '{
-            duration_ms: (map(.duration_ms) | add),
-            duration_api_ms: (map(.duration_api_ms) | add),
-            total_cost: (map(.total_cost_usd) | add),
-            num_turns: (map(.num_turns) | add),
-            web_search_requests: (map(.usage.server_tool_use.web_search_requests) | add),
-            input_tokens: (map(.usage.input_tokens) | add),
-            output_tokens: (map(.usage.output_tokens) | add),
-            cache_creation_tokens: (map(.usage.cache_creation_input_tokens) | add),
-            cache_read_tokens: (map(.usage.cache_read_input_tokens) | add),
+            duration_ms: (map(.duration_ms) | add // 0),
+            duration_api_ms: (map(.duration_api_ms) | add // 0),
+            total_cost: (map(.total_cost_usd) | add // 0),
+            num_turns: (map(.num_turns) | add // 0),
+            web_search_requests: (map(.usage.server_tool_use.web_search_requests) | add // 0),
+            input_tokens: (map(.usage.input_tokens) | add // 0),
+            output_tokens: (map(.usage.output_tokens) | add // 0),
+            cache_creation_tokens: (map(.usage.cache_creation_input_tokens) | add // 0),
+            cache_read_tokens: (map(.usage.cache_read_input_tokens) | add // 0),
             model_usage: (map(.modelUsage | to_entries) | flatten | group_by(.key) | map({
                 key: .[0].key,
                 value: {
-                    inputTokens: (map(.value.inputTokens) | add),
-                    outputTokens: (map(.value.outputTokens) | add),
-                    cacheReadInputTokens: (map(.value.cacheReadInputTokens) | add),
-                    cacheCreationInputTokens: (map(.value.cacheCreationInputTokens) | add),
-                    costUSD: (map(.value.costUSD) | add)
+                    inputTokens: (map(.value.inputTokens) | add // 0),
+                    outputTokens: (map(.value.outputTokens) | add // 0),
+                    cacheReadInputTokens: (map(.value.cacheReadInputTokens) | add // 0),
+                    cacheCreationInputTokens: (map(.value.cacheCreationInputTokens) | add // 0),
+                    costUSD: (map(.value.costUSD) | add // 0)
                 }
             }) | from_entries)
         }')
 
     local duration_ms duration_api_ms total_cost num_turns web_search_requests
     local input_tokens output_tokens cache_creation_tokens cache_read_tokens
-    duration_ms=$(echo "$totals" | jq -r '.duration_ms')
-    duration_api_ms=$(echo "$totals" | jq -r '.duration_api_ms')
-    total_cost=$(echo "$totals" | jq -r '.total_cost')
-    num_turns=$(echo "$totals" | jq -r '.num_turns')
-    web_search_requests=$(echo "$totals" | jq -r '.web_search_requests')
-    input_tokens=$(echo "$totals" | jq -r '.input_tokens')
-    output_tokens=$(echo "$totals" | jq -r '.output_tokens')
-    cache_creation_tokens=$(echo "$totals" | jq -r '.cache_creation_tokens')
-    cache_read_tokens=$(echo "$totals" | jq -r '.cache_read_tokens')
+    duration_ms=$(echo "$totals" | jq -r '.duration_ms // 0')
+    duration_ms="${duration_ms:-0}"
+    duration_api_ms=$(echo "$totals" | jq -r '.duration_api_ms // 0')
+    duration_api_ms="${duration_api_ms:-0}"
+    total_cost=$(echo "$totals" | jq -r '.total_cost // 0')
+    total_cost="${total_cost:-0}"
+    num_turns=$(echo "$totals" | jq -r '.num_turns // 0')
+    num_turns="${num_turns:-0}"
+    web_search_requests=$(echo "$totals" | jq -r '.web_search_requests // 0')
+    web_search_requests="${web_search_requests:-0}"
+    input_tokens=$(echo "$totals" | jq -r '.input_tokens // 0')
+    input_tokens="${input_tokens:-0}"
+    output_tokens=$(echo "$totals" | jq -r '.output_tokens // 0')
+    output_tokens="${output_tokens:-0}"
+    cache_creation_tokens=$(echo "$totals" | jq -r '.cache_creation_tokens // 0')
+    cache_creation_tokens="${cache_creation_tokens:-0}"
+    cache_read_tokens=$(echo "$totals" | jq -r '.cache_read_tokens // 0')
+    cache_read_tokens="${cache_read_tokens:-0}"
 
     # Format time
     local time_spent=$((duration_ms / 1000))
@@ -85,14 +94,14 @@ calculate_worker_cost() {
     local minutes=$(((time_spent % 3600) / 60))
     local seconds=$((time_spent % 60))
     local time_formatted
-    time_formatted=$(printf "%02d:%02d:%02d" $hours $minutes $seconds)
+    time_formatted=$(printf "%02d:%02d:%02d" "$hours" "$minutes" "$seconds")
 
     local api_time_spent=$((duration_api_ms / 1000))
     local api_hours=$((api_time_spent / 3600))
     local api_minutes=$(((api_time_spent % 3600) / 60))
     local api_seconds=$((api_time_spent % 60))
     local api_time_formatted
-    api_time_formatted=$(printf "%02d:%02d:%02d" $api_hours $api_minutes $api_seconds)
+    api_time_formatted=$(printf "%02d:%02d:%02d" "$api_hours" "$api_minutes" "$api_seconds")
 
     # Output results
     echo "=== Worker Time and Cost Report ==="

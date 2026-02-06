@@ -189,7 +189,8 @@ conflict_queue_batch_ready() {
     groups=$(conflict_queue_group_related "$ralph_dir")
 
     local count
-    count=$(echo "$groups" | jq 'length')
+    count=$(echo "$groups" | jq 'length // 0')
+    count="${count:-0}"
 
     [ "$count" -gt 0 ]
 }
@@ -383,7 +384,7 @@ conflict_queue_build_batch_file() {
     # Add branch info (requires git, cannot be done in jq)
     local tasks="$all_task_data"
     local i=0
-    while IFS=$'\t' read -r task_id worker_dir; do
+    while IFS=$'\x1e' read -r task_id worker_dir; do
         [ -z "$task_id" ] && continue
         local branch=""
         if [ -d "$worker_dir/workspace" ]; then
@@ -391,7 +392,7 @@ conflict_queue_build_batch_file() {
         fi
         tasks=$(echo "$tasks" | jq -c --arg branch "$branch" --argjson idx "$i" '.[$idx] += {branch: $branch}')
         ((++i)) || true
-    done < <(echo "$all_task_data" | jq -r '.[] | "\(.task_id)\t\(.worker_dir)"')
+    done < <(echo "$all_task_data" | jq -r '.[] | [.task_id, .worker_dir] | join("\u001e")')
 
     # Write batch file with explicit merge_order for the planner to use
     jq -n \

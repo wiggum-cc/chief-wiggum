@@ -22,6 +22,8 @@ source "$WIGGUM_HOME/lib/core/platform.sh"
 # Source all scheduler components
 source "$WIGGUM_HOME/lib/scheduler/worker-pool.sh"
 source "$WIGGUM_HOME/lib/scheduler/priority-workers.sh"
+source "$WIGGUM_HOME/lib/scheduler/fix-workers.sh"
+source "$WIGGUM_HOME/lib/scheduler/resolve-workers.sh"
 source "$WIGGUM_HOME/lib/scheduler/merge-manager.sh"
 source "$WIGGUM_HOME/lib/scheduler/status-display.sh"
 source "$WIGGUM_HOME/lib/tasks/task-parser.sh"
