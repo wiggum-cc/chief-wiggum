@@ -268,6 +268,22 @@ pipeline_load() {
         return 1
     fi
 
+    # Validate on_max jump targets (top-level steps + inline handler steps)
+    local bad_on_max
+    bad_on_max=$(jq -r '
+        [.steps[].id] as $ids |
+        ["self","prev","next","abort"] as $special |
+        [
+            (.steps[] | .on_max // empty),
+            (.steps[].on_result // {} | to_entries[].value | objects | .on_max // empty)
+        ] |
+        .[] | select(. as $t | ($special | index($t)) == null and ($ids | index($t)) == null)
+    ' "$file" 2>/dev/null | head -1)
+    if [ -n "$bad_on_max" ]; then
+        log_error "Pipeline on_max references unknown jump target: $bad_on_max"
+        return 1
+    fi
+
     # Store source
     _PIPELINE_JSON_FILE="$file"
     _PIPELINE_JSON=""

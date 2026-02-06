@@ -34,6 +34,9 @@ append_with_lock() {
             # NOTE: This fall-through is intentional ONLY for append operations.
             # State-critical writes (PID files, kanban status) must NOT fall through.
             log_warn "append_with_lock: Failed to acquire lock for $file, appending without lock"
+            if declare -F activity_log > /dev/null 2>&1; then
+                activity_log "metric.lock_failure" "" "" "file=$file" "timeout=$timeout" 2>/dev/null || true
+            fi
             echo "$content" >> "$file"
             exit 0
         }
@@ -104,13 +107,17 @@ update_kanban_status() {
     escaped_task_id=$(printf '%s' "$task_id" | sed 's/[]\[^$.*&/\\]/\\&/g')
 
     # Match any status and replace with new status
-    # Security: Use umask 077 to ensure sed -i temp files have restricted permissions
+    # Uses sed > tmpfile + mv for atomicity (same pattern as update_kanban_task_fields)
     # Pass variables via environment to avoid shell injection through quotes
-    # Note: Inline OS check for portable sed -i (GNU vs BSD)
     _SED_ESCAPED_TASK_ID="$escaped_task_id" \
     _SED_NEW_STATUS="$new_status" \
     with_file_lock "$kanban_file" 5 \
-        bash -c 'umask 077; sed_i() { if [[ "$OSTYPE" == darwin* ]]; then sed -i "" "$@"; else sed -i "$@"; fi; }; sed_i "s/- \[[^\]]*\] \*\*\[$_SED_ESCAPED_TASK_ID\]\*\*/- [$_SED_NEW_STATUS] **[$_SED_ESCAPED_TASK_ID]**/" "$1"' _ "$kanban_file"
+        bash -c '
+            umask 077
+            tmp_file=$(mktemp "${1}.XXXXXX")
+            sed "s/- \[[^\]]*\] \*\*\[$_SED_ESCAPED_TASK_ID\]\*\*/- [$_SED_NEW_STATUS] **[$_SED_ESCAPED_TASK_ID]**/" "$1" > "$tmp_file"
+            mv "$tmp_file" "$1"
+        ' _ "$kanban_file"
 }
 
 # Update kanban.md to mark complete with locking (convenience function)
@@ -312,7 +319,8 @@ ${summary}
 
     # Use a temporary file to handle multi-line content safely
     local temp_file
-    temp_file=$(mktemp /tmp/wiggum-lock-XXXXXX)
+    mkdir -p "$(dirname "$changelog_file")/tmp"
+    temp_file=$(mktemp "$(dirname "$changelog_file")/tmp/wiggum-lock-XXXXXX")
     echo "$entry" > "$temp_file"
 
     # shellcheck disable=SC2016

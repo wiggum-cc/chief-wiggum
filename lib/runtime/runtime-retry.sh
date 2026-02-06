@@ -103,15 +103,15 @@ runtime_exec_with_retry() {
     local attempt=0
     local exit_code=0
 
-    # Temp file for capturing stderr to detect retryable errors
-    local _retry_stderr_file
-    _retry_stderr_file=$(mktemp /tmp/wiggum-retry-XXXXXX)
+    # Per-attempt stderr files for preserving error context across retries
+    local _retry_stderr_dir
+    _retry_stderr_dir=$(mktemp -d /tmp/wiggum-retry-XXXXXX)
     # shellcheck disable=SC2064
-    trap "rm -f '$_retry_stderr_file'" RETURN
+    trap "rm -rf '$_retry_stderr_dir'" RETURN
 
     while [ "$attempt" -le "$RUNTIME_MAX_RETRIES" ]; do
-        # Clear stderr capture between attempts
-        : > "$_retry_stderr_file"
+        # Per-attempt stderr file
+        local _retry_stderr_file="$_retry_stderr_dir/attempt-${attempt}.stderr"
 
         # Run backend, capturing stderr for error classification
         exit_code=0

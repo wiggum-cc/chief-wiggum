@@ -20,6 +20,7 @@ _LR_ARCHIVE_DIR=""
 _LR_ENABLED="true"
 _LR_MAX_LINES=10000
 _LR_MAX_ARCHIVES=10
+_LR_EXTRA_PATHS=()
 
 # Initialize log rotation module
 #
@@ -44,6 +45,14 @@ log_rotation_init() {
     mkdir -p "$_LR_ARCHIVE_DIR"
 }
 
+# Register an additional file path for rotation checks
+#
+# Args:
+#   path - File path to include in rotation checks
+log_rotation_add_path() {
+    _LR_EXTRA_PATHS+=("$1")
+}
+
 # Check all log files in the logs directory and rotate any that exceed threshold
 #
 # Iterates *.log and *.jsonl files. Skips if rotation is disabled.
@@ -56,6 +65,13 @@ log_rotation_check_all() {
     for file in "$_LR_LOGS_DIR"/*.log "$_LR_LOGS_DIR"/*.jsonl; do
         [ -f "$file" ] || continue
         log_rotation_check "$file"
+    done
+
+    # Check extra registered paths (e.g., heartbeat.log)
+    local extra
+    for extra in "${_LR_EXTRA_PATHS[@]}"; do
+        [ -f "$extra" ] || continue
+        log_rotation_check "$extra"
     done
 }
 

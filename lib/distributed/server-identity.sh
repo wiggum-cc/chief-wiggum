@@ -17,6 +17,7 @@ _SERVER_IDENTITY_LOADED=1
 # Source dependencies
 source "$WIGGUM_HOME/lib/core/logger.sh"
 source "$WIGGUM_HOME/lib/core/platform.sh"
+source "$WIGGUM_HOME/lib/core/atomic-write.sh"
 
 # =============================================================================
 # Configuration
@@ -60,7 +61,7 @@ server_identity_generate() {
     timestamp=$(epoch_now)
 
     local random
-    random=$(head -c 4 /dev/urandom 2>/dev/null | od -An -tx1 | tr -d ' \n' || echo "$(date +%N)")
+    random=$(head -c 4 /dev/urandom 2>/dev/null | od -An -tx1 | tr -d ' \n' || echo "$(date +%N)$$")
 
     echo "wiggum-${hostname}-${timestamp}-${random}"
 }
@@ -113,7 +114,7 @@ server_identity_get_or_create() {
     hostname=$(hostname -f 2>/dev/null || hostname 2>/dev/null || echo "unknown")
 
     # Save identity
-    jq -n \
+    atomic_write "$identity_file" jq -n \
         --arg server_id "$server_id" \
         --arg started_at "$started_at" \
         --arg hostname "$hostname" \
@@ -124,7 +125,7 @@ server_identity_get_or_create() {
             hostname: $hostname,
             pid: ($pid | tonumber),
             version: 1
-        }' > "$identity_file"
+        }'
 
     log_debug "Generated server identity: $server_id"
     echo "$server_id"
@@ -236,7 +237,7 @@ server_config_save() {
     local server_id
     server_id=$(server_identity_get "$ralph_dir")
 
-    jq -n \
+    atomic_write "$config_file" jq -n \
         --arg server_id "$server_id" \
         --arg mode "${WIGGUM_TASK_SOURCE_MODE:-local}" \
         --argjson heartbeat "${SERVER_HEARTBEAT_INTERVAL:-$_SERVER_DEFAULT_HEARTBEAT_INTERVAL}" \
@@ -254,7 +255,7 @@ server_config_save() {
                 stale_threshold_seconds: $stale,
                 max_concurrent_tasks: $max_tasks
             }
-        }' > "$config_file"
+        }'
 }
 
 # =============================================================================
@@ -292,7 +293,7 @@ server_claims_update() {
 
     # Initialize if doesn't exist
     if [ ! -f "$claims_file" ]; then
-        echo '{"tasks":{}}' > "$claims_file"
+        echo '{"tasks":{}}' | atomic_write "$claims_file"
     fi
 
     local tmp_file

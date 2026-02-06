@@ -123,6 +123,7 @@ _setup_signals() {
         exit $EXIT_SIGINT
     }
     trap handle_shutdown_signal INT TERM
+    trap '' PIPE
 }
 
 # Check for rate limit pause file and wait if needed

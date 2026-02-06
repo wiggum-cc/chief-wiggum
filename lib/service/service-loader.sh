@@ -657,6 +657,151 @@ service_get_condition() {
     _service_jq --arg id "$id" '.services[] | select(.id == $id) | .condition // null' -c
 }
 
+# =============================================================================
+# Condition Check Helpers (shared by cache and fallback paths)
+# =============================================================================
+
+# Validate a glob pattern for injection (rejects .., $( , backticks)
+#
+# Args:
+#   pattern - Glob pattern to validate
+#   id      - Service ID (for logging)
+#   field   - Field name (for logging)
+#
+# Returns: 0 if safe, 1 if rejected
+_svc_validate_glob_pattern() {
+    local pattern="$1" id="$2" field="$3"
+    if [[ "$pattern" == *".."* ]] || [[ "$pattern" == *'$('* ]] || [[ "$pattern" == *'`'* ]]; then
+        log_warn "Service $id condition $field rejected: unsafe pattern '$pattern'"
+        return 1
+    fi
+    return 0
+}
+
+# Check file_exists condition
+#
+# Args:
+#   pattern - Glob pattern
+#   id      - Service ID
+#
+# Returns: 0 if pattern matches at least one file, 1 otherwise
+_svc_check_file_exists() {
+    local pattern="$1" id="$2"
+    [ -n "$pattern" ] || return 0
+    _svc_validate_glob_pattern "$pattern" "$id" "file_exists" || return 1
+    # shellcheck disable=SC2086
+    if ! compgen -G $pattern > /dev/null 2>&1; then
+        log_debug "Service $id condition file_exists '$pattern' not met"
+        return 1
+    fi
+    return 0
+}
+
+# Check file_not_exists condition
+#
+# Args:
+#   pattern - Glob pattern
+#   id      - Service ID
+#
+# Returns: 0 if pattern matches no files, 1 otherwise
+_svc_check_file_not_exists() {
+    local pattern="$1" id="$2"
+    [ -n "$pattern" ] || return 0
+    _svc_validate_glob_pattern "$pattern" "$id" "file_not_exists" || return 1
+    # shellcheck disable=SC2086
+    if compgen -G $pattern > /dev/null 2>&1; then
+        log_debug "Service $id condition file_not_exists '$pattern' not met"
+        return 1
+    fi
+    return 0
+}
+
+# Check env_set condition
+#
+# Args:
+#   var - Environment variable name
+#   id  - Service ID
+#
+# Returns: 0 if var is set and non-empty, 1 otherwise
+_svc_check_env_set() {
+    local var="$1" id="$2"
+    [ -n "$var" ] || return 0
+    if [ -z "${!var:-}" ]; then
+        log_debug "Service $id condition env_set '$var' not met"
+        return 1
+    fi
+    return 0
+}
+
+# Check env_equals condition (JSON object of var=value pairs)
+#
+# Args:
+#   json - Compact JSON object (or "null")
+#   id   - Service ID
+#
+# Returns: 0 if all vars match, 1 otherwise
+_svc_check_env_equals() {
+    local json="$1" id="$2"
+    [ "$json" != "null" ] || return 0
+    local env_vars var
+    env_vars=$(echo "$json" | jq -r 'keys[]')
+    for var in $env_vars; do
+        local expected_value
+        expected_value=$(echo "$json" | jq -r --arg v "$var" '.[$v]')
+        local actual_value="${!var:-}"
+        if [ "$actual_value" != "$expected_value" ]; then
+            log_debug "Service $id condition env_equals '$var=$expected_value' not met (actual: '$actual_value')"
+            return 1
+        fi
+    done
+    return 0
+}
+
+# Check env_not_equals condition (JSON object of var=value pairs)
+#
+# Args:
+#   json - Compact JSON object (or "null")
+#   id   - Service ID
+#
+# Returns: 0 if no vars match excluded values, 1 otherwise
+_svc_check_env_not_equals() {
+    local json="$1" id="$2"
+    [ "$json" != "null" ] || return 0
+    local env_ne_vars var
+    env_ne_vars=$(echo "$json" | jq -r 'keys[]')
+    for var in $env_ne_vars; do
+        local excluded_value
+        excluded_value=$(echo "$json" | jq -r --arg v "$var" '.[$v]')
+        local actual_value="${!var:-}"
+        if [ "$actual_value" = "$excluded_value" ]; then
+            log_debug "Service $id condition env_not_equals '$var!=$excluded_value' not met (actual: '$actual_value')"
+            return 1
+        fi
+    done
+    return 0
+}
+
+# Check command condition
+#
+# Args:
+#   cmd - Shell command to test
+#   id  - Service ID
+#
+# Returns: 0 if command exits 0, 1 otherwise
+_svc_check_command() {
+    local cmd="$1" id="$2"
+    [ -n "$cmd" ] || return 0
+    if ! bash -c "$cmd" > /dev/null 2>&1; then
+        log_debug "Service $id condition command '$cmd' not met"
+        return 1
+    fi
+    return 0
+}
+
+# =============================================================================
+# Condition Evaluation
+# =============================================================================
+
 # Check if conditions are met for a service to run
 #
 # Evaluates all configured conditions:
@@ -664,6 +809,7 @@ service_get_condition() {
 # - file_not_exists: Glob pattern must match no files
 # - env_set: Environment variable must be set and non-empty
 # - env_equals: Environment variables must equal specified values
+# - env_not_equals: Environment variables must not equal specified values
 # - command: Shell command must exit with code 0
 #
 # Args:
@@ -677,89 +823,17 @@ service_conditions_met() {
     if [ -n "${_SVC_CACHE["has_condition:${id}"]+x}" ]; then
         [ "${_SVC_CACHE["has_condition:${id}"]}" = "true" ] || return 0
 
-        # Check file_exists
-        local file_exists_pattern="${_SVC_CACHE["cond_fe:${id}"]:-}"
-        if [ -n "$file_exists_pattern" ]; then
-            # Reject patterns with path traversal or command substitution
-            if [[ "$file_exists_pattern" == *".."* ]] || [[ "$file_exists_pattern" == *'$('* ]] || [[ "$file_exists_pattern" == *'`'* ]]; then
-                log_warn "Service $id condition file_exists rejected: unsafe pattern '$file_exists_pattern'"
-                return 1
-            fi
-            # shellcheck disable=SC2086
-            if ! compgen -G $file_exists_pattern > /dev/null 2>&1; then
-                log_debug "Service $id condition file_exists '$file_exists_pattern' not met"
-                return 1
-            fi
-        fi
-
-        # Check file_not_exists
-        local file_not_exists_pattern="${_SVC_CACHE["cond_fne:${id}"]:-}"
-        if [ -n "$file_not_exists_pattern" ]; then
-            # Reject patterns with path traversal or command substitution
-            if [[ "$file_not_exists_pattern" == *".."* ]] || [[ "$file_not_exists_pattern" == *'$('* ]] || [[ "$file_not_exists_pattern" == *'`'* ]]; then
-                log_warn "Service $id condition file_not_exists rejected: unsafe pattern '$file_not_exists_pattern'"
-                return 1
-            fi
-            # shellcheck disable=SC2086
-            if compgen -G $file_not_exists_pattern > /dev/null 2>&1; then
-                log_debug "Service $id condition file_not_exists '$file_not_exists_pattern' not met"
-                return 1
-            fi
-        fi
-
-        # Check env_set
-        local env_set_var="${_SVC_CACHE["cond_es:${id}"]:-}"
-        if [ -n "$env_set_var" ]; then
-            if [ -z "${!env_set_var:-}" ]; then
-                log_debug "Service $id condition env_set '$env_set_var' not met"
-                return 1
-            fi
-        fi
-
-        # Check command
-        local check_command="${_SVC_CACHE["cond_cmd:${id}"]:-}"
-        if [ -n "$check_command" ]; then
-            if ! bash -c "$check_command" > /dev/null 2>&1; then
-                log_debug "Service $id condition command '$check_command' not met"
-                return 1
-            fi
-        fi
+        _svc_check_file_exists "${_SVC_CACHE["cond_fe:${id}"]:-}" "$id" || return 1
+        _svc_check_file_not_exists "${_SVC_CACHE["cond_fne:${id}"]:-}" "$id" || return 1
+        _svc_check_env_set "${_SVC_CACHE["cond_es:${id}"]:-}" "$id" || return 1
+        _svc_check_command "${_SVC_CACHE["cond_cmd:${id}"]:-}" "$id" || return 1
 
         # env_equals/env_not_equals are rare — fall through to jq only if needed
         local condition
         condition=$(service_get_condition "$id")
         if [ "$condition" != "null" ]; then
-            local env_equals
-            env_equals=$(echo "$condition" | jq -c '.env_equals // null')
-            if [ "$env_equals" != "null" ]; then
-                local env_vars
-                env_vars=$(echo "$env_equals" | jq -r 'keys[]')
-                for var in $env_vars; do
-                    local expected_value
-                    expected_value=$(echo "$env_equals" | jq -r --arg v "$var" '.[$v]')
-                    local actual_value="${!var:-}"
-                    if [ "$actual_value" != "$expected_value" ]; then
-                        log_debug "Service $id condition env_equals '$var=$expected_value' not met (actual: '$actual_value')"
-                        return 1
-                    fi
-                done
-            fi
-
-            local env_not_equals
-            env_not_equals=$(echo "$condition" | jq -c '.env_not_equals // null')
-            if [ "$env_not_equals" != "null" ]; then
-                local env_ne_vars
-                env_ne_vars=$(echo "$env_not_equals" | jq -r 'keys[]')
-                for var in $env_ne_vars; do
-                    local excluded_value
-                    excluded_value=$(echo "$env_not_equals" | jq -r --arg v "$var" '.[$v]')
-                    local actual_value="${!var:-}"
-                    if [ "$actual_value" = "$excluded_value" ]; then
-                        log_debug "Service $id condition env_not_equals '$var!=$excluded_value' not met (actual: '$actual_value')"
-                        return 1
-                    fi
-                done
-            fi
+            _svc_check_env_equals "$(echo "$condition" | jq -c '.env_equals // null')" "$id" || return 1
+            _svc_check_env_not_equals "$(echo "$condition" | jq -c '.env_not_equals // null')" "$id" || return 1
         fi
 
         return 0
@@ -771,85 +845,12 @@ service_conditions_met() {
 
     [ "$condition" = "null" ] && return 0
 
-    local file_exists_pattern
-    file_exists_pattern=$(echo "$condition" | jq -r '.file_exists // empty')
-    if [ -n "$file_exists_pattern" ]; then
-        # Reject patterns with path traversal or command substitution
-        if [[ "$file_exists_pattern" == *".."* ]] || [[ "$file_exists_pattern" == *'$('* ]] || [[ "$file_exists_pattern" == *'`'* ]]; then
-            log_warn "Service $id condition file_exists rejected: unsafe pattern '$file_exists_pattern'"
-            return 1
-        fi
-        # shellcheck disable=SC2086
-        if ! compgen -G $file_exists_pattern > /dev/null 2>&1; then
-            log_debug "Service $id condition file_exists '$file_exists_pattern' not met"
-            return 1
-        fi
-    fi
-
-    local file_not_exists_pattern
-    file_not_exists_pattern=$(echo "$condition" | jq -r '.file_not_exists // empty')
-    if [ -n "$file_not_exists_pattern" ]; then
-        # Reject patterns with path traversal or command substitution
-        if [[ "$file_not_exists_pattern" == *".."* ]] || [[ "$file_not_exists_pattern" == *'$('* ]] || [[ "$file_not_exists_pattern" == *'`'* ]]; then
-            log_warn "Service $id condition file_not_exists rejected: unsafe pattern '$file_not_exists_pattern'"
-            return 1
-        fi
-        # shellcheck disable=SC2086
-        if compgen -G $file_not_exists_pattern > /dev/null 2>&1; then
-            log_debug "Service $id condition file_not_exists '$file_not_exists_pattern' not met"
-            return 1
-        fi
-    fi
-
-    local env_set_var
-    env_set_var=$(echo "$condition" | jq -r '.env_set // empty')
-    if [ -n "$env_set_var" ]; then
-        if [ -z "${!env_set_var:-}" ]; then
-            log_debug "Service $id condition env_set '$env_set_var' not met"
-            return 1
-        fi
-    fi
-
-    local env_equals
-    env_equals=$(echo "$condition" | jq -c '.env_equals // null')
-    if [ "$env_equals" != "null" ]; then
-        local env_vars
-        env_vars=$(echo "$env_equals" | jq -r 'keys[]')
-        for var in $env_vars; do
-            local expected_value
-            expected_value=$(echo "$env_equals" | jq -r --arg v "$var" '.[$v]')
-            local actual_value="${!var:-}"
-            if [ "$actual_value" != "$expected_value" ]; then
-                log_debug "Service $id condition env_equals '$var=$expected_value' not met (actual: '$actual_value')"
-                return 1
-            fi
-        done
-    fi
-
-    local env_not_equals
-    env_not_equals=$(echo "$condition" | jq -c '.env_not_equals // null')
-    if [ "$env_not_equals" != "null" ]; then
-        local env_ne_vars
-        env_ne_vars=$(echo "$env_not_equals" | jq -r 'keys[]')
-        for var in $env_ne_vars; do
-            local excluded_value
-            excluded_value=$(echo "$env_not_equals" | jq -r --arg v "$var" '.[$v]')
-            local actual_value="${!var:-}"
-            if [ "$actual_value" = "$excluded_value" ]; then
-                log_debug "Service $id condition env_not_equals '$var!=$excluded_value' not met (actual: '$actual_value')"
-                return 1
-            fi
-        done
-    fi
-
-    local check_command
-    check_command=$(echo "$condition" | jq -r '.command // empty')
-    if [ -n "$check_command" ]; then
-        if ! bash -c "$check_command" > /dev/null 2>&1; then
-            log_debug "Service $id condition command '$check_command' not met"
-            return 1
-        fi
-    fi
+    _svc_check_file_exists "$(echo "$condition" | jq -r '.file_exists // empty')" "$id" || return 1
+    _svc_check_file_not_exists "$(echo "$condition" | jq -r '.file_not_exists // empty')" "$id" || return 1
+    _svc_check_env_set "$(echo "$condition" | jq -r '.env_set // empty')" "$id" || return 1
+    _svc_check_env_equals "$(echo "$condition" | jq -c '.env_equals // null')" "$id" || return 1
+    _svc_check_env_not_equals "$(echo "$condition" | jq -c '.env_not_equals // null')" "$id" || return 1
+    _svc_check_command "$(echo "$condition" | jq -r '.command // empty')" "$id" || return 1
 
     return 0
 }

@@ -192,7 +192,9 @@ github_issue_parse_body_json() {
     local body="$1"
 
     local tmp_dir
-    tmp_dir=$(mktemp -d /tmp/wiggum-parse-XXXXXX)
+    local _parse_tmp_dir="${RALPH_DIR:-/tmp}"
+    mkdir -p "$_parse_tmp_dir/tmp" 2>/dev/null || _parse_tmp_dir="/tmp"
+    tmp_dir=$(mktemp -d "$_parse_tmp_dir/tmp/wiggum-parse-XXXXXX")
 
     _github_issue_parse_body_to_files "$body" "$tmp_dir"
 

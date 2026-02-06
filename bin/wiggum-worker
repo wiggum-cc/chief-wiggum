@@ -13,6 +13,7 @@
 #   wiggum worker merge <ID>             Merge a task's PR
 
 set -euo pipefail
+trap '' PIPE
 
 WIGGUM_HOME="${WIGGUM_HOME:-$HOME/.claude/chief-wiggum}"
 source "$WIGGUM_HOME/lib/core/bin-common.sh"

@@ -998,13 +998,13 @@ wiggum service config --json
 The service runner enforces a `svc_*` prefix requirement for function execution:
 
 1. Functions referenced in `execution.function` must start with `svc_`
-2. Handler functions are defined in `lib/services/*.sh`
+2. Handler functions are defined in `lib/service-handlers/*.sh`
 3. Handlers wrap internal functions, providing a security boundary
 
 ### Handler Pattern
 
 ```bash
-# lib/services/orchestrator-handlers.sh
+# lib/service-handlers/orchestrator-handlers.sh
 
 # Thin wrapper around internal function
 svc_orch_spawn_fix_workers() {
@@ -1019,7 +1019,7 @@ This pattern:
 
 ### Adding New Handlers
 
-1. Create handler in `lib/services/*.sh` with `svc_*` prefix
+1. Create handler in `lib/service-handlers/*.sh` with `svc_*` prefix
 2. Implement as thin wrapper around internal function
 3. Reference in service configuration
 

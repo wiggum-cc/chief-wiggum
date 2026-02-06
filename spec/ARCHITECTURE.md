@@ -710,7 +710,7 @@ Tick-phase services (`pre`/`post`) run synchronously via direct function call â€
 | `lib/service/service-state.sh` | Persist state across restarts |
 | `lib/service/service-scheduler.sh` | Phase runner + timing coordination |
 | `lib/service/service-runner.sh` | Execute services by type |
-| `lib/services/orchestrator-handlers.sh` | `svc_*` handler functions for all services |
+| `lib/service-handlers/orchestrator-handlers.sh` | `svc_*` handler functions for all services |
 | `lib/scheduler/orchestrator-functions.sh` | Implementation functions called by handlers |
 | `lib/orchestrator/lifecycle.sh` | Validation, locking, signals |
 | `lib/orchestrator/arg-parser.sh` | CLI argument parsing |

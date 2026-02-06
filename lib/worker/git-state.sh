@@ -23,6 +23,7 @@ set -euo pipefail
 [ -n "${_GIT_STATE_LOADED:-}" ] && return 0
 _GIT_STATE_LOADED=1
 source "$WIGGUM_HOME/lib/core/platform.sh"
+source "$WIGGUM_HOME/lib/core/atomic-write.sh"
 
 # Get current state from git-state.json
 #
@@ -65,7 +66,7 @@ git_state_set() {
 
     # Initialize or update
     if [ ! -f "$state_file" ]; then
-        jq -n \
+        atomic_write "$state_file" jq -n \
             --arg s "$new_state" \
             --arg t "$timestamp" \
             --arg a "$agent" \
@@ -82,7 +83,7 @@ git_state_set() {
                     agent: $a,
                     reason: $r
                 }]
-            }' > "$state_file"
+            }'
     else
         local old_state
         old_state=$(jq -r '.current_state' "$state_file")
@@ -116,13 +117,13 @@ git_state_set_pr() {
 
     # Create minimal state file if it doesn't exist
     if [ ! -f "$state_file" ]; then
-        jq -n --argjson pr "$pr_number" '{
+        atomic_write "$state_file" jq -n --argjson pr "$pr_number" '{
             current_state: "none",
             pr_number: $pr,
             merge_attempts: 0,
             last_error: null,
             transitions: []
-        }' > "$state_file"
+        }'
     else
         jq --argjson pr "$pr_number" '.pr_number = $pr' "$state_file" > "$state_file.tmp" \
             && mv "$state_file.tmp" "$state_file"

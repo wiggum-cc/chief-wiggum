@@ -4,7 +4,7 @@
 #
 # This module provides the ONLY functions callable by the service scheduler.
 # All service handler functions MUST:
-#   1. Be defined in files under lib/services/
+#   1. Be defined in files under lib/service-handlers/
 #   2. Use the svc_* prefix (enforced by service-runner.sh)
 #
 # These are thin wrappers around the orchestrator functions in
@@ -21,10 +21,10 @@
 _SERVICE_HANDLERS_ORCH_LOADED=1
 
 # Source memory service handlers
-source "$WIGGUM_HOME/lib/services/memory-handlers.sh"
+source "$WIGGUM_HOME/lib/service-handlers/memory-handlers.sh"
 
 # Source meta-agent service handlers
-source "$WIGGUM_HOME/lib/services/meta-handlers.sh"
+source "$WIGGUM_HOME/lib/service-handlers/meta-handlers.sh"
 
 # =============================================================================
 # Orchestrator Service Handlers

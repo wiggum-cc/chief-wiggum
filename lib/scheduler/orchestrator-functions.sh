@@ -37,6 +37,7 @@ _ORCHESTRATOR_FUNCTIONS_LOADED=1
 
 source "$WIGGUM_HOME/lib/core/safe-path.sh"
 source "$WIGGUM_HOME/lib/core/gh-error.sh"
+source "$WIGGUM_HOME/lib/core/atomic-write.sh"
 source "$WIGGUM_HOME/lib/github/issue-sync.sh"
 source "$WIGGUM_HOME/lib/scheduler/orch-resume-decide.sh"
 
@@ -571,8 +572,8 @@ orch_spawn_ready_tasks() {
         [ "$_pwc_cooldown" -gt "$_pwc_max_cooldown" ] && _pwc_cooldown="$_pwc_max_cooldown"
         local _pwc_until=$(( $(epoch_now) + _pwc_cooldown ))
         mkdir -p "$ralph_dir/orchestrator"
-        jq -n --argjson f "$_pwc_failures" --argjson u "$_pwc_until" \
-            '{consecutive_failures:$f, cooldown_until:$u}' > "$_pwc_state"
+        atomic_write "$_pwc_state" jq -n --argjson f "$_pwc_failures" --argjson u "$_pwc_until" \
+            '{consecutive_failures:$f, cooldown_until:$u}'
         log_error "Pre-worker checks failed ($_pwc_failures consecutive) — cooldown ${_pwc_cooldown}s"
         return 0
     fi

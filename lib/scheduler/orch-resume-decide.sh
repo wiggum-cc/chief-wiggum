@@ -12,6 +12,8 @@ set -euo pipefail
 [ -n "${_ORCH_RESUME_DECIDE_LOADED:-}" ] && return 0
 _ORCH_RESUME_DECIDE_LOADED=1
 
+source "$WIGGUM_HOME/lib/core/atomic-write.sh"
+
 # Check if a pipeline step completed (has a result file) vs was interrupted
 #
 # A step that completed (even with FAIL) needs LLM analysis via resume-decide.
@@ -91,12 +93,12 @@ _resume_decide_for_worker() {
             _fast_pipeline=$(jq -r '.pipeline.name // ""' "$worker_dir/pipeline-config.json" 2>/dev/null)
             [[ "$_fast_pipeline" == "null" ]] && _fast_pipeline=""
         fi
-        jq -n --arg step "$current_step" --arg pipe "$_fast_pipeline" '{
+        atomic_write "$worker_dir/resume-decision.json" jq -n --arg step "$current_step" --arg pipe "$_fast_pipeline" '{
             decision: "RETRY",
             pipeline: $pipe,
             resume_step: $step,
             reason: "Step interrupted, direct resume"
-        }' > "$worker_dir/resume-decision.json"
+        }'
         log "Direct RETRY decision for $task_id (interrupted at $current_step)"
         return 0
     fi

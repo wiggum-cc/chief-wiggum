@@ -63,7 +63,7 @@ source "$WIGGUM_HOME/lib/scheduler/smart-routing.sh"
 # Service-based scheduler (for state functions)
 source "$WIGGUM_HOME/lib/service/service-scheduler.sh"
 # Service handlers (svc_* functions)
-source "$WIGGUM_HOME/lib/services/orchestrator-handlers.sh"
+source "$WIGGUM_HOME/lib/service-handlers/orchestrator-handlers.sh"
 # Orchestrator directory migration
 source "$WIGGUM_HOME/lib/orchestrator/migration.sh"
 # Orchestrator lifecycle

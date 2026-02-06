@@ -175,7 +175,9 @@ github_issue_create() {
     done
 
     local result stderr_file exit_code=0
-    stderr_file=$(mktemp /tmp/wiggum-gh-XXXXXX)
+    local _gh_tmp_dir="${RALPH_DIR:-/tmp}"
+    mkdir -p "$_gh_tmp_dir/tmp" 2>/dev/null || _gh_tmp_dir="/tmp"
+    stderr_file=$(mktemp "$_gh_tmp_dir/tmp/wiggum-gh-XXXXXX")
 
     result=$(timeout "${WIGGUM_GH_TIMEOUT:-30}" gh issue create \
         --title "$title" \

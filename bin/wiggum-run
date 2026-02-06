@@ -40,7 +40,7 @@ source "$WIGGUM_HOME/lib/distributed/scheduler-integration.sh"
 # Service-based scheduler (consolidated module includes core + state)
 source "$WIGGUM_HOME/lib/service/service-scheduler.sh"
 # Service handlers (svc_* functions callable via services.json)
-source "$WIGGUM_HOME/lib/services/orchestrator-handlers.sh"
+source "$WIGGUM_HOME/lib/service-handlers/orchestrator-handlers.sh"
 # Orchestrator directory migration (old paths → new paths)
 source "$WIGGUM_HOME/lib/orchestrator/migration.sh"
 # Orchestrator lifecycle (validation, locking, signals, rate-limit pause)
@@ -203,6 +203,7 @@ main() {
     source "$WIGGUM_HOME/lib/core/log-rotation.sh"
     load_log_rotation_config
     log_rotation_init "$RALPH_DIR/logs"
+    log_rotation_add_path "$RALPH_DIR/server/heartbeat.log"
 
     # Load rate limit configuration
     load_rate_limit_config

@@ -23,6 +23,7 @@
 [ -n "${_PIPELINE_RUNNER_LOADED:-}" ] && return 0
 _PIPELINE_RUNNER_LOADED=1
 source "$WIGGUM_HOME/lib/core/platform.sh"
+source "$WIGGUM_HOME/lib/core/atomic-write.sh"
 
 source "$WIGGUM_HOME/lib/utils/activity-log.sh"
 source "$WIGGUM_HOME/lib/core/agent-base.sh"
@@ -1162,7 +1163,7 @@ _write_pipeline_config() {
     local resume_instructions="${PIPELINE_RESUME_INSTRUCTIONS:-}"
 
     # Write the full config
-    jq -n \
+    atomic_write "$worker_dir/pipeline-config.json" jq -n \
         --arg name "${PIPELINE_NAME:-unnamed}" \
         --arg source "$pipeline_source" \
         --arg plan_file "$plan_file" \
@@ -1182,7 +1183,7 @@ _write_pipeline_config() {
                 step_id: ""
             },
             steps: $steps
-        }' > "$worker_dir/pipeline-config.json"
+        }'
 
     log_debug "Wrote pipeline-config.json with $(echo "$steps_json" | jq 'keys | length') steps"
 }

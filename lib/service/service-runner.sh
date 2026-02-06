@@ -302,7 +302,7 @@ _run_service_function() {
     # This ensures only explicitly registered service handlers can be called
     if [[ "$func" != "${_SERVICE_FUNCTION_PREFIX}"* ]]; then
         log_error "Service $id: function '$func' rejected - must start with '${_SERVICE_FUNCTION_PREFIX}'"
-        log_error "Service handlers must be defined in lib/services/ with svc_* prefix"
+        log_error "Service handlers must be defined in lib/service-handlers/ with svc_* prefix"
         service_state_mark_failed "$id"
         return 1
     fi
