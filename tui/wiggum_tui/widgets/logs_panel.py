@@ -22,6 +22,70 @@ from ..data.worker_scanner import WORKER_PATTERN
 class LogsPanel(Widget):
     """Logs panel with tree-based source selector and log viewer."""
 
+    # --- Tree state preservation helpers (shared pattern with ConversationPanel) ---
+
+    @staticmethod
+    def _get_node_key(node: TreeNode) -> str:
+        """Generate a stable key for a node based on its label content."""
+        label = str(node.label)
+        # Remove Rich tags for comparison
+        clean_label = re.sub(r'\[/?[^\]]*\]', '', label)
+        return clean_label[:100]
+
+    def _get_expanded_keys(self, node: TreeNode, parent_key: str = "") -> set[str]:
+        """Get set of keys for all expanded nodes using content-based identification."""
+        expanded = set()
+        node_key = self._get_node_key(node)
+        full_key = f"{parent_key}/{node_key}" if parent_key else node_key
+
+        if node.is_expanded:
+            expanded.add(full_key)
+        for child in node.children:
+            expanded.update(self._get_expanded_keys(child, full_key))
+        return expanded
+
+    def _restore_expanded_keys(self, node: TreeNode, expanded_keys: set[str], parent_key: str = "") -> None:
+        """Restore expanded state using content-based keys."""
+        node_key = self._get_node_key(node)
+        full_key = f"{parent_key}/{node_key}" if parent_key else node_key
+
+        if full_key in expanded_keys:
+            node.expand()
+        else:
+            node.collapse()
+        for child in node.children:
+            self._restore_expanded_keys(child, expanded_keys, full_key)
+
+    def _get_cursor_key(self, tree: Tree) -> str | None:
+        """Get the key for the currently selected node."""
+        if not tree.cursor_node:
+            return None
+        keys = []
+        node = tree.cursor_node
+        while node:
+            keys.append(self._get_node_key(node))
+            node = node.parent
+        keys.reverse()
+        return "/".join(keys)
+
+    def _restore_cursor_by_key(self, tree: Tree, cursor_key: str | None) -> None:
+        """Try to restore cursor position using content-based key."""
+        if not cursor_key:
+            return
+        key_parts = cursor_key.split("/")
+        node = tree.root
+        for key_part in key_parts[1:]:
+            found = False
+            for child in node.children:
+                if self._get_node_key(child) == key_part:
+                    node = child
+                    found = True
+                    break
+            if not found:
+                break
+        if node != tree.root:
+            tree.select_node(node)
+
     DEFAULT_CSS = """
     LogsPanel {
         height: 1fr;
@@ -141,6 +205,12 @@ class LogsPanel(Widget):
         """Populate the source tree with global logs and worker logs."""
         try:
             tree = self.query_one("#logs-source-tree", Tree)
+
+            # Save expanded state and cursor position before clearing
+            expanded_keys = self._get_expanded_keys(tree.root)
+            cursor_key = self._get_cursor_key(tree)
+            had_content = bool(tree.root.children)
+
             tree.clear()
             self._tree_sources.clear()
 
@@ -240,7 +310,12 @@ class LogsPanel(Widget):
                                         data=key,
                                     )
 
-            tree.root.expand()
+            # Restore expanded state if we had content before, otherwise use defaults
+            if had_content and expanded_keys:
+                self._restore_expanded_keys(tree.root, expanded_keys)
+                self._restore_cursor_by_key(tree, cursor_key)
+            else:
+                tree.root.expand()
 
         except Exception:
             pass

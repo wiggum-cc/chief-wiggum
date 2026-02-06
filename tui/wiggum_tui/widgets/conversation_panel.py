@@ -184,6 +184,10 @@ class ConversationPanel(Widget):
         self._last_data_hash: str = ""
         self._last_workers_dir_mtime: float = 0.0
         self._last_history_dir_mtime: float = 0.0
+        # For incremental tree updates
+        self._rendered_turn_count: int = 0
+        self._rendered_log_names: set[str] = set()
+        self._log_node_map: dict[str, TreeNode] = {}  # log_name -> tree node
 
     def _compute_data_hash(self, conversation: Conversation | None) -> str:
         """Compute a hash of conversation data for change detection."""
@@ -374,12 +378,19 @@ class ConversationPanel(Widget):
         self._populate_tree()
 
     def _get_node_key(self, node: TreeNode) -> str:
-        """Generate a stable key for a node based on its label content."""
+        """Generate a stable key for a node based on its label content.
+
+        Strips Rich markup and relative time portions to ensure stable keys
+        even when time-based labels change (e.g., "3 min ago" -> "4 min ago").
+        """
         # Extract text content from the node label, stripping Rich markup
         label = str(node.label)
         # Remove Rich tags for comparison
-        import re
         clean_label = re.sub(r'\[/?[^\]]*\]', '', label)
+        # Remove relative time portions that change frequently
+        # Patterns: "(X min ago)", "(X hours ago)", "(X days ago)", "(just now)", "(X sec ago)"
+        clean_label = re.sub(r'\s*\(\d+\s*(sec|min|hour|day)s?\s+ago\)', '', clean_label)
+        clean_label = re.sub(r'\s*\(just now\)', '', clean_label)
         # Use first 100 chars to keep key size reasonable
         return clean_label[:100]
 
@@ -439,8 +450,14 @@ class ConversationPanel(Widget):
         if node != tree.root:
             tree.select_node(node)
 
+    def _reset_incremental_state(self) -> None:
+        """Reset state tracking for incremental updates."""
+        self._rendered_turn_count = 0
+        self._rendered_log_names.clear()
+        self._log_node_map.clear()
+
     def _populate_tree(self) -> None:
-        """Populate the tree with conversation turns."""
+        """Populate the tree with conversation turns (full rebuild)."""
         try:
             tree = self.query_one("#conv-tree", Tree)
 
@@ -450,6 +467,7 @@ class ConversationPanel(Widget):
             had_content = bool(tree.root.children)
 
             tree.clear()
+            self._reset_incremental_state()
 
             if not self.conversation or not self.conversation.turns:
                 tree.root.add_leaf("No conversation data available")
@@ -499,12 +517,18 @@ class ConversationPanel(Widget):
                         f"[#cba6f7]{current_log_name}[/]{rel_time_str}{result_info}",
                         expand=first_log,
                     )
+                    # Track for incremental updates
+                    self._log_node_map[current_log_name] = log_node
+                    self._rendered_log_names.add(current_log_name)
                     first_log = False
                 else:
                     first_turn_in_log = False
 
                 if log_node:
                     self._add_turn_to_tree(log_node, turn, i, first_turn_in_log)
+
+            # Track rendered turn count for incremental updates
+            self._rendered_turn_count = len(self.conversation.turns)
 
             # Restore expanded state if we had content before, otherwise use defaults
             if had_content and expanded_keys:
@@ -513,6 +537,74 @@ class ConversationPanel(Widget):
                 self._restore_cursor_by_key(tree, cursor_key)
             else:
                 tree.root.expand()
+
+        except Exception:
+            pass
+
+    def _update_tree_incremental(self) -> None:
+        """Update tree incrementally - only add new turns without clearing.
+
+        This is much faster than full rebuild for large conversations.
+        """
+        if not self.conversation or not self.conversation.turns:
+            return
+
+        try:
+            tree = self.query_one("#conv-tree", Tree)
+
+            # Update summary in root label
+            summary = get_conversation_summary(self.conversation)
+            tree.root.label = (
+                f"Conversation │ {summary['turns']} turns │ "
+                f"{summary['tool_calls']} tool calls │ "
+                f"${summary['cost_usd']:.2f}"
+            )
+
+            # Only process turns we haven't rendered yet
+            new_turns = self.conversation.turns[self._rendered_turn_count:]
+            if not new_turns:
+                return
+
+            current_log_name = ""
+            log_node: TreeNode | None = None
+
+            for i, turn in enumerate(new_turns, start=self._rendered_turn_count):
+                if turn.log_name != current_log_name:
+                    current_log_name = turn.log_name
+                    first_turn_in_log = True
+
+                    # Check if we already have a node for this log
+                    if current_log_name in self._log_node_map:
+                        log_node = self._log_node_map[current_log_name]
+                    else:
+                        # Create new log node
+                        result = next(
+                            (r for r in self.conversation.results if r.log_name == current_log_name),
+                            None,
+                        )
+                        result_info = ""
+                        if result:
+                            result_info = f" │ {result.num_turns} turns │ ${result.total_cost_usd:.2f}"
+
+                        rel_time_str = ""
+                        epoch_match = re.search(r'(\d{10})', current_log_name)
+                        if epoch_match:
+                            rel_time_str = f" [#7f849c]({format_relative_time(int(epoch_match.group(1)))})[/]"
+
+                        # New logs get expanded by default (they're the active ones)
+                        log_node = tree.root.add(
+                            f"[#cba6f7]{current_log_name}[/]{rel_time_str}{result_info}",
+                            expand=True,
+                        )
+                        self._log_node_map[current_log_name] = log_node
+                        self._rendered_log_names.add(current_log_name)
+                else:
+                    first_turn_in_log = False
+
+                if log_node:
+                    self._add_turn_to_tree(log_node, turn, i, first_turn_in_log)
+
+            self._rendered_turn_count = len(self.conversation.turns)
 
         except Exception:
             pass
@@ -812,7 +904,13 @@ class ConversationPanel(Widget):
         self._last_data_hash = new_hash
 
         self.conversation = new_conversation
-        self._populate_tree()
+
+        # Use incremental update if we already have rendered content
+        # This avoids the expensive tree.clear() + full rebuild
+        if self._rendered_turn_count > 0:
+            self._update_tree_incremental()
+        else:
+            self._populate_tree()
 
     def select_task(self, task_id: str) -> None:
         """Select a specific task programmatically."""
