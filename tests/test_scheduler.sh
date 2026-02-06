@@ -428,6 +428,46 @@ test_get_resumable_workers_output_has_four_fields() {
 }
 
 # =============================================================================
+# _scheduler_reclaim_workerless_tasks() Tests
+# =============================================================================
+
+test_reclaim_workerless_in_progress_task() {
+    # Mark TASK-001 as in-progress in the kanban (no worker dir)
+    update_kanban_status "$RALPH_DIR/kanban.md" "TASK-001" "="
+
+    # Run scheduler_tick — should reclaim and make TASK-001 ready again
+    scheduler_tick
+
+    local status
+    status=$(get_task_status "$RALPH_DIR/kanban.md" "TASK-001")
+    assert_equals " " "$status" "Workerless in-progress task should be reclaimed to pending"
+}
+
+test_reclaim_skips_task_with_worker_dir() {
+    # Mark TASK-002 as in-progress and create a worker dir
+    update_kanban_status "$RALPH_DIR/kanban.md" "TASK-002" "="
+    mkdir -p "$RALPH_DIR/workers/worker-TASK-002-1234567890"
+
+    scheduler_tick
+
+    local status
+    status=$(get_task_status "$RALPH_DIR/kanban.md" "TASK-002")
+    assert_equals "=" "$status" "In-progress task with worker dir should not be reclaimed"
+}
+
+test_reclaim_skips_task_in_pool() {
+    # Mark TASK-001 as in-progress and add to pool (simulates spawn in progress)
+    update_kanban_status "$RALPH_DIR/kanban.md" "TASK-001" "="
+    pool_add "55555" "main" "TASK-001"
+
+    scheduler_tick
+
+    local status
+    status=$(get_task_status "$RALPH_DIR/kanban.md" "TASK-001")
+    assert_equals "=" "$status" "In-progress task tracked in pool should not be reclaimed"
+}
+
+# =============================================================================
 # Run Tests
 # =============================================================================
 
@@ -461,6 +501,9 @@ run_test test_get_resumable_workers_resolve_type_from_git_state
 run_test test_get_resumable_workers_fix_type_from_pipeline_config
 run_test test_get_resumable_workers_resolve_type_from_pipeline_config
 run_test test_get_resumable_workers_output_has_four_fields
+run_test test_reclaim_workerless_in_progress_task
+run_test test_reclaim_skips_task_with_worker_dir
+run_test test_reclaim_skips_task_in_pool
 
 print_test_summary
 exit_with_test_result

@@ -178,6 +178,49 @@ scheduler_restore_workers() {
     fi
 }
 
+# Reclaim in-progress tasks that have no worker directory
+#
+# Detects tasks marked [=] in the kanban that have no corresponding worker
+# directory (e.g., orchestrator crashed between kanban update and spawn).
+# Resets them to [ ] (pending) so get_ready_tasks() can pick them up.
+#
+# Uses _SCHED_TICK_METADATA (must be set before calling).
+# Invalidates metadata cache and refreshes _SCHED_TICK_METADATA if any
+# tasks are reclaimed.
+_scheduler_reclaim_workerless_tasks() {
+    local in_progress_tasks
+    in_progress_tasks=$(echo "$_SCHED_TICK_METADATA" | awk -F'|' '$2 == "=" { print $1 }')
+
+    [ -n "$in_progress_tasks" ] || return 0
+
+    local reclaimed=0
+
+    for task_id in $in_progress_tasks; do
+        [ -n "$task_id" ] || continue
+
+        # Skip if the worker pool already tracks this task (process may be starting)
+        pool_has_task "$task_id" > /dev/null 2>&1 && continue
+
+        # Check if any worker directory exists for this task
+        local worker_dir
+        worker_dir=$(find_any_worker_by_task_id "$_SCHED_RALPH_DIR" "$task_id") || true
+
+        if [ -z "$worker_dir" ] || [ ! -d "$worker_dir" ]; then
+            log_warn "Reclaiming in-progress task $task_id — no worker directory found"
+            update_kanban_status "$_SCHED_RALPH_DIR/kanban.md" "$task_id" " " || true
+            ((++reclaimed)) || true
+        fi
+    done
+
+    if [ "$reclaimed" -gt 0 ]; then
+        log "Reclaimed $reclaimed workerless in-progress task(s)"
+        # Invalidate metadata cache so get_ready_tasks sees updated statuses
+        _KANBAN_CACHE_MTIME=""
+        _SCHED_TICK_METADATA=$(_get_cached_metadata "$_SCHED_RALPH_DIR/kanban.md")
+        SCHED_SCHEDULING_EVENT=true
+    fi
+}
+
 # One tick of the scheduling loop
 #
 # Updates SCHED_READY_TASKS, SCHED_BLOCKED_TASKS, SCHED_PENDING_TASKS
@@ -190,6 +233,11 @@ scheduler_tick() {
 
     # Parse kanban metadata once in the parent process (avoids subshell cache loss)
     _SCHED_TICK_METADATA=$(_get_cached_metadata "$_SCHED_RALPH_DIR/kanban.md")
+
+    # Reclaim in-progress tasks that have no worker directory.
+    # These are stuck: get_ready_tasks only picks up status=" " and nothing else
+    # will re-schedule an [=] task without a worker.
+    _scheduler_reclaim_workerless_tasks
 
     # Get tasks ready to run, passing pre-fetched metadata to avoid redundant parse.
     # Returns "effective_pri|task_id" lines when metadata is passed.
