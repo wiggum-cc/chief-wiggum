@@ -61,7 +61,7 @@ class ServiceExecutor:
             functions: List of svc_* function names to call in order.
 
         Returns:
-            True if all succeeded, False on any failure.
+            True if all succeeded, False on any failure or timeout.
         """
         if not functions:
             return True
@@ -69,19 +69,23 @@ class ServiceExecutor:
         cmd = ["bash", self._bridge, "phase", phase] + functions
         log.log_debug(f"Bridge phase {phase}: {' '.join(functions)}")
 
-        result = subprocess.run(
-            cmd,
-            env=self._env,
-            cwd=self._env.get("PROJECT_DIR"),
-            capture_output=False,
-            timeout=600,
-        )
-        if result.returncode != 0:
-            log.log_error(
-                f"Bridge phase {phase} failed (exit {result.returncode})",
+        try:
+            result = subprocess.run(
+                cmd,
+                env=self._env,
+                cwd=self._env.get("PROJECT_DIR"),
+                capture_output=False,
+                timeout=600,
             )
+            if result.returncode != 0:
+                log.log_error(
+                    f"Bridge phase {phase} failed (exit {result.returncode})",
+                )
+                return False
+            return True
+        except subprocess.TimeoutExpired:
+            log.log_error(f"Bridge phase {phase} timed out after 600s")
             return False
-        return True
 
     def run_function(
         self,
@@ -95,7 +99,7 @@ class ServiceExecutor:
             extra_args: Additional arguments to pass.
 
         Returns:
-            Exit code from the subprocess.
+            Exit code from the subprocess (124 on timeout, like GNU timeout).
         """
         func = svc.exec_function
         if not func:
@@ -107,14 +111,18 @@ class ServiceExecutor:
             cmd.extend(extra_args)
 
         log.log_debug(f"Bridge function: {func}")
-        result = subprocess.run(
-            cmd,
-            env=self._env,
-            cwd=self._env.get("PROJECT_DIR"),
-            capture_output=False,
-            timeout=svc.timeout or 600,
-        )
-        return result.returncode
+        try:
+            result = subprocess.run(
+                cmd,
+                env=self._env,
+                cwd=self._env.get("PROJECT_DIR"),
+                capture_output=False,
+                timeout=svc.timeout or 600,
+            )
+            return result.returncode
+        except subprocess.TimeoutExpired:
+            log.log_warn(f"Service {svc.id} timed out after {svc.timeout or 600}s")
+            return 124  # GNU timeout exit code
 
     def run_command(self, svc: ServiceConfig) -> int:
         """Run a command-type service.
@@ -123,7 +131,7 @@ class ServiceExecutor:
             svc: Service config with execution.command.
 
         Returns:
-            Exit code.
+            Exit code (124 on timeout, like GNU timeout).
         """
         cmd_str = svc.exec_command
         if not cmd_str:
@@ -131,14 +139,18 @@ class ServiceExecutor:
             return 1
 
         log.log_debug(f"Bridge command: {cmd_str}")
-        result = subprocess.run(
-            ["bash", "-c", cmd_str],
-            env=self._env,
-            cwd=self._env.get("PROJECT_DIR"),
-            capture_output=False,
-            timeout=svc.timeout or 600,
-        )
-        return result.returncode
+        try:
+            result = subprocess.run(
+                ["bash", "-c", cmd_str],
+                env=self._env,
+                cwd=self._env.get("PROJECT_DIR"),
+                capture_output=False,
+                timeout=svc.timeout or 600,
+            )
+            return result.returncode
+        except subprocess.TimeoutExpired:
+            log.log_warn(f"Service {svc.id} timed out after {svc.timeout or 600}s")
+            return 124  # GNU timeout exit code
 
     def run_function_background(
         self,
