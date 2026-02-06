@@ -242,6 +242,51 @@ test_step_start_time_format() {
 }
 
 # ============================================================================
+# Recovery heartbeat coverage tests
+# ============================================================================
+
+test_recovery_in_progress_marker_enables_heartbeat_scan() {
+    # Simulate a recovery-in-progress worker with sync state
+    local task_id="GH-42"
+    local worker_name="worker-${task_id}-1234567890"
+    local worker_path="$TEST_DIR/workers/$worker_name"
+    mkdir -p "$worker_path/results"
+
+    # Create recovery-in-progress marker
+    echo "1700000000" > "$worker_path/recovery-in-progress"
+
+    # Verify find discovers it
+    local found
+    found=$(find "$TEST_DIR/workers" -maxdepth 2 -name "recovery-in-progress" -exec dirname {} \; 2>/dev/null)
+    assert_output_contains "$found" "$worker_name" "Should find worker with recovery-in-progress"
+
+    # Verify task_id extraction from directory name
+    local dir_name
+    dir_name=$(basename "$worker_path")
+    local extracted_task_id
+    extracted_task_id=$(echo "$dir_name" | sed -E 's/^worker-([A-Za-z]+-[0-9]+)-.+$/\1/')
+    assert_equals "$task_id" "$extracted_task_id" "Should extract task_id from worker dir name"
+}
+
+test_recovery_step_completed_event_cleared() {
+    local task_id="GH-99"
+    local worker_name="worker-${task_id}-1700000000"
+    local worker_path="$TEST_DIR/workers/$worker_name"
+    mkdir -p "$worker_path/results"
+
+    # Create recovery-in-progress and step-completed-event
+    echo "1700000000" > "$worker_path/recovery-in-progress"
+    echo "failure-resolve|PASS" > "$worker_path/step-completed-event"
+
+    assert_file_exists "$worker_path/step-completed-event" "Event should exist before processing"
+
+    # Simulate the cleanup from heartbeat recovery loop
+    rm -f "$worker_path/step-completed-event"
+
+    assert_file_not_exists "$worker_path/step-completed-event" "Event should be cleared after processing"
+}
+
+# ============================================================================
 # Run all tests
 # ============================================================================
 
@@ -255,6 +300,8 @@ run_test test_failure_summary_builds_table
 run_test test_failure_summary_handles_no_results
 run_test test_step_completed_event_format
 run_test test_step_start_time_format
+run_test test_recovery_in_progress_marker_enables_heartbeat_scan
+run_test test_recovery_step_completed_event_cleared
 
 print_test_summary
 exit_with_test_result

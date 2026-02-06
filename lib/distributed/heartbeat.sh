@@ -277,6 +277,51 @@ heartbeat_update_all() {
         fi
     done <<< "$owned_issues"
 
+    # Also cover workers in failure-recovery (issues are closed, so
+    # claim_list_owned misses them since it filters --state open)
+    if [ -d "$ralph_dir/workers" ] && [ -f "$ralph_dir/github-sync-state.json" ]; then
+        local recovery_dir
+        while IFS= read -r recovery_dir; do
+            [ -n "$recovery_dir" ] || continue
+            [ -d "$recovery_dir" ] || continue
+
+            # Extract task_id from worker directory name (worker-GH-42-1234567890 → GH-42)
+            local dir_name
+            dir_name=$(basename "$recovery_dir")
+            local recovery_task_id
+            recovery_task_id=$(echo "$dir_name" | sed -E 's/^worker-([A-Za-z]+-[0-9]+)-.+$/\1/')
+            [ -n "$recovery_task_id" ] || continue
+
+            # Look up issue number from sync state
+            local entry
+            entry=$(jq -r --arg tid "$recovery_task_id" \
+                '.issues[$tid] // null' "$ralph_dir/github-sync-state.json" 2>/dev/null)
+            [ "$entry" != "null" ] && [ -n "$entry" ] || continue
+
+            local recovery_issue
+            recovery_issue=$(echo "$entry" | jq -r '.issue_number')
+            [ -n "$recovery_issue" ] && [ "$recovery_issue" != "null" ] || continue
+
+            # Check for step-completed event
+            if [ -f "$recovery_dir/step-completed-event" ]; then
+                _HEARTBEAT_LAST[$recovery_issue]=0
+                rm -f "$recovery_dir/step-completed-event"
+            fi
+
+            # Throttle check
+            local rlast="${_HEARTBEAT_LAST[$recovery_issue]:-0}"
+            local rnow
+            rnow=$(epoch_now)
+            if [ $((rnow - rlast)) -lt "$_HEARTBEAT_INTERVAL" ]; then
+                continue
+            fi
+
+            if heartbeat_update_task "$recovery_issue" "$server_id" "$ralph_dir" "$recovery_task_id"; then
+                ((++updated))
+            fi
+        done < <(find "$ralph_dir/workers" -maxdepth 2 -name "recovery-in-progress" -exec dirname {} \; 2>/dev/null)
+    fi
+
     if [ "$updated" -gt 0 ]; then
         log_debug "Updated $updated heartbeat(s)"
     fi
