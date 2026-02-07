@@ -386,15 +386,17 @@ git_create_commit() {
             return 1
         fi
 
+        # Set git author/committer identity for this commit
+        git_set_identity
+
         # Create commit message
         local commit_msg="${task_id}: finalization
 
 ${task_desc}
 Worker: $worker_id
-Priority: ${task_priority}"
+Priority: ${task_priority}
 
-        # Set git author/committer identity for this commit
-        git_set_identity
+Co-Authored-By: ${WIGGUM_GIT_AUTHOR_NAME} <${WIGGUM_GIT_AUTHOR_EMAIL}>"
 
         if ! git commit --no-gpg-sign -m "$commit_msg" 2>&1; then
             log_error "Failed to create commit"

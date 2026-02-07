@@ -603,19 +603,21 @@ _has_repeated_step_failures() {
 
     local threshold="${WIGGUM_MAX_STEP_RETRIES:-3}"
 
-    # Count consecutive entries from most recent where step is the same
+    # Count consecutive entries from most recent where step is the same.
+    # USER_RETRY entries break the chain (user explicitly requested retry).
     local consecutive_count
     consecutive_count=$(jq -r --argjson threshold "$threshold" '
         (.history // []) |
-        [.[] | select(.step != null and .step != "") | .step] |
         reverse |
-        if length == 0 then 0
-        else
-            .[0] as $first |
-            reduce .[] as $s (0;
-                if $s == $first then . + 1 else . end
-            )
-        end
+        reduce .[] as $entry ({count: 0, first: null, done: false};
+            if .done then .
+            elif $entry.decision == "USER_RETRY" then .done = true
+            elif ($entry.step == null or $entry.step == "") then .
+            elif .first == null then .first = $entry.step | .count = 1
+            elif $entry.step == .first then .count += 1
+            else .done = true
+            end
+        ) | .count
     ' "$state_file" 2>/dev/null)
     consecutive_count="${consecutive_count:-0}"
 
