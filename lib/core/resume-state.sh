@@ -229,8 +229,8 @@ resume_state_max_exceeded() {
 
 # Reset resume state for a user-initiated retry
 #
-# Clears terminal flag and cooldown while preserving attempt_count and
-# history. Appends a USER_RETRY history entry for audit trail.
+# Resets attempt_count, terminal flag, and cooldown so the task gets a
+# fresh start. Appends a USER_RETRY history entry for audit trail.
 #
 # Args:
 #   worker_dir - Worker directory path
@@ -245,7 +245,8 @@ resume_state_reset_for_user_retry() {
 
     state=$(echo "$state" | jq \
         --argjson now "$now" \
-        '.terminal = false
+        '.attempt_count = 0
+        | .terminal = false
         | .terminal_reason = ""
         | .cooldown_until = 0
         | .history += [{

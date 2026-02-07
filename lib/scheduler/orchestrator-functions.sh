@@ -1363,8 +1363,22 @@ orch_github_resume_trigger() {
 
         log "github-resume-trigger: processing resume request for $task_id (#$issue_number)"
 
-        # Reset worker state
+        # Reset worker state — all retry counters get a fresh start
         resume_state_reset_for_user_retry "$worker_dir"
+
+        # Reset git-state counters (merge + recovery attempts)
+        source "$WIGGUM_HOME/lib/worker/git-state.sh"
+        if [ -f "$worker_dir/git-state.json" ]; then
+            git_state_reset_merge_attempts "$worker_dir"
+            git_state_reset_recovery_attempts "$worker_dir"
+            git_state_set_error "$worker_dir" ""
+            # Transition out of "failed" so merge-manager will retry
+            if git_state_is "$worker_dir" "failed"; then
+                git_state_set "$worker_dir" "needs_merge" \
+                    "github-resume-trigger" "User-initiated retry — counters reset"
+            fi
+        fi
+
         rm -f "$worker_dir/resume-decision.json" \
               "$worker_dir/resume-decision.json.consumed" \
               "$worker_dir/recovery-attempted"

@@ -57,7 +57,7 @@ test_reset_clears_cooldown() {
     assert_equals "1" "$is_cooling" "Should NOT be cooling after reset"
 }
 
-test_reset_preserves_attempt_count() {
+test_reset_clears_attempt_count() {
     # Increment attempt count
     resume_state_increment "$TEST_WORKER_DIR" "RETRY" "default" "execution" "Attempt 1"
     resume_state_increment "$TEST_WORKER_DIR" "RETRY" "default" "execution" "Attempt 2"
@@ -66,12 +66,12 @@ test_reset_preserves_attempt_count() {
     before_count=$(resume_state_attempts "$TEST_WORKER_DIR")
     assert_equals "2" "$before_count" "Should have 2 attempts before reset"
 
-    # Reset
+    # Reset — user-initiated retry should clear all counters
     resume_state_reset_for_user_retry "$TEST_WORKER_DIR"
 
     local after_count
     after_count=$(resume_state_attempts "$TEST_WORKER_DIR")
-    assert_equals "2" "$after_count" "Should preserve attempt count after reset"
+    assert_equals "0" "$after_count" "Should reset attempt count to 0"
 }
 
 test_reset_appends_user_retry_history() {
@@ -292,7 +292,7 @@ test_recovery_step_completed_event_cleared() {
 
 run_test test_reset_clears_terminal
 run_test test_reset_clears_cooldown
-run_test test_reset_preserves_attempt_count
+run_test test_reset_clears_attempt_count
 run_test test_reset_appends_user_retry_history
 run_test test_reset_after_terminal_allows_resume
 run_test test_stale_file_cleanup_pattern

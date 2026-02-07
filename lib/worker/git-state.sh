@@ -348,6 +348,22 @@ git_state_get_recovery_attempts() {
     jq -r '.recovery_attempts // 0' "$state_file"
 }
 
+# Reset recovery attempts counter to 0
+#
+# Args:
+#   worker_dir - Worker directory path
+#
+# Returns: 1 if state file doesn't exist
+git_state_reset_recovery_attempts() {
+    local worker_dir="$1"
+    local state_file="$worker_dir/git-state.json"
+
+    [ -f "$state_file" ] || return 1
+
+    jq '.recovery_attempts = 0' "$state_file" > "$state_file.tmp" \
+        && mv "$state_file.tmp" "$state_file"
+}
+
 # Clear/reset state file (for testing or recovery)
 #
 # Args:
