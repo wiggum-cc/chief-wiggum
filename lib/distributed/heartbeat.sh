@@ -117,11 +117,15 @@ $progress_table"
     fi
 
     # Find last heartbeat comment: update only if it belongs to this server,
-    # otherwise create a new one (don't overwrite another server's heartbeat)
+    # otherwise create a new one (don't overwrite another server's heartbeat).
+    #
+    # Uses REST API (not gh issue view --json comments) because the REST
+    # endpoint returns numeric .id needed for the PATCH endpoint, whereas
+    # the GraphQL comments object only exposes the node ID.
     local last_comment=""
-    last_comment=$(timeout "${WIGGUM_GH_TIMEOUT:-30}" gh issue view "$issue_number" \
-        --json comments \
-        --jq '[.comments[] | select(.body | contains("<!-- wiggum:heartbeat -->"))] | last // empty' \
+    last_comment=$(timeout "${WIGGUM_GH_TIMEOUT:-30}" gh api \
+        "repos/{owner}/{repo}/issues/$issue_number/comments?per_page=30&direction=desc" \
+        --jq '[.[] | select(.body | contains("<!-- wiggum:heartbeat -->"))][0] // empty' \
         2>/dev/null) || true
 
     local comment_id=""
@@ -130,11 +134,11 @@ $progress_table"
         comment_server=$(echo "$last_comment" | jq -r \
             '.body | capture("\\*\\*Server:\\*\\* (?<s>[^\\n]*)") | .s // empty' 2>/dev/null) || true
         if [ "$comment_server" = "$server_id" ]; then
-            comment_id=$(echo "$last_comment" | jq -r '.databaseId // empty' 2>/dev/null) || true
+            comment_id=$(echo "$last_comment" | jq -r '.id // empty' 2>/dev/null) || true
 
             # Skip if this server's last heartbeat was within 60 seconds (server-side dedup)
             local comment_updated_at=""
-            comment_updated_at=$(echo "$last_comment" | jq -r '.updatedAt // empty' 2>/dev/null) || true
+            comment_updated_at=$(echo "$last_comment" | jq -r '.updated_at // empty' 2>/dev/null) || true
             if [ -n "$comment_updated_at" ]; then
                 local comment_epoch=0
                 comment_epoch=$(date -d "$comment_updated_at" +%s 2>/dev/null) || \
