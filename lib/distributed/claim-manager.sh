@@ -292,11 +292,11 @@ claim_update_heartbeat() {
 $progress_table"
     fi
 
-    # Find existing heartbeat comment
+    # Find existing heartbeat comment (use databaseId for REST API compatibility)
     local comments comment_id=""
     comments=$(timeout "$_CLAIM_GH_TIMEOUT" gh issue view "$issue_number" \
         --json comments \
-        --jq '.comments[] | select(.body | contains("<!-- wiggum:heartbeat -->")) | .id' \
+        --jq '.comments[] | select(.body | contains("<!-- wiggum:heartbeat -->")) | .databaseId' \
         2>/dev/null) || true
 
     comment_id=$(echo "$comments" | head -1)
