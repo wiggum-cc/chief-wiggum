@@ -538,7 +538,11 @@ orch_spawn_ready_tasks() {
     safe_path "$ralph_dir" "ralph_dir" || return 1
 
     # Tick scheduler to get latest task lists
-    scheduler_tick
+    if [[ "${WIGGUM_TASK_SOURCE_MODE:-local}" != "local" ]]; then
+        scheduler_tick_distributed
+    else
+        scheduler_tick
+    fi
 
     # Check rate limit before spawning
     if rate_limit_check "$ralph_dir"; then
@@ -582,10 +586,13 @@ orch_spawn_ready_tasks() {
 
     # Spawn workers for ready tasks
     for task_id in $SCHED_READY_TASKS; do
-        # Check if we can spawn this task
-        if ! scheduler_can_spawn_task "$task_id" "$max_workers"; then
+        # Check if we can spawn this task (includes distributed claimability check)
+        if ! scheduler_can_spawn_task_distributed "$task_id" "$max_workers"; then
             case "$SCHED_SKIP_REASON" in
                 at_capacity) break ;;
+                claimed_by_other)
+                    log_debug "Skipping $task_id - claimed by another server"
+                    ;;
                 file_conflict|cyclic_dependency|skip_count) continue ;;
             esac
             continue
@@ -602,11 +609,19 @@ orch_spawn_ready_tasks() {
             continue
         fi
 
+        # Claim task in distributed mode (assign issue + server label)
+        if ! scheduler_claim_task "$task_id"; then
+            log_debug "Failed to claim $task_id - reverting to pending"
+            update_kanban_status "$ralph_dir/kanban.md" "$task_id" " " || true
+            continue
+        fi
+
         # Spawn worker
         if ! _orch_spawn_worker "$task_id" "$max_iterations" "$max_turns" "$agent_type"; then
             log_error "Failed to spawn worker for $task_id"
             update_kanban_status "$ralph_dir/kanban.md" "$task_id" "*"
             github_issue_sync_task_status "$ralph_dir" "$task_id" "*" || true
+            scheduler_release_task "$task_id"
             continue
         fi
 
@@ -1598,6 +1613,14 @@ _handle_main_worker_completion() {
     # immediately (mirrors fix/resolve completion callbacks)
     if git_state_is "$worker_dir" "needs_merge"; then
         attempt_pr_merge "$worker_dir" "$task_id" "$RALPH_DIR" || true
+    fi
+
+    # Release distributed claim if task reached a terminal failure state
+    # (successful tasks stay claimed as [P] until PR merge releases them)
+    local _task_status
+    _task_status=$(get_task_status "$RALPH_DIR/kanban.md" "$task_id" 2>/dev/null) || true
+    if [ "$_task_status" = "*" ]; then
+        scheduler_release_task "$task_id"
     fi
 }
 

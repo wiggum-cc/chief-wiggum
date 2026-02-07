@@ -543,6 +543,8 @@ pr_merge_gather_all() {
             completed_label=$(github_sync_get_status_label "x")
             pending_label=$(github_sync_get_status_label "P")
             github_pr_set_status_label "$pr_number" "$completed_label" "$pending_label" || true
+            # Release distributed claim (no-op in local mode)
+            scheduler_release_task "$task_id" 2>/dev/null || true
             # Clean up batch coordination before workspace deletion
             if batch_coord_has_worker_context "$worker_dir"; then
                 local batch_id

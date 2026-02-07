@@ -67,6 +67,9 @@ _attempt_merge() {
         pending_label=$(github_sync_get_status_label "P")
         github_pr_set_status_label "$pr_number" "$completed_label" "$pending_label" || true
 
+        # Release distributed claim (no-op in local mode)
+        scheduler_release_task "$task_id" 2>/dev/null || true
+
         local worker_dir
         worker_dir=$(jq -r --arg t "$task_id" '.prs[$t].worker_dir' "$state_file")
 

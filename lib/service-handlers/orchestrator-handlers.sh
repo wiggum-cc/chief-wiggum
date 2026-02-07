@@ -384,7 +384,11 @@ svc_orch_scheduler_tick() {
     # Always run scheduler_tick — it rebuilds SCHED_UNIFIED_QUEUE which includes
     # resume candidates from worker directories (independent of kanban changes).
     # Kanban parsing is already cached internally by _get_cached_metadata().
-    scheduler_tick
+    if [[ "${WIGGUM_TASK_SOURCE_MODE:-local}" != "local" ]]; then
+        scheduler_tick_distributed
+    else
+        scheduler_tick
+    fi
 }
 
 # Spawn workers for ready tasks and resume candidates from unified queue
@@ -448,9 +452,12 @@ svc_orch_task_spawner() {
         if [ "$work_type" = "new" ]; then
             # --- New task spawn logic ---
 
-            if ! scheduler_can_spawn_task "$task_id" "$MAX_WORKERS"; then
+            if ! scheduler_can_spawn_task_distributed "$task_id" "$MAX_WORKERS"; then
                 case "$SCHED_SKIP_REASON" in
                     at_capacity) continue ;;  # skip this main task, may have fix/resolve tasks later
+                    claimed_by_other)
+                        log_debug "Skipping $task_id - claimed by another server"
+                        ;;
                     file_conflict)
                         local -A _temp_workers=()
                         _build_workers() {
@@ -484,6 +491,13 @@ svc_orch_task_spawner() {
                 continue
             fi
 
+            # Claim task in distributed mode (assign issue + server label)
+            if ! scheduler_claim_task "$task_id"; then
+                log_debug "Failed to claim $task_id - reverting to pending"
+                update_kanban_status "$RALPH_DIR/kanban.md" "$task_id" " " || true
+                continue
+            fi
+
             # Smart routing
             local _saved_pipeline="${WIGGUM_PIPELINE:-}"
             local _saved_plan_mode="${WIGGUM_PLAN_MODE:-false}"
@@ -502,6 +516,7 @@ svc_orch_task_spawner() {
             if [ "$spawn_rc" -eq 2 ]; then
                 # Deferred - worker exists and is resumable, revert kanban to pending
                 update_kanban_status "$RALPH_DIR/kanban.md" "$task_id" " " || true
+                scheduler_release_task "$task_id"
                 export WIGGUM_PIPELINE="$_saved_pipeline"
                 export WIGGUM_PLAN_MODE="$_saved_plan_mode"
                 continue
@@ -510,6 +525,7 @@ svc_orch_task_spawner() {
                 update_kanban_status "$RALPH_DIR/kanban.md" "$task_id" "*"
                 source "$WIGGUM_HOME/lib/github/issue-sync.sh"
                 github_issue_sync_task_status "$RALPH_DIR" "$task_id" "*" || true
+                scheduler_release_task "$task_id"
                 export WIGGUM_PIPELINE="$_saved_pipeline"
                 export WIGGUM_PLAN_MODE="$_saved_plan_mode"
                 continue
