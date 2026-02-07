@@ -384,10 +384,14 @@ svc_orch_scheduler_tick() {
     # Always run scheduler_tick — it rebuilds SCHED_UNIFIED_QUEUE which includes
     # resume candidates from worker directories (independent of kanban changes).
     # Kanban parsing is already cached internally by _get_cached_metadata().
+    local rc=0
     if [[ "${WIGGUM_TASK_SOURCE_MODE:-local}" != "local" ]]; then
-        scheduler_tick_distributed
+        scheduler_tick_distributed || rc=$?
     else
-        scheduler_tick
+        scheduler_tick || rc=$?
+    fi
+    if [ "$rc" -ne 0 ]; then
+        log_warn "scheduler_tick failed (rc=$rc) — status display and task spawning may be affected"
     fi
 }
 
@@ -594,8 +598,30 @@ svc_orch_aging_update() {
 }
 
 # Log current orchestrator status
+#
+# Displays on scheduling events and as a periodic heartbeat (every 60s)
+# so the user can confirm the orchestrator is alive even during quiescent periods.
 svc_orch_status_display() {
+    local should_display=false
+
     if [ "$SCHED_SCHEDULING_EVENT" = true ]; then
+        should_display=true
+    else
+        # Heartbeat: show status periodically even without scheduling events
+        local heartbeat_file="$RALPH_DIR/orchestrator/.status-heartbeat"
+        local now
+        now=$(date +%s)
+        local last_display=0
+        [ -f "$heartbeat_file" ] && last_display=$(cat "$heartbeat_file" 2>/dev/null)
+        last_display="${last_display:-0}"
+        if (( now - last_display >= 60 )); then
+            should_display=true
+        fi
+    fi
+
+    if [ "$should_display" = true ]; then
+        echo "$(date +%s)" > "$RALPH_DIR/orchestrator/.status-heartbeat" 2>/dev/null || true
+
         local cyclic_ref status_counts
         cyclic_ref=$(scheduler_get_cyclic_tasks_ref)
         status_counts=$(compute_status_counts "$SCHED_READY_TASKS" "$SCHED_BLOCKED_TASKS" "$cyclic_ref" "$RALPH_DIR")

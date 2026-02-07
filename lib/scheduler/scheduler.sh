@@ -260,8 +260,14 @@ scheduler_tick() {
     # Refresh cached worker directory listing for this tick
     scheduler_refresh_worker_dirs
 
-    # Build unified queue merging new tasks and resume candidates
-    SCHED_UNIFIED_QUEUE=$(get_unified_work_queue)
+    # Build unified queue merging new tasks and resume candidates.
+    # Guard: if get_unified_work_queue fails (e.g. corrupt worker JSON), log
+    # and continue with empty queue so the tick still completes and
+    # SCHED_SCHEDULING_EVENT can be set.
+    SCHED_UNIFIED_QUEUE=$(get_unified_work_queue) || {
+        log_warn "scheduler_tick: get_unified_work_queue failed — queue empty this tick"
+        SCHED_UNIFIED_QUEUE=""
+    }
 
     # Mark scheduling event when task lists change (ensures first-tick display)
     if [ "$SCHED_READY_TASKS" != "$prev_ready" ] || [ "$SCHED_BLOCKED_TASKS" != "$prev_blocked" ]; then
@@ -928,14 +934,14 @@ get_workers_with_retry_decision() {
             continue
         fi
 
-        # Read decision
+        # Read decision (guard jq: corrupt JSON must not abort the loop)
         local decision
-        decision=$(jq -r '.decision // ""' "$worker_dir/resume-decision.json" 2>/dev/null)
+        decision=$(jq -r '.decision // ""' "$worker_dir/resume-decision.json" 2>/dev/null) || continue
         [ "$decision" = "RETRY" ] || continue
 
         local task_id resume_step worker_type
         task_id=$(get_task_id_from_worker "$(basename "$worker_dir")")
-        resume_step=$(jq -r '.resume_step // "execution"' "$worker_dir/resume-decision.json" 2>/dev/null)
+        resume_step=$(jq -r '.resume_step // "execution"' "$worker_dir/resume-decision.json" 2>/dev/null) || true
         [ "$resume_step" = "null" ] && resume_step="execution"
 
         worker_type=$(_detect_worker_type "$worker_dir")
@@ -1007,8 +1013,8 @@ get_unified_work_queue() {
             # Pipeline progress bonus (up to 5000 for workers close to completion)
             if [ -f "$worker_dir/pipeline-config.json" ]; then
                 local step_idx step_count
-                step_idx=$(jq -r '.current.step_idx // 0' "$worker_dir/pipeline-config.json" 2>/dev/null)
-                step_count=$(jq -r '.steps | length' "$worker_dir/pipeline-config.json" 2>/dev/null)
+                step_idx=$(jq -r '.current.step_idx // 0' "$worker_dir/pipeline-config.json" 2>/dev/null) || true
+                step_count=$(jq -r '.steps | length' "$worker_dir/pipeline-config.json" 2>/dev/null) || true
                 step_idx="${step_idx:-0}"
                 step_count="${step_count:-1}"
                 if [ "$step_count" -gt 0 ]; then
@@ -1022,7 +1028,8 @@ get_unified_work_queue() {
 
             # Failure penalty (each failed attempt degrades priority)
             local attempt_count
-            attempt_count=$(resume_state_attempts "$worker_dir")
+            attempt_count=$(resume_state_attempts "$worker_dir") || true
+            attempt_count="${attempt_count:-0}"
             if [ "$attempt_count" -gt 0 ]; then
                 effective_pri=$(( effective_pri + attempt_count * _SCHED_RESUME_FAIL_PENALTY ))
             fi
