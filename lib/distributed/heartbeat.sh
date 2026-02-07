@@ -33,7 +33,6 @@ source "$WIGGUM_HOME/lib/core/platform.sh"
 source "$WIGGUM_HOME/lib/distributed/server-identity.sh"
 source "$WIGGUM_HOME/lib/distributed/claim-manager.sh"
 source "$WIGGUM_HOME/lib/worker/worker-lifecycle.sh"
-source "$WIGGUM_HOME/lib/worker/git-state.sh"
 
 # =============================================================================
 # Configuration
@@ -437,8 +436,6 @@ heartbeat_force_update() {
 # Initialize heartbeat tracking for existing claims
 #
 # Called at orchestrator startup to resume heartbeats.
-# Also routes workerless claimed tasks into the conflict/merge pipeline
-# so they re-enter the resolution flow instead of sitting idle.
 #
 # Args:
 #   ralph_dir - Path to .ralph directory
@@ -454,75 +451,7 @@ heartbeat_init() {
     # Update heartbeat immediately for all owned tasks (skips workerless)
     heartbeat_update_all "$ralph_dir" "$server_id"
 
-    # Route workerless claimed tasks into conflict/merge pipeline
-    _heartbeat_route_workerless_to_resolve "$ralph_dir" "$server_id"
-
     log "Heartbeat service initialized for server $server_id"
-}
-
-# Route workerless claimed tasks into the conflict/merge pipeline
-#
-# At startup, claimed tasks with dead workers that were in the
-# multi-pr-resolve pipeline should re-enter that pipeline via
-# needs_resolve state instead of receiving stale heartbeats.
-#
-# Args:
-#   ralph_dir - Path to .ralph directory
-#   server_id - Server identifier
-_heartbeat_route_workerless_to_resolve() {
-    local ralph_dir="$1"
-    local server_id="$2"
-
-    local owned_issues
-    owned_issues=$(claim_list_owned "$server_id")
-
-    local routed=0
-    local issue_number
-    while IFS= read -r issue_number; do
-        [ -n "$issue_number" ] || continue
-
-        # Resolve task_id from issue cache
-        local task_id=""
-        if [ -n "${_GH_ISSUE_CACHE[$issue_number]+x}" ]; then
-            task_id=$(_github_parse_task_id "${_GH_ISSUE_CACHE[$issue_number]}") || true
-        fi
-        task_id="${task_id:-GH-$issue_number}"
-
-        # Find worker directory
-        local worker_dir=""
-        if [ -d "$ralph_dir/workers" ]; then
-            worker_dir=$(find "$ralph_dir/workers" -maxdepth 1 -type d \
-                -name "worker-${task_id}-*" 2>/dev/null | head -1)
-        fi
-
-        # Only process workers that exist but are not running
-        [ -n "$worker_dir" ] || continue
-        is_worker_running "$worker_dir" && continue
-
-        # Skip terminal states
-        local current_git_state
-        current_git_state=$(git_state_get "$worker_dir" 2>/dev/null || echo "none")
-        case "$current_git_state" in
-            merged|failed|needs_resolve|needs_multi_resolve) continue ;;
-        esac
-
-        # Only route workers that were in the multi-pr-resolve pipeline
-        local pipeline_name=""
-        if [ -f "$worker_dir/pipeline-config.json" ]; then
-            pipeline_name=$(jq -r '.pipeline.name // ""' "$worker_dir/pipeline-config.json" 2>/dev/null) || true
-        fi
-
-        if [ "$pipeline_name" = "multi-pr-resolve" ]; then
-            git_state_set "$worker_dir" "needs_resolve" "heartbeat.route_workerless" \
-                "Startup: dead worker re-routed to conflict/merge pipeline (was $current_git_state)"
-            log "Routed workerless $task_id (#$issue_number) to conflict/merge pipeline"
-            ((++routed)) || true
-        fi
-    done <<< "$owned_issues"
-
-    if [ "$routed" -gt 0 ]; then
-        log "Routed $routed workerless task(s) to conflict/merge pipeline"
-    fi
 }
 
 # Cleanup heartbeats on shutdown

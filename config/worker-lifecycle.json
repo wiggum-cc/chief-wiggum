@@ -66,6 +66,10 @@
     { "event": "conflict.needs_resolve","from": "merge_conflict","to": "failed",      "effects": ["check_permanent"] },
     { "event": "conflict.needs_multi",  "from": "merge_conflict","to": "needs_multi_resolve" },
 
+    { "event": "resolve.startup_reset", "from": "resolving",          "to": "needs_resolve", "effects": ["reset_merge"] },
+    { "event": "resolve.startup_reset", "from": "none",               "to": "needs_resolve" },
+    { "event": "resolve.startup_reset", "from": "resolved",           "to": "needs_resolve" },
+
     { "event": "resolve.started",       "from": "needs_resolve",      "to": "resolving" },
     { "event": "resolve.started",       "from": "needs_multi_resolve","to": "resolving" },
     { "event": "resolve.succeeded",     "from": "resolving",  "to": "needs_merge",  "chain": "resolved", "effects": ["rm_conflict_queue"] },

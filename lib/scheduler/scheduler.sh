@@ -169,6 +169,9 @@ scheduler_restore_workers() {
             _scheduler_reclaim_restored_workers
         fi
 
+        # Route dead multi-pr-resolve workers back into conflict/merge pipeline
+        _scheduler_route_dead_resolve_workers
+
         # Migrate legacy .needs-fix markers to git-state.json
         for worker_dir in "$_SCHED_RALPH_DIR/workers"/worker-*; do
             [ -d "$worker_dir" ] || continue
@@ -223,6 +226,55 @@ _scheduler_reclaim_restored_workers() {
 
     if [ "$reclaimed" -gt 0 ]; then
         log "Re-claimed $reclaimed issue(s) for server $server_id"
+    fi
+}
+
+# Route dead multi-pr-resolve workers back into conflict/merge pipeline
+#
+# At startup, workers that were running the multi-pr-resolve pipeline
+# but died should re-enter the resolve flow via needs_resolve state.
+# Uses the resolve.startup_reset lifecycle event (resets merge attempts
+# instead of incrementing — server restart is not a resolution failure).
+# Scans worker directories directly (no issue cache or API needed).
+_scheduler_route_dead_resolve_workers() {
+    [ -d "$_SCHED_RALPH_DIR/workers" ] || return 0
+
+    # Ensure lifecycle spec is loaded for emit_event
+    lifecycle_is_loaded || lifecycle_load
+
+    local routed=0
+    for worker_dir in "$_SCHED_RALPH_DIR/workers"/worker-*; do
+        [ -d "$worker_dir" ] || continue
+
+        # Skip running workers
+        is_worker_running "$worker_dir" && continue
+
+        # Skip terminal git states and workers already queued for resolve
+        local current_git_state
+        current_git_state=$(git_state_get "$worker_dir" 2>/dev/null || echo "none")
+        case "$current_git_state" in
+            merged|failed|needs_resolve|needs_multi_resolve) continue ;;
+        esac
+
+        # Only route workers that were in the multi-pr-resolve pipeline
+        [ -f "$worker_dir/pipeline-config.json" ] || continue
+        local pipeline_name
+        pipeline_name=$(jq -r '.pipeline.name // ""' "$worker_dir/pipeline-config.json" 2>/dev/null) || continue
+
+        if [ "$pipeline_name" = "multi-pr-resolve" ]; then
+            local task_id
+            task_id=$(get_task_id_from_worker "$(basename "$worker_dir")")
+            if emit_event "$worker_dir" "resolve.startup_reset" "scheduler.restore"; then
+                log "Routed dead resolve worker $task_id to conflict/merge pipeline (was $current_git_state)"
+                ((++routed)) || true
+            else
+                log_warn "Failed to route resolve worker $task_id (state: $current_git_state)"
+            fi
+        fi
+    done
+
+    if [ "$routed" -gt 0 ]; then
+        log "Routed $routed dead resolve worker(s) to conflict/merge pipeline"
     fi
 }
 
