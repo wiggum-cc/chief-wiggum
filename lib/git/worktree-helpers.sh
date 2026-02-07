@@ -257,6 +257,52 @@ setup_worktree_from_branch() {
     return 0
 }
 
+# Setup a worktree and recover work from a previously failed worker's branch.
+#
+# Creates a fresh worktree (via setup_worktree), then cherry-picks
+# implementation commits from the old branch. This salvages expensive LLM
+# work when a worker failed at a post-implementation stage (test, validation)
+# so the new worker doesn't start from scratch.
+#
+# Falls back to a clean worktree if cherry-pick fails (conflicts, missing
+# branch, etc.) — the caller always gets a usable worktree.
+#
+# Args:
+#   project_dir     - The project root directory
+#   worker_dir      - The NEW worker directory to create workspace in
+#   task_id         - Task ID for branch naming
+#   old_branch      - Branch name from the previous failed worker
+#
+# Returns: 0 on success (with or without recovery), 1 on worktree failure
+# Sets: WORKTREE_PATH, CHERRY_PICK_RECOVERED (count or empty)
+setup_worktree_with_recovery() {
+    local project_dir="$1"
+    local worker_dir="$2"
+    local task_id="$3"
+    local old_branch="$4"
+
+    CHERRY_PICK_RECOVERED=""
+    export CHERRY_PICK_RECOVERED
+
+    # Create fresh worktree first (standard flow)
+    if ! setup_worktree "$project_dir" "$worker_dir" "$task_id"; then
+        return 1
+    fi
+
+    local workspace="$worker_dir/workspace"
+
+    # Attempt cherry-pick recovery from the old branch
+    if [ -n "$old_branch" ]; then
+        if git_cherry_pick_recovery "$workspace" "$old_branch" 2>/dev/null; then
+            CHERRY_PICK_RECOVERED="$GIT_CHERRY_PICK_COUNT"
+        else
+            log_debug "Cherry-pick recovery from $old_branch did not apply — starting fresh"
+        fi
+    fi
+
+    return 0
+}
+
 # Cleanup git worktree
 #
 # Args:

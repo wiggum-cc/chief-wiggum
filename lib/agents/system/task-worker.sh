@@ -531,13 +531,59 @@ _post_task_failure_to_github() {
     # Skip if no sync state (no GitHub integration)
     [ -f "$RALPH_DIR/github-sync-state.json" ] || return 0
 
-    # Build summary from result files
-    local summary="### Pipeline Results
+    local summary=""
+
+    # Include failure-summarizer report if available (the most critical information)
+    local report_file=""
+    report_file=$(find "$worker_dir/reports" -name "*-failure-summarize-report.md" 2>/dev/null | sort | tail -1)
+    if [ -n "$report_file" ] && [ -f "$report_file" ]; then
+        summary+="$(cat "$report_file")
+
+"
+    fi
+
+    # Collect errors from failed steps
+    local errors_section=""
+    local result_file
+    while IFS= read -r result_file; do
+        [ -n "$result_file" ] || continue
+        [ -f "$result_file" ] || continue
+
+        local gate_result
+        gate_result=$(jq -r '.outputs.gate_result // "UNKNOWN"' "$result_file" 2>/dev/null)
+        gate_result="${gate_result:-UNKNOWN}"
+        [ "$gate_result" = "FAIL" ] || continue
+
+        local basename_file
+        basename_file=$(basename "$result_file")
+        local step_id
+        step_id=$(echo "$basename_file" | sed -E 's/^[0-9]+-(.+)-result\.json$/\1/')
+
+        local error_count
+        error_count=$(jq '.errors | length' "$result_file" 2>/dev/null)
+        error_count="${error_count:-0}"
+        if [ "$error_count" -gt 0 ]; then
+            local error_text
+            error_text=$(jq -r '.errors[]' "$result_file" 2>/dev/null)
+            errors_section+="**$step_id**: $error_text
+"
+        fi
+    done < <(find "$worker_dir/results" -name "*-result.json" 2>/dev/null | sort)
+
+    if [ -n "$errors_section" ]; then
+        summary+="### Errors
+
+$errors_section
+"
+    fi
+
+    # Build pipeline results table
+    summary+="<details>
+<summary>Pipeline Results</summary>
 
 | Step | Result | Duration |
 |------|--------|----------|"
 
-    local result_file
     while IFS= read -r result_file; do
         [ -n "$result_file" ] || continue
         [ -f "$result_file" ] || continue
@@ -549,14 +595,13 @@ _post_task_failure_to_github() {
         local step_id
         step_id=$(echo "$basename_file" | sed -E 's/^[0-9]+-(.+)-result\.json$/\1/')
 
-        local gate_result elapsed_ms
+        local gate_result duration_s
         gate_result=$(jq -r '.outputs.gate_result // "UNKNOWN"' "$result_file" 2>/dev/null)
         gate_result="${gate_result:-UNKNOWN}"
-        elapsed_ms=$(jq -r '.elapsed_ms // 0' "$result_file" 2>/dev/null)
-        elapsed_ms="${elapsed_ms:-0}"
+        duration_s=$(jq -r '.duration_seconds // 0' "$result_file" 2>/dev/null)
+        duration_s="${duration_s:-0}"
 
         # Format duration
-        local duration_s=$((elapsed_ms / 1000))
         local duration_str
         if [ "$duration_s" -lt 60 ]; then
             duration_str="${duration_s}s"
@@ -569,6 +614,10 @@ _post_task_failure_to_github() {
         summary+="
 | $step_id | $gate_result | $duration_str |"
     done < <(find "$worker_dir/results" -name "*-result.json" 2>/dev/null | sort)
+
+    summary+="
+
+</details>"
 
     source "$WIGGUM_HOME/lib/github/issue-writer.sh"
     github_issue_post_failure_summary "$RALPH_DIR" "$task_id" "$summary"

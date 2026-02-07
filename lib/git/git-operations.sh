@@ -114,6 +114,117 @@ git_classify_commit_failure() {
 }
 
 # =============================================================================
+# CHERRY-PICK RECOVERY
+# =============================================================================
+
+# Cherry-pick implementation commits from a previous worker's branch onto the
+# current workspace. Used to salvage work when a worker failed at a post-
+# implementation stage (test, validation) so the new worker doesn't start
+# from scratch.
+#
+# Identifies commits on old_branch that are not on main, and cherry-picks
+# them onto the current branch. Skips checkpoint/pre-conflict commits
+# (noise from the pipeline machinery).
+#
+# Args:
+#   workspace     - New workspace (on a fresh branch from latest main)
+#   old_branch    - Branch name from the previous failed worker
+#   main_branch   - Main branch to diff against (default: origin/main)
+#
+# Returns:
+#   0 - Cherry-pick succeeded, implementation commits applied
+#   1 - Cherry-pick failed or no commits to recover (caller should start fresh)
+# Sets: GIT_CHERRY_PICK_COUNT to number of applied commits (0 on failure)
+git_cherry_pick_recovery() {
+    local workspace="$1"
+    local old_branch="$2"
+    local main_branch="${3:-origin/main}"
+
+    GIT_CHERRY_PICK_COUNT=0
+
+    if [ ! -d "$workspace" ]; then
+        log_error "git_cherry_pick_recovery: workspace not found: $workspace"
+        return 1
+    fi
+
+    # Verify old branch exists
+    if ! git -C "$workspace" rev-parse --verify "$old_branch" &>/dev/null; then
+        # Try as remote branch
+        if ! git -C "$workspace" rev-parse --verify "origin/$old_branch" &>/dev/null; then
+            log_debug "git_cherry_pick_recovery: branch $old_branch not found"
+            return 1
+        fi
+        old_branch="origin/$old_branch"
+    fi
+
+    # Find the fork point (where old_branch diverged from main)
+    local merge_base
+    merge_base=$(git -C "$workspace" merge-base "$main_branch" "$old_branch" 2>/dev/null) || return 1
+
+    # Get commits on old_branch since divergence, oldest first
+    local commits
+    commits=$(git -C "$workspace" rev-list --reverse "$merge_base..$old_branch" 2>/dev/null) || return 1
+
+    if [ -z "$commits" ]; then
+        log_debug "git_cherry_pick_recovery: no commits to recover from $old_branch"
+        return 1
+    fi
+
+    # Filter out pipeline noise (checkpoint, pre-conflict commits)
+    local -a pick_commits=()
+    local commit_hash commit_msg
+    while IFS= read -r commit_hash; do
+        [ -z "$commit_hash" ] && continue
+        commit_msg=$(git -C "$workspace" log -1 --format=%s "$commit_hash" 2>/dev/null)
+
+        # Skip pipeline machinery commits
+        case "$commit_msg" in
+            *"pre-conflict"*|*"checkpoint"*|*"Merge branch"*|*"Merge remote"*)
+                log_debug "git_cherry_pick_recovery: skipping noise commit: $commit_msg"
+                continue
+                ;;
+        esac
+
+        pick_commits+=("$commit_hash")
+    done <<< "$commits"
+
+    if [ ${#pick_commits[@]} -eq 0 ]; then
+        log_debug "git_cherry_pick_recovery: all commits were pipeline noise"
+        return 1
+    fi
+
+    log "Cherry-pick recovery: applying ${#pick_commits[@]} commit(s) from $old_branch"
+
+    # Set identity for any cherry-pick merge commits
+    git_set_identity
+
+    # Cherry-pick each commit
+    local applied=0
+    for commit_hash in "${pick_commits[@]}"; do
+        local cp_exit=0
+        git -C "$workspace" cherry-pick --no-gpg-sign "$commit_hash" 2>/dev/null || cp_exit=$?
+
+        if [ $cp_exit -ne 0 ]; then
+            # Cherry-pick conflict — abort and let caller start fresh
+            git -C "$workspace" cherry-pick --abort 2>/dev/null || true
+            log_warn "Cherry-pick recovery: conflict on commit $commit_hash — aborting recovery"
+
+            # Reset to before any cherry-picks if we applied some
+            if [ $applied -gt 0 ]; then
+                git -C "$workspace" reset --hard HEAD~"$applied" 2>/dev/null || true
+            fi
+            return 1
+        fi
+        ((++applied))
+    done
+
+    # shellcheck disable=SC2034 # Used by worktree-helpers.sh
+    GIT_CHERRY_PICK_COUNT=$applied
+    log "Cherry-pick recovery: successfully applied $applied commit(s)"
+    return 0
+}
+
+# =============================================================================
 # PRE-FLIGHT MERGE CONFLICT CHECK
 # =============================================================================
 

@@ -358,6 +358,97 @@ test_git_safety_restore_resets_commits() {
 }
 
 # =============================================================================
+# Cherry-Pick Recovery Tests
+# =============================================================================
+
+test_cherry_pick_recovery_applies_commits() {
+    # Create a "main" branch with initial commit
+    git -C "$WORKSPACE" checkout -b main 2>/dev/null
+
+    # Create an "old worker" branch with implementation commits
+    git -C "$WORKSPACE" checkout -b task/OLD-001-12345 2>/dev/null
+    echo "impl file 1" > "$WORKSPACE/impl.txt"
+    git -C "$WORKSPACE" add impl.txt
+    git -C "$WORKSPACE" commit -q -m "Add implementation"
+    echo "impl file 2" > "$WORKSPACE/more_impl.txt"
+    git -C "$WORKSPACE" add more_impl.txt
+    git -C "$WORKSPACE" commit -q -m "Add more implementation"
+
+    # Go back to main and create a new branch (simulating new worker)
+    git -C "$WORKSPACE" checkout main 2>/dev/null
+    git -C "$WORKSPACE" checkout -b task/NEW-001-99999 2>/dev/null
+
+    # Cherry-pick from old branch
+    GIT_CHERRY_PICK_COUNT=0
+    local result=0
+    git_cherry_pick_recovery "$WORKSPACE" "task/OLD-001-12345" "main" 2>/dev/null || result=$?
+
+    assert_equals "0" "$result" "Cherry-pick recovery should succeed"
+    assert_equals "2" "$GIT_CHERRY_PICK_COUNT" "Should recover 2 commits"
+    assert_file_exists "$WORKSPACE/impl.txt" "First impl file should exist"
+    assert_file_exists "$WORKSPACE/more_impl.txt" "Second impl file should exist"
+}
+
+test_cherry_pick_recovery_skips_noise_commits() {
+    git -C "$WORKSPACE" checkout -b main 2>/dev/null
+
+    # Create old branch with mixed commits (impl + noise)
+    git -C "$WORKSPACE" checkout -b task/OLD-002-12345 2>/dev/null
+    echo "pre-conflict work" > "$WORKSPACE/preflight.txt"
+    git -C "$WORKSPACE" add preflight.txt
+    git -C "$WORKSPACE" commit -q -m "OLD-002: pre-conflict"
+    echo "real work" > "$WORKSPACE/feature.txt"
+    git -C "$WORKSPACE" add feature.txt
+    git -C "$WORKSPACE" commit -q -m "Add feature"
+
+    # Go back to main and create new branch
+    git -C "$WORKSPACE" checkout main 2>/dev/null
+    git -C "$WORKSPACE" checkout -b task/NEW-002-99999 2>/dev/null
+
+    GIT_CHERRY_PICK_COUNT=0
+    local result=0
+    git_cherry_pick_recovery "$WORKSPACE" "task/OLD-002-12345" "main" 2>/dev/null || result=$?
+
+    assert_equals "0" "$result" "Should succeed"
+    assert_equals "1" "$GIT_CHERRY_PICK_COUNT" "Should recover only 1 commit (skip pre-conflict)"
+    assert_file_exists "$WORKSPACE/feature.txt" "Feature file should exist"
+    assert_file_not_exists "$WORKSPACE/preflight.txt" "Pre-conflict file should not be cherry-picked"
+}
+
+test_cherry_pick_recovery_aborts_on_conflict() {
+    git -C "$WORKSPACE" checkout -b main 2>/dev/null
+
+    # Create old branch that modifies README.md
+    git -C "$WORKSPACE" checkout -b task/OLD-003-12345 2>/dev/null
+    echo "old branch README" > "$WORKSPACE/README.md"
+    git -C "$WORKSPACE" add README.md
+    git -C "$WORKSPACE" commit -q -m "Old branch change"
+
+    # Go to main and create conflicting change, then new branch
+    git -C "$WORKSPACE" checkout main 2>/dev/null
+    echo "new main README" > "$WORKSPACE/README.md"
+    git -C "$WORKSPACE" add README.md
+    git -C "$WORKSPACE" commit -q -m "Main change"
+    git -C "$WORKSPACE" checkout -b task/NEW-003-99999 2>/dev/null
+
+    local result=0
+    git_cherry_pick_recovery "$WORKSPACE" "task/OLD-003-12345" "main" 2>/dev/null || result=$?
+
+    assert_equals "1" "$result" "Should fail on conflict"
+    # Workspace should be clean (cherry-pick aborted)
+    local status
+    status=$(git -C "$WORKSPACE" status --porcelain)
+    assert_equals "" "$status" "Workspace should be clean after abort"
+}
+
+test_cherry_pick_recovery_missing_branch() {
+    local result=0
+    git_cherry_pick_recovery "$WORKSPACE" "nonexistent/branch" "HEAD" 2>/dev/null || result=$?
+
+    assert_equals "1" "$result" "Should fail for missing branch"
+}
+
+# =============================================================================
 # Worktree Config Tests (rerere + diff3)
 # =============================================================================
 
@@ -439,6 +530,12 @@ run_test test_git_safety_checkpoint_creates_commit
 run_test test_git_safety_checkpoint_no_changes
 run_test test_git_safety_restore_discards_changes
 run_test test_git_safety_restore_resets_commits
+
+# cherry-pick recovery tests
+run_test test_cherry_pick_recovery_applies_commits
+run_test test_cherry_pick_recovery_skips_noise_commits
+run_test test_cherry_pick_recovery_aborts_on_conflict
+run_test test_cherry_pick_recovery_missing_branch
 
 # worktree config tests
 run_test test_worktree_rerere_enabled

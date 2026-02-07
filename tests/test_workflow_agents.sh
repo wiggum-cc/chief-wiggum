@@ -74,6 +74,119 @@ test_git_sync_main_not_git_repo_fails() {
 }
 
 # =============================================================================
+# git-sync-main Cascade Strategy Tests (A+F)
+# =============================================================================
+
+test_sync_main_fast_forward() {
+    # Setup: create a bare remote and workspace that's behind
+    local bare_remote="$TEST_DIR/remote.git"
+    git init --bare "$bare_remote" >/dev/null 2>&1
+
+    local ws="$WORKER_DIR/workspace"
+    git -C "$ws" remote add origin "$bare_remote"
+    git -C "$ws" push -u origin HEAD:main >/dev/null 2>&1
+
+    # Create a commit on main via the bare remote (simulate someone else pushing)
+    local clone_dir="$TEST_DIR/clone"
+    git clone -q "$bare_remote" "$clone_dir" 2>/dev/null
+    git -C "$clone_dir" config user.email "test@test.com"
+    git -C "$clone_dir" config user.name "Test"
+    echo "new content" > "$clone_dir/newfile.txt"
+    git -C "$clone_dir" add .
+    git -C "$clone_dir" commit -q -m "Advance main"
+    git -C "$clone_dir" push -q origin main 2>/dev/null
+
+    # Now workspace is behind origin/main with no local commits — should fast-forward
+    source "$WIGGUM_HOME/lib/agents/workflow/git-sync-main.sh"
+    agent_run "$WORKER_DIR" "$TEST_DIR" 2>/dev/null
+
+    local result_file
+    result_file=$(find "$WORKER_DIR/results" -name "*-result.json" | head -1)
+    if [ -n "$result_file" ]; then
+        local strategy
+        strategy=$(jq -r '.outputs.strategy // empty' "$result_file")
+        assert_equals "ff" "$strategy" "Should use fast-forward strategy"
+    fi
+}
+
+test_sync_main_rebase_linear() {
+    # Setup: create a bare remote, workspace with local commits, then advance main
+    local bare_remote="$TEST_DIR/remote.git"
+    git init --bare "$bare_remote" >/dev/null 2>&1
+
+    local ws="$WORKER_DIR/workspace"
+    git -C "$ws" remote add origin "$bare_remote"
+    git -C "$ws" push -u origin HEAD:main >/dev/null 2>&1
+
+    # Create a local branch with a commit
+    git -C "$ws" checkout -b task/TEST-001-123 2>/dev/null
+    echo "local work" > "$ws/local.txt"
+    git -C "$ws" add .
+    git -C "$ws" commit -q -m "Local work"
+    git -C "$ws" push -u origin task/TEST-001-123 >/dev/null 2>&1
+
+    # Advance main (non-conflicting change)
+    local clone_dir="$TEST_DIR/clone"
+    git clone -q "$bare_remote" "$clone_dir" 2>/dev/null
+    git -C "$clone_dir" config user.email "test@test.com"
+    git -C "$clone_dir" config user.name "Test"
+    echo "main advance" > "$clone_dir/main_only.txt"
+    git -C "$clone_dir" add .
+    git -C "$clone_dir" commit -q -m "Advance main"
+    git -C "$clone_dir" push -q origin main 2>/dev/null
+
+    source "$WIGGUM_HOME/lib/agents/workflow/git-sync-main.sh"
+    agent_run "$WORKER_DIR" "$TEST_DIR" 2>/dev/null
+
+    local result_file
+    result_file=$(find "$WORKER_DIR/results" -name "*-result.json" | head -1)
+    if [ -n "$result_file" ]; then
+        local strategy
+        strategy=$(jq -r '.outputs.strategy // empty' "$result_file")
+        assert_equals "rebase" "$strategy" "Should use rebase strategy for non-conflicting divergence"
+    fi
+}
+
+test_sync_main_merge_fallback_on_conflict() {
+    # Setup: create conflicting changes on both sides
+    local bare_remote="$TEST_DIR/remote.git"
+    git init --bare "$bare_remote" >/dev/null 2>&1
+
+    local ws="$WORKER_DIR/workspace"
+    git -C "$ws" remote add origin "$bare_remote"
+    git -C "$ws" push -u origin HEAD:main >/dev/null 2>&1
+
+    # Local branch modifies file.txt
+    git -C "$ws" checkout -b task/TEST-002-123 2>/dev/null
+    echo "local version" > "$ws/file.txt"
+    git -C "$ws" add .
+    git -C "$ws" commit -q -m "Local change"
+
+    # Main modifies same file differently
+    local clone_dir="$TEST_DIR/clone"
+    git clone -q "$bare_remote" "$clone_dir" 2>/dev/null
+    git -C "$clone_dir" config user.email "test@test.com"
+    git -C "$clone_dir" config user.name "Test"
+    echo "main version" > "$clone_dir/file.txt"
+    git -C "$clone_dir" add .
+    git -C "$clone_dir" commit -q -m "Main change"
+    git -C "$clone_dir" push -q origin main 2>/dev/null
+
+    source "$WIGGUM_HOME/lib/agents/workflow/git-sync-main.sh"
+    agent_run "$WORKER_DIR" "$TEST_DIR" 2>/dev/null
+
+    local result_file
+    result_file=$(find "$WORKER_DIR/results" -name "*-result.json" | head -1)
+    if [ -n "$result_file" ]; then
+        local strategy gate_result
+        strategy=$(jq -r '.outputs.strategy // empty' "$result_file")
+        gate_result=$(jq -r '.outputs.gate_result // empty' "$result_file")
+        assert_equals "merge" "$strategy" "Should fall back to merge strategy on conflict"
+        assert_equals "FAIL" "$gate_result" "Should FAIL with conflicts"
+    fi
+}
+
+# =============================================================================
 # git-commit-push Agent Tests
 # =============================================================================
 
@@ -466,6 +579,9 @@ run_test test_git_sync_main_agent_exists
 run_test test_git_sync_main_agent_sources
 run_test test_git_sync_main_missing_workspace_fails
 run_test test_git_sync_main_not_git_repo_fails
+run_test test_sync_main_fast_forward
+run_test test_sync_main_rebase_linear
+run_test test_sync_main_merge_fallback_on_conflict
 run_test test_git_commit_push_agent_exists
 run_test test_git_commit_push_agent_sources
 run_test test_git_commit_push_no_changes_passes

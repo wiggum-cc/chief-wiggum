@@ -276,9 +276,10 @@ attempt_pr_merge() {
     # poll_result=2 (timeout/unknown) - proceed with merge attempt anyway
 
     local merge_output merge_exit=0
-    # Don't use --delete-branch: worktrees conflict with local branch deletion
-    # Branch cleanup happens when worktree is removed after merge
-    merge_output=$(gh pr merge "$pr_number" --merge 2>&1) || merge_exit=$?
+    # Squash merge: each task is one logical change → one commit on main.
+    # Don't use --delete-branch: worktrees conflict with local branch deletion.
+    # Branch cleanup happens when worktree is removed after merge.
+    merge_output=$(gh pr merge "$pr_number" --squash 2>&1) || merge_exit=$?
 
     if [ $merge_exit -eq 0 ]; then
         git_state_set "$worker_dir" "merged" "merge-manager.attempt_pr_merge" "PR #$pr_number merged successfully"
@@ -329,12 +330,42 @@ attempt_pr_merge() {
     # "local changes would be overwritten" = dirty working tree, NOT a conflict
     # Only "conflict" or "cannot be merged" with actual conflict markers = real conflict
 
-    # First check for non-conflict failures that should not trigger resolver
+    # "Out of date" — branch is behind main. Not a conflict — recover via
+    # rebase + force-push. Safe because task branches are single-owner.
     if echo "$merge_output" | grep -qiE "(out of date|branch.*behind|is not up to date)"; then
-        git_state_set_error "$worker_dir" "Branch out of date: $merge_output"
-        git_state_set "$worker_dir" "failed" "merge-manager.attempt_pr_merge" "Branch is out of date - needs rebase (not a conflict)"
+        log "Branch out of date for $task_id — attempting rebase recovery"
+        local workspace="$worker_dir/workspace"
+        if [ -d "$workspace" ]; then
+            # Fetch latest main and rebase onto it
+            git -C "$workspace" fetch origin main 2>/dev/null || true
+
+            local rebase_exit=0
+            git -C "$workspace" rebase origin/main 2>/dev/null || rebase_exit=$?
+
+            if [ $rebase_exit -eq 0 ]; then
+                # Rebase succeeded — force-push with lease (safe: single-owner branch)
+                local push_exit=0
+                git -C "$workspace" push --force-with-lease 2>/dev/null || push_exit=$?
+
+                if [ $push_exit -eq 0 ]; then
+                    log "Rebase recovery succeeded for $task_id — retrying merge"
+                    git_state_set "$worker_dir" "needs_merge" "merge-manager.attempt_pr_merge" "Rebased and pushed, ready for merge retry"
+                    return 1  # Signal retry needed (not a conflict, not a fatal failure)
+                else
+                    log_warn "Force-push failed after rebase for $task_id"
+                fi
+            else
+                # Rebase failed (conflicts) — abort rebase, fall through to failure
+                git -C "$workspace" rebase --abort 2>/dev/null || true
+                log_warn "Rebase recovery failed for $task_id — conflicts during rebase"
+            fi
+        fi
+
+        # Recovery failed — fall through to permanent failure
+        git_state_set_error "$worker_dir" "Branch out of date and rebase recovery failed: $merge_output"
+        git_state_set "$worker_dir" "failed" "merge-manager.attempt_pr_merge" "Branch is out of date - rebase recovery failed"
         _mm_check_permanent_failure "$worker_dir" "$ralph_dir/kanban.md" "$task_id"
-        log_error "Merge failed for $task_id: branch is out of date with base branch"
+        log_error "Merge failed for $task_id: branch out of date, rebase recovery failed"
         return 2
     fi
 

@@ -145,17 +145,19 @@ agent_run() {
 
     # Push to remote
     log "Pushing to remote..."
-    local push_output
-    if ! push_output=$(git -C "$workspace" push 2>&1); then
-        # Check if push failed due to rejected (needs pull)
-        if echo "$push_output" | grep -qE "(rejected|non-fast-forward)"; then
-            log_error "Push rejected - remote has changes"
-            agent_write_result "$worker_dir" "FAIL" \
-                "{\"commit_sha\":\"$commit_sha\",\"push_status\":\"rejected\"}" \
-                '["Push rejected - remote has changes"]'
-            return 0  # FAIL is a valid gate result
-        fi
+    local push_output push_exit=0
+    push_output=$(git -C "$workspace" push 2>&1) || push_exit=$?
 
+    # If push rejected (non-fast-forward), retry with --force-with-lease.
+    # This is safe because task branches are single-owner — no one else pushes
+    # to them. Common after rebase (sync-main rewrites branch history).
+    if [ $push_exit -ne 0 ] && echo "$push_output" | grep -qE "(rejected|non-fast-forward)"; then
+        log "Push rejected (non-fast-forward) — retrying with --force-with-lease"
+        push_exit=0
+        push_output=$(git -C "$workspace" push --force-with-lease 2>&1) || push_exit=$?
+    fi
+
+    if [ $push_exit -ne 0 ]; then
         log_error "Failed to push: $push_output"
         agent_write_result "$worker_dir" "FAIL" \
             "{\"commit_sha\":\"$commit_sha\"}" \

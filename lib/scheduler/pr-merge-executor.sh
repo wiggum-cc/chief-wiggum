@@ -36,11 +36,11 @@ _attempt_merge() {
 
     local gh_timeout="${WIGGUM_GH_TIMEOUT:-30}"
 
-    # Try to merge via gh CLI
-    # Don't use --delete-branch: worktrees conflict with local branch deletion
-    # Branch cleanup happens when worktree is removed
+    # Squash merge via gh CLI: each task = one clean commit on main.
+    # Don't use --delete-branch: worktrees conflict with local branch deletion.
+    # Branch cleanup happens when worktree is removed.
     local merge_output
-    merge_output=$(timeout "$gh_timeout" gh pr merge "$pr_number" --merge 2>&1) || true
+    merge_output=$(timeout "$gh_timeout" gh pr merge "$pr_number" --squash 2>&1) || true
 
     # Check if PR is now merged (handles case where merge succeeded but branch delete failed)
     local pr_state

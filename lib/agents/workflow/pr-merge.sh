@@ -95,9 +95,12 @@ agent_run() {
         return 1
     fi
 
-    # Attempt merge (don't delete branch - worktrees conflict with local branch deletion)
+    # Attempt merge via squash: each task is one logical change, so one commit on main.
+    # Squash collapses intermediate commits (checkpoints, pre-conflict, sync-main merges)
+    # into a clean atomic commit. GitHub preserves full PR history for forensics.
+    # Don't delete branch — worktrees conflict with local branch deletion.
     local merge_output merge_exit=0
-    merge_output=$(gh pr merge "$pr_number" --merge 2>&1) || merge_exit=$?
+    merge_output=$(gh pr merge "$pr_number" --squash 2>&1) || merge_exit=$?
 
     if [ $merge_exit -eq 0 ]; then
         log "PR #$pr_number merged successfully"
