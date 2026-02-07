@@ -276,6 +276,7 @@ def run(args: argparse.Namespace) -> int:
         "PID_WAIT_TIMEOUT", "LOG_FILE",
         "RESUME_MAX_DECIDE_CONCURRENT",
         "WIGGUM_PIPELINE", "WIGGUM_PLAN_MODE", "WIGGUM_SMART_MODE",
+        "WIGGUM_TASK_SOURCE_MODE", "WIGGUM_SERVER_ID",
     ):
         val = os.environ.get(key)
         if val is not None:
