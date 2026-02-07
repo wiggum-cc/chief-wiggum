@@ -109,6 +109,19 @@ spawn_fix_workers() {
             continue
         fi
 
+        # Skip tasks with terminal kanban status — don't fix a task that's
+        # already complete, failed, or not planned
+        if [ -f "$kanban_file" ]; then
+            local _task_status
+            _task_status=$(get_task_status "$kanban_file" "$task_id" 2>/dev/null) || true
+            case "${_task_status:-}" in
+                x|"*"|N)
+                    log "Skipping fix for $task_id (kanban status [$_task_status])"
+                    continue
+                    ;;
+            esac
+        fi
+
         # Guard: skip if agent is already running for this worker
         if [ -f "$worker_dir/agent.pid" ]; then
             local existing_pid

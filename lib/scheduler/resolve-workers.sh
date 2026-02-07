@@ -487,6 +487,21 @@ create_orphan_pr_workspaces() {
             continue
         fi
 
+        # Skip tasks with terminal kanban status — no point creating a fix
+        # worker for a task that's already complete, failed, or not planned
+        local kanban_file="$ralph_dir/kanban.md"
+        if [ -f "$kanban_file" ]; then
+            local _task_status
+            _task_status=$(get_task_status "$kanban_file" "$task_id" 2>/dev/null) || true
+            case "${_task_status:-}" in
+                x|"*"|N)
+                    log "  $task_id: skipping (kanban status [$_task_status])"
+                    processed+=("$task_id")
+                    continue
+                    ;;
+            esac
+        fi
+
         # Check if workspace already exists now (might have been created elsewhere)
         local existing_worker
         existing_worker=$(find_worker_by_task_id "$ralph_dir" "$task_id" 2>/dev/null)

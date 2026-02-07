@@ -309,6 +309,20 @@ cmd_global_sync() {
     local merged_count=0
     local comments_count=0
 
+    # Pre-scan: collect task IDs that have an OPEN PR.
+    # When a task has both a merged PR (old) and an open PR (new), the merged
+    # PR must not mark the kanban [x] — the open PR represents active work.
+    local -A tasks_with_open_pr=()
+    while read -r pr; do
+        local _scan_branch _scan_state _scan_tid
+        _scan_branch=$(echo "$pr" | jq -r '.headRefName')
+        _scan_state=$(echo "$pr" | jq -r '.state')
+        _scan_tid=$(echo "$_scan_branch" | sed -E 's|^task/([A-Za-z]{2,10}-[0-9]{1,4}).*|\1|')
+        if [ -n "$_scan_tid" ] && [ "$_scan_tid" != "$_scan_branch" ] && [ "$_scan_state" = "OPEN" ]; then
+            tasks_with_open_pr["$_scan_tid"]=1
+        fi
+    done < <(echo "$all_prs" | jq -c '.[]')
+
     # Process each PR
     while read -r pr; do
         local pr_number branch state
@@ -337,6 +351,13 @@ cmd_global_sync() {
             # Skip if task doesn't exist in kanban at all (orphan PR)
             if [ -z "$current_status" ]; then
                 log_debug "  $task_id: skipped (not in kanban)"
+                continue
+            fi
+
+            # Skip if this task has a newer OPEN PR — marking [x] from the
+            # old merged PR would incorrectly complete a task with active work
+            if [ -n "${tasks_with_open_pr[$task_id]:-}" ]; then
+                log_debug "  $task_id: skipped merged PR #$pr_number (newer open PR exists)"
                 continue
             fi
 
@@ -458,10 +479,15 @@ cmd_task_sync() {
     fi
 
     # Check if any matching PRs are merged — if so, mark task as done
+    # But skip if the same task also has an OPEN PR (active work supersedes old merge)
     local kanban="$RALPH_DIR/kanban.md"
     if [ -f "$kanban" ]; then
         local prs
         prs=$(find_prs_by_task_patterns "$patterns")
+
+        # Check if any open PRs exist for the same task (jq returns "true"/"false")
+        local _has_open_pr
+        _has_open_pr=$(echo "$prs" | jq '[.[] | select(.state == "OPEN")] | length > 0')
 
         echo "$prs" | jq -c '.[] | select(.state == "MERGED")' | while read -r pr; do
             local branch task_id
@@ -474,6 +500,12 @@ cmd_task_sync() {
 
                 # Skip if already complete or task doesn't exist
                 if [ "$current_status" = "x" ] || [ -z "$current_status" ]; then
+                    continue
+                fi
+
+                # Skip if the same task also has an open PR (active work supersedes old merge)
+                if [ "$_has_open_pr" = "true" ]; then
+                    log_debug "PR ($task_id): skipped merged PR (open PR exists for same task)"
                     continue
                 fi
 
