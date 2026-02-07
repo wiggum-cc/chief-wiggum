@@ -65,6 +65,12 @@ heartbeat_update_task() {
     local ralph_dir="$3"
     local task_id="$4"
 
+    # Skip if server_id is empty (prevents ghost heartbeats)
+    if [ -z "$server_id" ]; then
+        log_warn "heartbeat: skipping #$issue_number - empty server_id (pid=$$ ppid=$PPID caller=${FUNCNAME[1]:-?})"
+        return 1
+    fi
+
     # Find worker directory for this task
     local worker_dir=""
     if [ -d "$ralph_dir/workers" ]; then
@@ -247,11 +253,14 @@ heartbeat_update_all() {
     local ralph_dir="$1"
     local server_id="$2"
 
+    log_debug "heartbeat_update_all: pid=$$ server_id='$server_id' caller=${FUNCNAME[1]:-?}"
+
     # Get all tasks we own
     local owned_issues
     owned_issues=$(claim_list_owned "$server_id")
 
     local updated=0
+    local -A _processed_issues=()
     local issue_number
     while IFS= read -r issue_number; do
         [ -n "$issue_number" ] || continue
@@ -282,6 +291,7 @@ heartbeat_update_all() {
         if heartbeat_update_task "$issue_number" "$server_id" "$ralph_dir" "$task_id"; then
             ((++updated))
         fi
+        _processed_issues[$issue_number]=1
     done <<< "$owned_issues"
 
     # Also cover workers in failure-recovery (issues are closed, so
@@ -308,6 +318,9 @@ heartbeat_update_all() {
             local recovery_issue
             recovery_issue=$(echo "$entry" | jq -r '.issue_number')
             [ -n "$recovery_issue" ] && [ "$recovery_issue" != "null" ] || continue
+
+            # Skip if already processed by the claim loop above
+            [ -z "${_processed_issues[$recovery_issue]+x}" ] || continue
 
             # Check for step-completed event
             if [ -f "$recovery_dir/step-completed-event" ]; then
