@@ -29,7 +29,7 @@ EXCEPTION: You may ONLY write to {{ralph_dir}}/plans/{{task_id}}.md
 ## Allowed Operations
 
 * Glob, Grep, Read - for exploring the codebase
-* Bash (read-only only): ls, git status, git log, git diff, find
+* Bash (read-only only): ls, find, git status, git log, git diff, git show, git blame, git bisect, git branch -l, git tag -l, git shortlog, git grep
 * Write - ONLY to {{ralph_dir}}/plans/{{task_id}}.md
 
 Your role is EXCLUSIVELY to explore and plan. You do NOT implement.

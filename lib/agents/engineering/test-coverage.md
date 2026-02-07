@@ -90,7 +90,6 @@ The workspace contains uncommitted work from other agents. You MUST NOT destroy 
 **FORBIDDEN git commands (will terminate your session):**
 - `git checkout -- <file>` - DESTROYS uncommitted file changes
 - `git checkout .` - DESTROYS all uncommitted changes
-- `git stash` - Hides uncommitted changes
 - `git reset --hard` - DESTROYS uncommitted changes
 - `git clean` - DELETES untracked files
 - `git restore` - DESTROYS uncommitted changes
@@ -99,6 +98,13 @@ The workspace contains uncommitted work from other agents. You MUST NOT destroy 
 
 **ALLOWED git commands (read-only):**
 - `git status`, `git diff`, `git log`, `git show`
+- `git blame`, `git bisect`, `git branch -l`, `git tag -l`
+- `git shortlog`, `git grep`
+
+**CONDITIONALLY ALLOWED: `git stash`**
+- You may use `git stash` ONLY if `git stash pop` or `git stash apply` appears in the **same Bash command**
+- Example: `git stash && npm test && git stash pop` (allowed)
+- Never use bare `git stash` alone — the orchestrator verifies stash state after every command
 </WIGGUM_SYSTEM_PROMPT>
 
 <WIGGUM_USER_PROMPT>

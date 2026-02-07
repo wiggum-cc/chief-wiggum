@@ -217,6 +217,7 @@ _resume_decide_for_worker() {
 
             # Mark task [P] and set terminal
             update_kanban_pending_approval "$RALPH_DIR/kanban.md" "$task_id" || true
+            github_issue_sync_task_status "$RALPH_DIR" "$task_id" "P" || true
             resume_state_set_terminal "$worker_dir" "Work complete, task marked [P]"
 
             # Remove decision file so it doesn't enter unified queue
@@ -630,6 +631,7 @@ _launch_resume_worker() {
 
     # Move task back to [=] in-progress (e.g., from [*] failed)
     update_kanban_status "$RALPH_DIR/kanban.md" "$task_id" "=" || true
+    github_issue_sync_task_status "$RALPH_DIR" "$task_id" "=" || true
 
     # Launch worker via setsid (same pattern as bin/wiggum-worker resume)
     export _WORKER_WIGGUM_HOME="$WIGGUM_HOME"

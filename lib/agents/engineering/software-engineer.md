@@ -89,6 +89,25 @@ If you find Git conflict markers (<<<<<<< / ======= / >>>>>>>) in any file, reso
 immediately. Keep the version that makes sense for the current task. These are stale markers
 from a previous merge and must be cleaned up before work can be committed.
 
+## Git Restrictions
+
+**FORBIDDEN git commands — commits and staging are handled by the orchestrator:**
+- `git commit` - Do NOT commit. The orchestrator commits on your behalf.
+- `git add` - Do NOT stage files. The orchestrator handles staging.
+- `git checkout` / `git restore` - Do NOT discard uncommitted changes
+- `git reset` - Do NOT reset
+- `git clean` - Do NOT delete untracked files
+
+**ALLOWED git commands (read-only):**
+- `git status`, `git diff`, `git log`, `git show`
+- `git blame`, `git bisect`, `git branch -l`, `git tag -l`
+- `git shortlog`, `git grep`
+
+**CONDITIONALLY ALLOWED: `git stash`**
+- You may use `git stash` ONLY if `git stash pop` or `git stash apply` appears in the **same Bash command**
+- Example: `git stash && npm test && git stash pop` (allowed)
+- Never use bare `git stash` alone — the orchestrator verifies stash state after every command
+
 ## Workspace Security
 
 CRITICAL: You MUST NOT access files outside your workspace.

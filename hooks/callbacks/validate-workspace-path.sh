@@ -273,19 +273,93 @@ fi
 # Validate Bash commands for dangerous path operations
 if [[ "$tool" == "Bash" && -n "$command" ]]; then
 
-    # Block ALL git commands - git operations are handled by worker scripts
+    # Git command validation: allow read-only, block destructive, conditional stash
     if echo "$command" | grep -qE '(^|[;&|])[[:space:]]*(git[[:space:]]|git$)'; then
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
-        echo "❌ GIT COMMAND BLOCKED" >&2
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
-        echo "" >&2
-        echo "Command: $command" >&2
-        echo "" >&2
-        echo "Git commands are not allowed in worker sessions." >&2
-        echo "Git commits and PRs are handled automatically by the orchestration system." >&2
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
-        log_hook_decision "BLOCK" "$tool" "git" "git commands not allowed"
-        exit 2
+        # Extract all git subcommands from the command string
+        git_subcmds=$(echo "$command" | grep -oE 'git[[:space:]]+[a-z][-a-z]*' | sed 's/git[[:space:]]*//' | sort -u || true)
+
+        for subcmd in $git_subcmds; do
+            case "$subcmd" in
+                # Read-only commands - always allowed
+                status|diff|log|show|blame|bisect|shortlog|grep|branch|tag)
+                    ;;
+                # Conditional: stash - validated separately below
+                stash)
+                    ;;
+                # Everything else is forbidden
+                *)
+                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
+                    echo "❌ GIT COMMAND BLOCKED" >&2
+                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
+                    echo "" >&2
+                    echo "Command: $command" >&2
+                    echo "Blocked: git $subcmd" >&2
+                    echo "" >&2
+                    echo "Only read-only git commands are allowed (status, diff, log, show," >&2
+                    echo "blame, bisect, shortlog, grep, branch, tag)." >&2
+                    echo "Commits and staging are handled by the orchestrator." >&2
+                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
+                    log_hook_decision "BLOCK" "$tool" "git $subcmd" "forbidden git subcommand"
+                    exit 2
+                    ;;
+            esac
+        done
+
+        # Special validation for git stash
+        if echo "$command" | grep -qE 'git[[:space:]]+stash'; then
+            # stash drop/clear are always forbidden (destructive)
+            if echo "$command" | grep -qE 'git[[:space:]]+stash[[:space:]]+(drop|clear)'; then
+                echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
+                echo "❌ GIT STASH DROP/CLEAR BLOCKED" >&2
+                echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
+                echo "" >&2
+                echo "Command: $command" >&2
+                echo "git stash drop/clear destroys stash entries." >&2
+                echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
+                log_hook_decision "BLOCK" "$tool" "git stash drop/clear" "destructive stash operation"
+                exit 2
+            fi
+
+            # Determine if the command creates a stash entry
+            creates_stash=false
+
+            # bare "git stash" (not followed by a known subcommand) is equivalent to push
+            if echo "$command" | grep -qE 'git[[:space:]]+stash' && \
+               ! echo "$command" | grep -qE 'git[[:space:]]+stash[[:space:]]+(push|save|pop|apply|list|show|drop|clear|branch)'; then
+                creates_stash=true
+            fi
+
+            # explicit "git stash push" or "git stash save"
+            if echo "$command" | grep -qE 'git[[:space:]]+stash[[:space:]]+(push|save)'; then
+                creates_stash=true
+            fi
+
+            # If creating a stash, pop/apply MUST appear in the same command
+            if [[ "$creates_stash" == "true" ]]; then
+                if ! echo "$command" | grep -qE 'git[[:space:]]+stash[[:space:]]+(pop|apply)'; then
+                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
+                    echo "❌ GIT STASH WITHOUT POP BLOCKED" >&2
+                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
+                    echo "" >&2
+                    echo "Command: $command" >&2
+                    echo "" >&2
+                    echo "git stash is only allowed when git stash pop/apply" >&2
+                    echo "appears in the SAME Bash command." >&2
+                    echo "" >&2
+                    echo "Example: git stash && npm test && git stash pop" >&2
+                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
+                    log_hook_decision "BLOCK" "$tool" "git stash" "stash without pop/apply in same command"
+                    exit 2
+                fi
+
+                # Record stash count for PostToolUse verification
+                if [[ -n "$workspace" && -n "$worker_dir" ]]; then
+                    stash_count=$(cd "$workspace" && git stash list 2>/dev/null | wc -l || echo "0")
+                    stash_count="${stash_count:-0}"
+                    echo "$stash_count" > "$worker_dir/.stash-guard"
+                fi
+            fi
+        fi
     fi
 
     # Block commands that may leak secret tokens

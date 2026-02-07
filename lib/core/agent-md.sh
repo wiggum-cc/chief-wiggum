@@ -517,7 +517,6 @@ You are a READ-ONLY agent. The workspace contains uncommitted work that MUST NOT
 
 **FORBIDDEN git commands (will terminate your session):**
 - `git checkout` (any form)
-- `git stash`
 - `git reset`
 - `git clean`
 - `git restore`
@@ -529,6 +528,17 @@ You are a READ-ONLY agent. The workspace contains uncommitted work that MUST NOT
 - `git diff` - View changes
 - `git log` - View history
 - `git show` - View commits
+- `git blame` - Trace line authorship
+- `git bisect` - Binary search for bug-introducing commits
+- `git branch -l` / `git branch -a` - List branches
+- `git tag -l` - List tags
+- `git shortlog` - Summarize commit history
+- `git grep` - Search content across commits
+
+**CONDITIONALLY ALLOWED: `git stash`**
+- You may use `git stash` ONLY if `git stash pop` or `git stash apply` appears in the **same Bash command**
+- Example: `git stash && npm test && git stash pop` (allowed)
+- Never use bare `git stash` alone — the orchestrator verifies stash state after every command
 
 You operate by READING files. Do NOT modify the workspace in any way.
 EOF
