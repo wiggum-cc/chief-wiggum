@@ -122,9 +122,15 @@ scheduler_tick_distributed() {
     local server_id
     server_id=$(task_source_get_server_id)
 
-    # Get all tasks from task source
+    # Get all tasks from task source.
+    # Guard: if task source fails (gh API error, auth issue), log and
+    # fall back to local kanban so the tick still produces useful output.
     local all_tasks
-    all_tasks=$(task_source_get_all_tasks)
+    all_tasks=$(task_source_get_all_tasks) || {
+        log_warn "scheduler_tick_distributed: task source failed — falling back to local kanban"
+        scheduler_tick
+        return $?
+    }
 
     # Cache metadata in scheduler format (task_id|status|priority|deps)
     _SCHED_TICK_METADATA=$(echo "$all_tasks" | cut -d'|' -f1-4)
@@ -161,7 +167,10 @@ scheduler_tick_distributed() {
 
     # Build unified queue (global scheduler state, used by other modules)
     # shellcheck disable=SC2034
-    SCHED_UNIFIED_QUEUE=$(get_unified_work_queue)
+    SCHED_UNIFIED_QUEUE=$(get_unified_work_queue) || {
+        log_warn "scheduler_tick_distributed: get_unified_work_queue failed — queue empty this tick"
+        SCHED_UNIFIED_QUEUE=""
+    }
 
     # Detect scheduling event (global scheduler state, used by other modules)
     if [ "$SCHED_READY_TASKS" != "$prev_ready" ] || [ "$SCHED_BLOCKED_TASKS" != "$prev_blocked" ]; then

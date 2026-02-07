@@ -6,7 +6,7 @@
 # Uses gh CLI for all GitHub interactions.
 #
 # Label conventions:
-#   wiggum:task           - Gate label: issue is a Wiggum task
+#   wiggum                - Gate label: issue is a Wiggum task
 #   wiggum:pending        - Status: pending [ ]
 #   wiggum:in-progress    - Status: in-progress [=]
 #   wiggum:pending-review - Status: pending approval [P]
@@ -38,8 +38,8 @@ source "$WIGGUM_HOME/lib/core/gh-error.sh"
 # Label prefix for Wiggum-specific labels
 _GH_LABEL_PREFIX="wiggum:"
 
-# Gate label (required for tasks)
-_GH_GATE_LABEL="wiggum:task"
+# Gate label (required for tasks — must match bin/wiggum-github GITHUB_LABELS)
+_GH_GATE_LABEL="wiggum"
 
 # Status label mappings (status_char -> label)
 declare -gA _GH_STATUS_LABELS=(
