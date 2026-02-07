@@ -259,7 +259,7 @@ test_hook_blocks_git_push() {
 
 test_hook_blocks_git_in_pipeline() {
     local json
-    json=$(tool_json "Bash" "" "echo hello && git status")
+    json=$(tool_json "Bash" "" "echo hello && git commit -m test")
 
     local rc=0
     run_validate_hook "$json" "$TEST_WORKSPACE" "" || rc=$?

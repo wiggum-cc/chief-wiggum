@@ -63,25 +63,10 @@ agent_run() {
         return 0
     fi
 
-    # Advance failed — check for unresolved conflicts left behind
-    local conflicted_files
-    conflicted_files=$(git -C "$workspace" diff --name-only --diff-filter=U 2>/dev/null || true)
-
-    if [ -n "$conflicted_files" ]; then
-        local conflict_count
-        conflict_count=$(echo "$conflicted_files" | wc -l)
-        log "Merge conflict detected: $conflict_count file(s)"
-
-        local files_json
-        files_json=$(echo "$conflicted_files" | jq -R -s 'split("\n") | map(select(length > 0))')
-
-        agent_write_result "$worker_dir" "FAIL" \
-            "{\"merge_status\":\"conflict\",\"conflicts\":$conflict_count,\"conflicted_files\":$files_json}"
-        return 0  # FAIL is a valid gate result, not an error
-    fi
-
-    # Some other failure (fetch, etc.)
+    # Advance failed — workspace left clean (merge aborted).
+    # Could be a conflict or a fetch failure; either way the pipeline
+    # should treat it as FAIL and let downstream steps handle it.
     log_error "Failed to sync with origin/main"
-    agent_write_result "$worker_dir" "FAIL" '{}' '["Sync failed"]'
-    return 1
+    agent_write_result "$worker_dir" "FAIL" '{"merge_status":"failed"}' '["Sync with origin/main failed"]'
+    return 0  # FAIL is a valid gate result, not an error
 }

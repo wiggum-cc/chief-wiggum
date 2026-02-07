@@ -333,7 +333,7 @@ test_home_dir_blocked() {
 # =============================================================================
 
 test_git_command_blocked() {
-    local json='{"tool":"Bash","tool_input":{"command":"git status"}}'
+    local json='{"tool":"Bash","tool_input":{"command":"git commit -m test"}}'
 
     if run_hook "$json"; then
         echo -e "  ${RED}✗${NC} Git commands should be blocked" >&2
@@ -345,7 +345,7 @@ test_git_command_blocked() {
 }
 
 test_git_in_pipeline_blocked() {
-    local json='{"tool":"Bash","tool_input":{"command":"echo foo | git status"}}'
+    local json='{"tool":"Bash","tool_input":{"command":"echo foo | git push origin main"}}'
 
     if run_hook "$json"; then
         echo -e "  ${RED}✗${NC} Git in pipeline should be blocked" >&2

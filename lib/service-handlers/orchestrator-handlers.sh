@@ -264,11 +264,11 @@ svc_orch_init_terminal() {
     echo "=========================================="
     echo ""
 
-    # Run initial scheduler tick and status display so the terminal shows
-    # real data immediately, rather than waiting for the first post-phase cycle
+    # Prime scheduler state so the first post-phase status display has data.
+    # Don't display status here — periodic startup services (e.g. github-issue-sync)
+    # modify the kanban before the first post-phase tick, which would show stale counts.
     scheduler_tick
     SCHED_SCHEDULING_EVENT=true
-    svc_orch_status_display
 }
 
 # =============================================================================

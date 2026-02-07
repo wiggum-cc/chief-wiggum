@@ -103,9 +103,11 @@ test_sync_main_fast_forward() {
     local result_file
     result_file=$(find "$WORKER_DIR/results" -name "*-result.json" | head -1)
     if [ -n "$result_file" ]; then
-        local strategy
-        strategy=$(jq -r '.outputs.strategy // empty' "$result_file")
-        assert_equals "ff" "$strategy" "Should use fast-forward strategy"
+        local gate_result merge_status
+        gate_result=$(jq -r '.outputs.gate_result // empty' "$result_file")
+        merge_status=$(jq -r '.outputs.merge_status // empty' "$result_file")
+        assert_equals "PASS" "$gate_result" "Should PASS on fast-forward"
+        assert_equals "synced" "$merge_status" "Should report synced status"
     fi
 }
 
@@ -141,9 +143,11 @@ test_sync_main_rebase_linear() {
     local result_file
     result_file=$(find "$WORKER_DIR/results" -name "*-result.json" | head -1)
     if [ -n "$result_file" ]; then
-        local strategy
-        strategy=$(jq -r '.outputs.strategy // empty' "$result_file")
-        assert_equals "rebase" "$strategy" "Should use rebase strategy for non-conflicting divergence"
+        local gate_result merge_status
+        gate_result=$(jq -r '.outputs.gate_result // empty' "$result_file")
+        merge_status=$(jq -r '.outputs.merge_status // empty' "$result_file")
+        assert_equals "PASS" "$gate_result" "Should PASS on rebase"
+        assert_equals "synced" "$merge_status" "Should report synced status"
     fi
 }
 
@@ -178,11 +182,11 @@ test_sync_main_merge_fallback_on_conflict() {
     local result_file
     result_file=$(find "$WORKER_DIR/results" -name "*-result.json" | head -1)
     if [ -n "$result_file" ]; then
-        local strategy gate_result
-        strategy=$(jq -r '.outputs.strategy // empty' "$result_file")
+        local gate_result merge_status
         gate_result=$(jq -r '.outputs.gate_result // empty' "$result_file")
-        assert_equals "merge" "$strategy" "Should fall back to merge strategy on conflict"
+        merge_status=$(jq -r '.outputs.merge_status // empty' "$result_file")
         assert_equals "FAIL" "$gate_result" "Should FAIL with conflicts"
+        assert_equals "failed" "$merge_status" "Should report failed status"
     fi
 }
 

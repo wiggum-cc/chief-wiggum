@@ -329,8 +329,9 @@ _github_parse_task_id() {
         return 0
     fi
 
-    # Default: use GH-{number}
-    echo "GH-$number"
+    # No task ID found — issue must have **[TASK-ID]** in title or body
+    log_debug "Issue #$number has no task ID pattern in title or body — skipping"
+    return 1
 }
 
 # Get status from issue labels
@@ -442,7 +443,7 @@ _task_source_github_get_all_tasks() {
         issue_json="${_GH_ISSUE_CACHE[$number]}"
 
         local task_id labels_json body
-        task_id=$(_github_parse_task_id "$issue_json")
+        task_id=$(_github_parse_task_id "$issue_json") || continue
         labels_json=$(echo "$issue_json" | jq '.labels')
         body=$(echo "$issue_json" | jq -r '.body // ""')
 
@@ -469,17 +470,12 @@ _task_source_github_claim_task() {
     local task_id="$1"
     local server_id="$2"
 
-    # Extract issue number from task_id
+    # Look up issue number from cache
     local issue_number
-    if [[ "$task_id" =~ ^GH-([0-9]+)$ ]]; then
-        issue_number="${BASH_REMATCH[1]}"
-    else
-        # Look up issue number from cache
-        issue_number=$(_github_find_issue_by_task_id "$task_id")
-        if [ -z "$issue_number" ]; then
-            log_error "Cannot find issue for task $task_id"
-            return 1
-        fi
+    issue_number=$(_github_find_issue_by_task_id "$task_id")
+    if [ -z "$issue_number" ]; then
+        log_error "Cannot find issue for task $task_id"
+        return 1
     fi
 
     # Check if already claimed by another server
@@ -531,8 +527,8 @@ _task_source_github_claim_task() {
 
     # Update local claims cache
     source "$WIGGUM_HOME/lib/distributed/server-identity.sh"
-    server_claims_update "$(dirname "$ralph_dir")/.ralph" "$task_id" "add" 2>/dev/null || true
-    server_heartbeat_log "$(dirname "$ralph_dir")/.ralph" "$task_id" "claim" 2>/dev/null || true
+    server_claims_update "$_TASK_SOURCE_RALPH_DIR" "$task_id" "add" 2>/dev/null || true
+    server_heartbeat_log "$_TASK_SOURCE_RALPH_DIR" "$task_id" "claim" 2>/dev/null || true
 
     return 0
 }
@@ -548,14 +544,9 @@ _task_source_github_release_task() {
     local task_id="$1"
     local server_id="$2"
 
-    # Extract issue number
     local issue_number
-    if [[ "$task_id" =~ ^GH-([0-9]+)$ ]]; then
-        issue_number="${BASH_REMATCH[1]}"
-    else
-        issue_number=$(_github_find_issue_by_task_id "$task_id")
-        [ -n "$issue_number" ] || return 1
-    fi
+    issue_number=$(_github_find_issue_by_task_id "$task_id")
+    [ -n "$issue_number" ] || return 1
 
     # Verify we own it
     local current_owner
@@ -585,8 +576,8 @@ _task_source_github_release_task() {
 
     # Update local cache
     source "$WIGGUM_HOME/lib/distributed/server-identity.sh"
-    server_claims_update "$(dirname "$ralph_dir")/.ralph" "$task_id" "remove" 2>/dev/null || true
-    server_heartbeat_log "$(dirname "$ralph_dir")/.ralph" "$task_id" "release" 2>/dev/null || true
+    server_claims_update "$_TASK_SOURCE_RALPH_DIR" "$task_id" "remove" 2>/dev/null || true
+    server_heartbeat_log "$_TASK_SOURCE_RALPH_DIR" "$task_id" "release" 2>/dev/null || true
 
     return 0
 }
@@ -604,14 +595,9 @@ _task_source_github_set_status() {
     local task_id="$1"
     local status="$2"
 
-    # Extract issue number
     local issue_number
-    if [[ "$task_id" =~ ^GH-([0-9]+)$ ]]; then
-        issue_number="${BASH_REMATCH[1]}"
-    else
-        issue_number=$(_github_find_issue_by_task_id "$task_id")
-        [ -n "$issue_number" ] || return 1
-    fi
+    issue_number=$(_github_find_issue_by_task_id "$task_id")
+    [ -n "$issue_number" ] || return 1
 
     # Get new status label
     local new_label="${_GH_STATUS_LABELS[$status]:-}"
@@ -659,14 +645,9 @@ _task_source_github_set_status() {
 _task_source_github_get_owner() {
     local task_id="$1"
 
-    # Extract issue number
     local issue_number
-    if [[ "$task_id" =~ ^GH-([0-9]+)$ ]]; then
-        issue_number="${BASH_REMATCH[1]}"
-    else
-        issue_number=$(_github_find_issue_by_task_id "$task_id")
-        [ -n "$issue_number" ] || return 0
-    fi
+    issue_number=$(_github_find_issue_by_task_id "$task_id")
+    [ -n "$issue_number" ] || return 0
 
     local issue_json
     issue_json=$(_github_get_issue "$issue_number")
@@ -687,14 +668,9 @@ _task_source_github_get_owner() {
 _task_source_github_get_task() {
     local task_id="$1"
 
-    # Extract issue number
     local issue_number
-    if [[ "$task_id" =~ ^GH-([0-9]+)$ ]]; then
-        issue_number="${BASH_REMATCH[1]}"
-    else
-        issue_number=$(_github_find_issue_by_task_id "$task_id")
-        [ -n "$issue_number" ] || { echo "null"; return 1; }
-    fi
+    issue_number=$(_github_find_issue_by_task_id "$task_id")
+    [ -n "$issue_number" ] || { echo "null"; return 1; }
 
     local issue_json
     issue_json=$(_github_get_issue "$issue_number")
@@ -760,7 +736,7 @@ _github_find_issue_by_task_id() {
     local number issue_json found_task_id
     for number in "${!_GH_ISSUE_CACHE[@]}"; do
         issue_json="${_GH_ISSUE_CACHE[$number]}"
-        found_task_id=$(_github_parse_task_id "$issue_json")
+        found_task_id=$(_github_parse_task_id "$issue_json") || continue
         if [ "$found_task_id" = "$task_id" ]; then
             echo "$number"
             return 0
@@ -824,7 +800,7 @@ _task_source_github_get_ready_tasks() {
     local number issue_json task_id labels_json body
     for number in "${!_GH_ISSUE_CACHE[@]}"; do
         issue_json="${_GH_ISSUE_CACHE[$number]}"
-        task_id=$(_github_parse_task_id "$issue_json")
+        task_id=$(_github_parse_task_id "$issue_json") || continue
         labels_json=$(echo "$issue_json" | jq '.labels')
         body=$(echo "$issue_json" | jq -r '.body // ""')
 
