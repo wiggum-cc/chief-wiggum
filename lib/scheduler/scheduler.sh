@@ -242,9 +242,10 @@ _scheduler_reclaim_restored_workers() {
 # At startup, workers whose agent processes died remain in "running" states
 # (fixing, merging, resolving) or transient states (merge_conflict). These
 # are reset via lifecycle events:
-#   - resolving → needs_resolve (resolve.startup_reset, resets merge attempts)
-#   - fixing    → needs_fix     (startup.reset)
-#   - merging   → needs_merge   (startup.reset, resets merge attempts)
+#   - resolving      → needs_resolve (resolve.startup_reset, resets merge attempts)
+#   - fixing         → needs_fix     (startup.reset)
+#   - merging        → needs_merge   (startup.reset, resets merge attempts)
+#   - merge_conflict → needs_resolve (conflict.needs_resolve, guarded by max attempts)
 # Terminal (merged, failed) and waiting (needs_*) states are already handled
 # by their respective services.
 _scheduler_reset_dead_workers() {
@@ -279,13 +280,15 @@ _scheduler_reset_dead_workers() {
                 event="resolve.startup_reset" ;;
             fixing|merging)
                 event="startup.reset" ;;
+            # Transient states stuck without a running agent
+            merge_conflict)
+                event="conflict.needs_resolve" ;;
             # Terminal/waiting states — already handled by services
             merged|failed|needs_fix|needs_merge|needs_resolve|needs_multi_resolve|none)
                 log_debug "reset_dead: $worker_name state=$current_git_state - skip (handled by services)"
                 continue ;;
-            # Transient states (merge_conflict, fix_completed, resolved) — may need attention
             *)
-                log_debug "reset_dead: $worker_name state=$current_git_state - skip (transient/unknown)"
+                log_debug "reset_dead: $worker_name state=$current_git_state - skip (unknown)"
                 continue ;;
         esac
 
