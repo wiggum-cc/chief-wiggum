@@ -650,6 +650,15 @@ _has_repeated_step_failures() {
 _is_terminal_failure() {
     local worker_dir="$1"
 
+    # USER_RETRY overrides all automatic terminal criteria — the user
+    # explicitly requested a retry, so let the worker through to resume-decide
+    local latest_decision
+    latest_decision=$(jq -r '(.history // []) | last | .decision // ""' \
+        "$worker_dir/resume-state.json" 2>/dev/null)
+    if [[ "$latest_decision" == "USER_RETRY" ]]; then
+        return 1
+    fi
+
     # Criterion 1: resume-state marks terminal (COMPLETE or ABORT decisions)
     resume_state_is_terminal "$worker_dir" && return 0
 
