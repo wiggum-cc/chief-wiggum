@@ -161,10 +161,23 @@ do_resume() {
         fi
     fi
 
-    # Check PRD exists
+    # Ensure PRD exists (recovered workers from git clone won't have one).
+    # Generate from kanban the same way cmd-start.sh does for new tasks.
     if [ ! -f "$worker_dir/prd.md" ]; then
-        echo "Error: PRD not found at $worker_dir/prd.md"
-        exit "$EXIT_ERROR"
+        if [ -f "$RALPH_DIR/kanban.md" ]; then
+            log_debug "Generating prd.md from kanban for recovered worker $task_id"
+            if extract_task "$task_id" "$RALPH_DIR/kanban.md" > "$worker_dir/prd.md" 2>/dev/null \
+                    && [ -s "$worker_dir/prd.md" ]; then
+                log "Generated prd.md from kanban for $task_id"
+            else
+                rm -f "$worker_dir/prd.md"
+                echo "Error: PRD not found at $worker_dir/prd.md and could not generate from kanban"
+                exit "$EXIT_ERROR"
+            fi
+        else
+            echo "Error: PRD not found at $worker_dir/prd.md"
+            exit "$EXIT_ERROR"
+        fi
     fi
 
     # Check workspace exists

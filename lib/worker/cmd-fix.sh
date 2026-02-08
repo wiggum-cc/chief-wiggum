@@ -108,6 +108,19 @@ do_worker_fix() {
         exit $EXIT_ERROR
     fi
 
+    # Ensure prd.md exists (fix workers recovered from git clone won't have one;
+    # system.task-worker requires it). Generate from kanban the same way new tasks do.
+    if [ ! -f "$worker_dir/prd.md" ]; then
+        log_debug "Generating prd.md from kanban for fix worker $task_id"
+        if ! extract_task "$task_id" "$RALPH_DIR/kanban.md" > "$worker_dir/prd.md" 2>/dev/null \
+                || [ ! -s "$worker_dir/prd.md" ]; then
+            log_warn "extract_task failed for $task_id, creating minimal prd.md"
+            echo "# Fix PR Comments: $task_id
+
+- [ ] Fix PR review comments" > "$worker_dir/prd.md"
+        fi
+    fi
+
     # Set git state: fixing
     git_state_set "$worker_dir" "fixing" "wiggum-worker.do_worker_fix" "Manual fix via 'wiggum worker fix $task_id'"
 

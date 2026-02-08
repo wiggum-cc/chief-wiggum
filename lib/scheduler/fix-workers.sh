@@ -161,6 +161,13 @@ spawn_fix_workers() {
             continue
         fi
 
+        # Ensure prd.md exists (recovered workers from git clone won't have one).
+        # Generate from kanban the same way cmd-start.sh does for new tasks.
+        if [ ! -f "$worker_dir/prd.md" ] && [ -f "$kanban_file" ]; then
+            log_debug "Generating prd.md from kanban for recovered fix worker $task_id"
+            extract_task "$task_id" "$kanban_file" > "$worker_dir/prd.md" 2>/dev/null || true
+        fi
+
         # Transition state to fixing
         emit_event "$worker_dir" "fix.started" "fix-workers.spawn_fix_workers"
 
