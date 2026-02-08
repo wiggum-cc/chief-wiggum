@@ -145,6 +145,12 @@ test_merge_fail_jumps_to_sync_main() {
     assert_equals "sync-main" "$jump_target" "Merge FAIL should jump to sync-main for retry"
 }
 
+test_commit_push_fail_jumps_to_sync_main() {
+    local jump_target
+    jump_target=$(jq -r '.steps[] | select(.id == "commit-push") | .on_result.FAIL.jump' "$PIPELINE_FILE")
+    assert_equals "sync-main" "$jump_target" "commit-push FAIL should jump to sync-main for retry"
+}
+
 test_test_run_fix_has_inline_generic_fix() {
     local inline_agent
     inline_agent=$(jq -r '.steps[] | select(.id == "test-run") | .on_result.FIX.agent' "$PIPELINE_FILE")
@@ -277,6 +283,7 @@ run_test test_sync_main_fail_has_inline_resolver
 run_test test_resolver_pass_jumps_to_test_run
 run_test test_resolver_fail_jumps_to_abort
 run_test test_merge_fail_jumps_to_sync_main
+run_test test_commit_push_fail_jumps_to_sync_main
 run_test test_test_run_fix_has_inline_generic_fix
 run_test test_test_run_fail_jumps_to_abort
 run_test test_pr_fix_has_max

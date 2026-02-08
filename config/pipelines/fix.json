@@ -47,7 +47,10 @@
     {
       "id": "commit-push",
       "agent": "workflow.git-commit-push",
-      "max": 2
+      "max": 2,
+      "on_result": {
+        "FAIL": { "jump": "sync-main" }
+      }
     },
     {
       "id": "merge",

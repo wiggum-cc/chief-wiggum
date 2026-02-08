@@ -286,6 +286,73 @@ test_git_commit_push_detects_unpushed_commits() {
     assert_equals "0" "$unpushed_after" "Should have 0 unpushed commits after agent runs"
 }
 
+test_git_commit_push_rebase_fallback_on_force_push_blocked() {
+    # Setup: bare remote with a pre-receive hook that rejects force pushes
+    local bare_remote="$TEST_DIR/remote.git"
+    git init --bare "$bare_remote" >/dev/null 2>&1
+
+    local ws="$WORKER_DIR/workspace"
+    git -C "$ws" checkout -b task/TEST-001-456 2>/dev/null
+    git -C "$ws" remote add origin "$bare_remote"
+    git -C "$ws" push -u origin task/TEST-001-456 >/dev/null 2>&1
+
+    # Create a local commit
+    echo "local change" > "$ws/local.txt"
+    git -C "$ws" add .
+    git -C "$ws" commit -q -m "Local change"
+
+    # Simulate remote having an extra commit (causes non-fast-forward)
+    local clone_dir="$TEST_DIR/clone"
+    git clone -q "$bare_remote" "$clone_dir" 2>/dev/null
+    git -C "$clone_dir" config user.email "test@test.com"
+    git -C "$clone_dir" config user.name "Test"
+    git -C "$clone_dir" checkout task/TEST-001-456 2>/dev/null
+    echo "remote change" > "$clone_dir/remote.txt"
+    git -C "$clone_dir" add .
+    git -C "$clone_dir" commit -q -m "Remote change"
+    git -C "$clone_dir" push -q origin task/TEST-001-456 2>/dev/null
+
+    # Fetch so local reflog knows about the remote commit — without this,
+    # --force-with-lease fails with "stale info" before reaching the hook
+    git -C "$ws" fetch origin 2>/dev/null
+
+    # Install a pre-receive hook that blocks force pushes (simulates GH013)
+    cat > "$bare_remote/hooks/pre-receive" << 'HOOK'
+#!/usr/bin/env bash
+while read -r old_oid new_oid ref; do
+    if [ "$old_oid" != "0000000000000000000000000000000000000000" ]; then
+        # Check if old_oid is ancestor of new_oid (non-force push)
+        if ! git merge-base --is-ancestor "$old_oid" "$new_oid" 2>/dev/null; then
+            echo "error: GH013: force-push is not allowed for this branch"
+            exit 1
+        fi
+    fi
+done
+HOOK
+    chmod +x "$bare_remote/hooks/pre-receive"
+
+    source "$WIGGUM_HOME/lib/agents/workflow/git-commit-push.sh"
+
+    local result=0
+    agent_run "$WORKER_DIR" "$TEST_DIR" 2>/dev/null || result=$?
+
+    assert_equals "0" "$result" "Should succeed via rebase fallback"
+
+    # Verify result file shows PASS
+    local result_file
+    result_file=$(find "$WORKER_DIR/results" -name "*-result.json" | head -1)
+    if [ -n "$result_file" ]; then
+        local gate_result
+        gate_result=$(jq -r '.outputs.gate_result' "$result_file")
+        assert_equals "PASS" "$gate_result" "Should PASS after rebase fallback"
+    fi
+
+    # Verify push actually went through — no unpushed commits
+    local unpushed_after
+    unpushed_after=$(git -C "$ws" rev-list '@{u}..HEAD' --count 2>/dev/null)
+    assert_equals "0" "$unpushed_after" "Should have 0 unpushed commits after rebase fallback"
+}
+
 # =============================================================================
 # pr-merge Agent Tests
 # =============================================================================
@@ -592,6 +659,7 @@ run_test test_git_commit_push_no_changes_passes
 run_test test_git_commit_push_commits_changes
 run_test test_git_commit_push_missing_workspace_fails
 run_test test_git_commit_push_detects_unpushed_commits
+run_test test_git_commit_push_rebase_fallback_on_force_push_blocked
 run_test test_pr_merge_agent_exists
 run_test test_pr_merge_agent_sources
 run_test test_pr_merge_no_pr_number_fails

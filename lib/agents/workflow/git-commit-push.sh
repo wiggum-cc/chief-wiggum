@@ -152,9 +152,40 @@ agent_run() {
     # This is safe because task branches are single-owner — no one else pushes
     # to them. Common after rebase (sync-main rewrites branch history).
     if [ $push_exit -ne 0 ] && echo "$push_output" | grep -qE "(rejected|non-fast-forward)"; then
-        log "Push rejected (non-fast-forward) — retrying with --force-with-lease"
+        # Dry-run validates the lease (stale info check) without side effects.
+        # Server-side hooks (GH013) are NOT triggered by dry-run, so the actual
+        # push is still needed to detect repo-rule rejections.
+        log "Push rejected (non-fast-forward) — probing with --force-with-lease --dry-run"
         push_exit=0
-        push_output=$(git -C "$workspace" push --force-with-lease 2>&1) || push_exit=$?
+        push_output=$(git -C "$workspace" push --force-with-lease --dry-run 2>&1) || push_exit=$?
+
+        if [ $push_exit -ne 0 ]; then
+            # Dry-run failed (stale refs, no upstream, etc.) — skip straight to
+            # rebase fallback since force-push can't succeed either
+            log "Force-with-lease dry-run failed — falling back to rebase + push"
+        else
+            # Lease is valid — attempt the actual force-with-lease push
+            log "Lease valid — pushing with --force-with-lease"
+            push_output=$(git -C "$workspace" push --force-with-lease 2>&1) || push_exit=$?
+        fi
+
+        # If force-push blocked by repo rules (e.g., GitHub GH013), or dry-run
+        # failed, fall back to rebase onto remote tracking branch + regular push.
+        # Safe because task branches are single-owner.
+        if [ $push_exit -ne 0 ]; then
+            log "Force-push failed — falling back to rebase + push"
+            push_exit=0
+            if git -C "$workspace" fetch origin "$current_branch" 2>/dev/null \
+               && git -C "$workspace" rebase "origin/$current_branch" 2>/dev/null; then
+                commit_sha=$(git -C "$workspace" rev-parse HEAD 2>/dev/null)
+                push_output=$(git -C "$workspace" push 2>&1) || push_exit=$?
+            else
+                # Rebase failed — abort and report
+                git -C "$workspace" rebase --abort 2>/dev/null || true
+                push_exit=1
+                push_output="Rebase onto origin/$current_branch failed"
+            fi
+        fi
     fi
 
     if [ $push_exit -ne 0 ]; then
