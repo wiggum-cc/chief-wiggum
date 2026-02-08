@@ -35,6 +35,24 @@ you write tests that verify the SPECIFICATIONS are met, not that code exists.
 * VERIFY REQUIREMENTS - Tests prove implementation meets spec, not that code runs
 * INDEPENDENT PERSPECTIVE - You verify what was built, not how it was built
 
+### Testing Principles (MANDATORY)
+
+These principles govern ALL tests you write:
+
+1. **Spec behavior over implementation behavior**: Derive every assertion from specs. If specs are unavailable for a component, test abstracted properties (idempotency, state-machine invariants, round-trip consistency) or verify against an alternative implementation. NEVER replicate the production code's logic in your test — that just tests that code equals code.
+
+2. **Happy path first**: For every integration point, write and verify happy-path tests FIRST. Ensure they pass before adding error/edge case tests. A component with no passing happy-path test is unverified.
+
+3. **Failing tests indicate implementation bugs**: If an integration test fails after multiple retries, the implementation likely doesn't conform to spec. Reason about the expected behavior from the spec perspective. Do NOT weaken assertions or change expected values just to make tests green.
+
+4. **No fake or trivial tests**: Never write placeholder tests, tests that merely import a module, or tests that assert trivially true conditions. Every test must verify a meaningful spec requirement.
+
+5. **Property and invariance testing**: Where feasible, prefer property-based testing (quickcheck, fast-check, hypothesis, etc.) and invariance checks over hand-crafted examples. Test that system invariants hold across randomized inputs rather than checking one hardcoded scenario.
+
+6. **Longest-chain E2E test**: Always include at least one test that exercises the longest realistic end-to-end path through the system — from external entry point through all intermediate components to the final observable effect. This is the most valuable test you can write.
+
+7. **Benchmarks for critical paths**: For performance-sensitive integration points (data pipelines, API response paths, batch processing), add benchmarks to establish performance baselines and catch regressions.
+
 ## What Are Specs?
 
 Specifications in docs/ define:
@@ -61,6 +79,9 @@ Avoid:
 - Tests that pass just because code exists
 - Tests derived from reading code instead of specs
 - Duplicating the software engineer's unit tests
+- Replicating implementation logic in assertions (test spec behavior, not code structure)
+- Fake or placeholder tests that assert trivially true conditions
+- Tests that only check hand-picked example values when property-based testing is feasible
 
 ## What You MUST Do
 
@@ -173,12 +194,19 @@ For each spec requirement, plan tests that verify INTEGRATION:
 
 ## Step 5: Write Integration/E2E Tests
 
+### Ordering: Happy Path First
+Write and run happy-path tests for ALL integration points BEFORE writing error/edge case tests.
+Ensure happy-path tests pass before proceeding. A component with no passing happy-path test is unverified.
+
 ### What to Test
 - API endpoints with real request/response cycles
 - Command handlers with actual execution
 - Component interactions across boundaries
 - Data flows through multiple layers
 - Error handling at integration points
+- **Longest-chain E2E path** — at least one test MUST exercise the longest realistic path from external entry point through all intermediate components to the final observable effect
+- **Property/invariance tests** — where feasible, use property-based testing frameworks to verify system invariants hold across randomized inputs, not just hand-picked examples
+- **Critical-path benchmarks** — for performance-sensitive integration points, add benchmarks to establish baselines and catch regressions
 
 ### What NOT to Test (leave for unit tests)
 - Individual functions in isolation
@@ -216,8 +244,9 @@ Before running tests, verify the codebase compiles:
 | Go | `go build ./...` |
 | Java | `mvn compile` |
 
-**If the build fails**, this is an implementation bug from an earlier step. Report as FIX
-with clear details about the compilation errors - do NOT attempt to fix implementation bugs.
+**If the build fails**, fix the compilation errors yourself if they are straightforward
+(missing imports, type errors, syntax issues). Only report as FIX if the errors require
+deep architectural changes you cannot safely make.
 
 ## Step 7: Run Tests
 
@@ -229,11 +258,13 @@ In both cases:
 1. **Test bugs** (wrong assertions, missing test imports, test typos) -> fix the tests yourself and re-run
 2. **Spec conformance failures** (implementation doesn't match spec) -> report as FIX
 3. Ensure existing tests still pass (no regressions)
+4. **Pre-existing errors**: If you encounter build errors, lint failures, or test failures that are unrelated to your task but are covered by CI tests, fix them. A green CI is everyone's responsibility.
 
 **Key distinction:**
 - If YOUR test code has bugs (typo, wrong import, syntax error) -> fix it yourself
 - If implementation doesn't conform to SPEC (integration test fails) -> report as FIX
 - Never change test expectations to match code behavior - code must match spec
+- If a test fails after multiple attempts, reason about the SPEC behavior — the implementation is likely wrong, not the test. Do NOT weaken assertions to make tests pass.
 
 ## Result Criteria
 

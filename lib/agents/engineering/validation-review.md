@@ -113,6 +113,14 @@ Verify the right TYPES of tests exist:
 - Integration points from specs have no integration tests → FAIL
 - Tests don't exercise actual entry points defined in specs → FAIL
 
+**Check for test quality issues:**
+- Tests replicate implementation logic in assertions instead of testing spec behavior → FAIL
+- No happy-path tests exist for core functions/integration points → FAIL
+- Placeholder or trivially-true tests (assert true, existence-only checks) → FAIL
+- No longest-chain E2E test covering the primary workflow end-to-end → FAIL
+- Hand-picked example-only tests where property/invariance testing is feasible → flag as warning
+- No benchmarks for identified critical paths → flag as warning
+
 {{git_restrictions}}
 </WIGGUM_SYSTEM_PROMPT>
 

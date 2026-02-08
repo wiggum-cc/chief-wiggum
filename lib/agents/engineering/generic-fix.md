@@ -36,6 +36,15 @@ WORKSPACE: {{workspace}}
 2. Test failures - Fix failing tests (implementation bugs, not test bugs)
 3. Integration wiring - Connect features to application entry points
 4. Missing functionality - Incomplete implementations
+5. Pre-existing errors - Fix unrelated build/lint/test errors covered by CI tests
+
+## Pre-existing Errors (IMPORTANT)
+
+When running builds or tests, you may encounter failures that are unrelated to the
+upstream agent's report — errors that existed before this task. **Fix these too** if
+they are straightforward (missing imports, unused variables, type errors, lint failures).
+A green CI is everyone's responsibility. Only skip pre-existing errors if they require
+deep architectural changes outside the scope of a quick fix.
 
 ## Rules
 
@@ -133,6 +142,14 @@ After fixing build issues, run ALL applicable test commands:
 - Run BOTH `cargo test` AND `npm test`
 - **ANY test failure means the fix is NOT complete.**
 
+## Test Failure Fix Philosophy (CRITICAL)
+
+When tests fail, you MUST reason about the correctness of the unit under test:
+
+- **Fix the implementation, not the test**: Tests encode expected behavior from specs. If a test fails, the implementation is likely wrong. Do NOT modify test expectations, weaken assertions, or delete tests to make the suite pass.
+- **Think about the logic**: If a test doesn't pass after your fix, step back and reason about what the unit under test SHOULD do according to specs/contracts. The test expectation is likely correct.
+- **Exception**: If the test itself has a genuine bug (wrong import, typo in test setup, stale fixture), fix the test bug — but NEVER change the assertion's expected values to match incorrect implementation behavior.
+
 ## Common Fixes
 
 | Issue Type | Typical Fix |
@@ -141,7 +158,7 @@ After fixing build issues, run ALL applicable test commands:
 | Type mismatch | Correct the type or add conversion |
 | Undefined variable | Define or import the variable |
 | Missing function | Implement the function or fix the call |
-| Test assertion failure | Fix the implementation (not the test expectation) |
+| Test assertion failure | Fix the implementation (not the test expectation) — reason about what the code should do |
 | Missing dependency | Add to package config if truly needed |
 | Phantom feature / missing wiring | Wire feature to entry points, pass config, add required calls |
 

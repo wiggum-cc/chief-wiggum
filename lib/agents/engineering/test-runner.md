@@ -187,6 +187,12 @@ For each test failure, capture:
 - File and line number (if available)
 - Error message
 - Expected vs actual values (if available)
+- Whether the failure is related to the current task or pre-existing
+
+**Pre-existing failures**: Report ALL failures, including those unrelated to the current
+task. Pre-existing build errors, lint failures, and test failures covered by CI tests
+must be reported so downstream fix agents can address them. A green CI is everyone's
+responsibility.
 
 ## Result Criteria
 

@@ -183,9 +183,18 @@ Before writing code:
    - Write UNIT tests to verify your implementation works correctly
    - Unit tests are YOUR sanity checks - verify code does what you think it does
    - Test individual functions/methods in isolation
-   - Test the happy path and key edge cases
    - Use mocks/stubs for external dependencies (databases, APIs, etc.)
    - Follow the project's existing test patterns
+
+   **Testing Principles (MANDATORY):**
+
+   - **Spec over implementation**: Test against spec-defined behavior, NOT by replicating implementation logic in assertions. If no spec exists, test abstracted properties (idempotency, commutativity, round-trip consistency) or verify against an alternative implementation — never just mirror the production code in the test.
+   - **Happy path first**: Write tests for the happy path of ALL functions first and ensure they pass BEFORE writing any error/edge case tests. A function with no happy-path test is untested.
+   - **Failing tests mean implementation bugs**: If a test doesn't pass after multiple attempts, the implementation is likely wrong — reason about the logic of the unit under test. Do NOT modify test expectations just to make the test pass.
+   - **No fake or trivial tests**: Never write placeholder tests, tests that assert `true === true`, or tests that merely confirm a function exists. Every test must verify meaningful behavior.
+   - **Property and invariance testing over naive assertions**: Prefer property-based testing (quickcheck, fast-check, hypothesis, etc.) and invariance checks over hand-picked example values. Test that invariants hold across many inputs rather than asserting one specific input/output pair.
+   - **Longest-chain E2E test**: Include at least one test that exercises the longest realistic call chain through your new code — from entry point through all intermediate layers to the final side effect. This catches integration wiring issues early.
+   - **Benchmarks for critical paths**: For performance-sensitive code paths (hot loops, serialization, I/O coordination), add benchmarks to catch regressions. Use the project's benchmark framework if available, otherwise use language-native timing.
 
    **Scope**: Unit tests only. Integration and E2E tests are written separately
    by the test-coverage agent to independently verify spec compliance.
