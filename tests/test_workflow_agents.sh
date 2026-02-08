@@ -27,7 +27,7 @@ setup() {
     mkdir -p "$WORKER_DIR/reports"
 
     # Initialize a git repo in workspace
-    git -C "$WORKER_DIR/workspace" init -q
+    git -C "$WORKER_DIR/workspace" init -q -b main
     git -C "$WORKER_DIR/workspace" config user.email "test@test.com"
     git -C "$WORKER_DIR/workspace" config user.name "Test User"
     echo "initial" > "$WORKER_DIR/workspace/file.txt"
@@ -81,6 +81,7 @@ test_sync_main_fast_forward() {
     # Setup: create a bare remote and workspace that's behind
     local bare_remote="$TEST_DIR/remote.git"
     git init --bare "$bare_remote" >/dev/null 2>&1
+    git -C "$bare_remote" symbolic-ref HEAD refs/heads/main
 
     local ws="$WORKER_DIR/workspace"
     git -C "$ws" remote add origin "$bare_remote"
@@ -115,6 +116,7 @@ test_sync_main_rebase_linear() {
     # Setup: create a bare remote, workspace with local commits, then advance main
     local bare_remote="$TEST_DIR/remote.git"
     git init --bare "$bare_remote" >/dev/null 2>&1
+    git -C "$bare_remote" symbolic-ref HEAD refs/heads/main
 
     local ws="$WORKER_DIR/workspace"
     git -C "$ws" remote add origin "$bare_remote"
@@ -155,6 +157,7 @@ test_sync_main_merge_fallback_on_conflict() {
     # Setup: create conflicting changes on both sides
     local bare_remote="$TEST_DIR/remote.git"
     git init --bare "$bare_remote" >/dev/null 2>&1
+    git -C "$bare_remote" symbolic-ref HEAD refs/heads/main
 
     local ws="$WORKER_DIR/workspace"
     git -C "$ws" remote add origin "$bare_remote"
@@ -255,6 +258,7 @@ test_git_commit_push_detects_unpushed_commits() {
     # Create a bare remote to track against
     local bare_remote="$TEST_DIR/remote.git"
     git init --bare "$bare_remote" >/dev/null 2>&1
+    git -C "$bare_remote" symbolic-ref HEAD refs/heads/main
 
     # Set up workspace with remote tracking
     git -C "$WORKER_DIR/workspace" checkout -b test-branch 2>/dev/null
@@ -290,6 +294,7 @@ test_git_commit_push_rebase_fallback_on_force_push_blocked() {
     # Setup: bare remote with a pre-receive hook that rejects force pushes
     local bare_remote="$TEST_DIR/remote.git"
     git init --bare "$bare_remote" >/dev/null 2>&1
+    git -C "$bare_remote" symbolic-ref HEAD refs/heads/main
 
     local ws="$WORKER_DIR/workspace"
     git -C "$ws" checkout -b task/TEST-001-456 2>/dev/null

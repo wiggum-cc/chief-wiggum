@@ -517,6 +517,7 @@ _setup_advance_repos() {
 
     # Create a bare repo as mock origin
     git init -q --bare "$ORIGIN_DIR"
+    git -C "$ORIGIN_DIR" symbolic-ref HEAD refs/heads/main
 
     # Create a working clone, push initial commit
     local tmp_clone="$TEST_DIR/tmp-clone"
