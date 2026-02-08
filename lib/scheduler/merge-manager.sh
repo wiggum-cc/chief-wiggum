@@ -199,6 +199,83 @@ _mm_emit_conflict() {
     emit_event "$worker_dir" "conflict.needs_resolve" "merge-manager.attempt_pr_merge"
 }
 
+# Check if a PR has an approved review from a configured user ID
+#
+# Reuses the review-checking logic from pr-merge-data.sh. Checks the cached
+# pr-reviews.json first; fetches from GitHub API if no cache exists.
+#
+# Args:
+#   worker_dir - Worker directory path
+#   task_id    - Task identifier (for logging)
+#
+# Returns:
+#   0 - PR has an approved review
+#   1 - No approved review (merge blocked)
+_check_merge_approved() {
+    local worker_dir="$1"
+    local task_id="$2"
+
+    # Load review config if not already loaded (sets WIGGUM_APPROVED_USER_IDS)
+    if [ -z "${WIGGUM_APPROVED_USER_IDS:-}" ]; then
+        source "$WIGGUM_HOME/lib/core/defaults.sh"
+        load_review_config
+    fi
+
+    local approved_ids="${WIGGUM_APPROVED_USER_IDS:-}"
+
+    # No approved IDs configured → block merge (secure by default)
+    if [ -z "$approved_ids" ]; then
+        log_debug "Merge blocked for $task_id — no WIGGUM_APPROVED_USER_IDS configured"
+        return 1
+    fi
+
+    # Fetch reviews if no cache exists
+    if [ ! -f "$worker_dir/pr-reviews.json" ]; then
+        local pr_number
+        pr_number=$(git_state_get_pr "$worker_dir")
+        if [ -z "$pr_number" ] || [ "$pr_number" = "null" ]; then
+            log_debug "Merge blocked for $task_id — no PR number, cannot check reviews"
+            return 1
+        fi
+
+        local workspace="$worker_dir/workspace"
+        local remote_url repo=""
+        if [ -d "$workspace" ]; then
+            remote_url=$(git -C "$workspace" remote get-url origin 2>/dev/null || echo "")
+            if [[ "$remote_url" =~ github\.com[:/]([^/]+/[^/.]+) ]]; then
+                repo="${BASH_REMATCH[1]}"
+                repo="${repo%.git}"
+            fi
+        fi
+
+        if [ -n "$repo" ]; then
+            local reviews_json
+            reviews_json=$(timeout "${WIGGUM_GH_TIMEOUT:-30}" gh api "repos/$repo/pulls/$pr_number/reviews" \
+                --jq '[.[] | {user_id: .user.id, state: .state, submitted_at: .submitted_at}]' \
+                2>/dev/null || echo "")
+            if [ -n "$reviews_json" ] && [ "$reviews_json" != "[]" ] && [ "$reviews_json" != "null" ]; then
+                echo "$reviews_json" > "$worker_dir/pr-reviews.json"
+            fi
+        fi
+    fi
+
+    # Check reviews from approved user IDs
+    if [ -f "$worker_dir/pr-reviews.json" ]; then
+        local latest_state
+        latest_state=$(jq -r --arg ids "$approved_ids" '
+            ($ids | split(",") | map(gsub("^\\s+|\\s+$"; "") | tonumber)) as $allowed |
+            [.[] | select(.user_id as $uid | $allowed | any(. == $uid))] |
+            sort_by(.submitted_at) | last | .state // "NONE"
+        ' "$worker_dir/pr-reviews.json" 2>/dev/null || echo "NONE")
+        if [ "$latest_state" != "NONE" ]; then
+            return 0
+        fi
+    fi
+
+    log_debug "Merge blocked for $task_id — no approved review found"
+    return 1
+}
+
 # Attempt to merge a PR for a worker
 #
 # Uses the lifecycle engine (emit_event) for all state transitions.
@@ -221,6 +298,12 @@ attempt_pr_merge() {
 
     # Ensure lifecycle spec is loaded
     lifecycle_is_loaded || lifecycle_load
+
+    # Gate: require approved review before attempting merge
+    if ! _check_merge_approved "$worker_dir" "$task_id"; then
+        log_debug "PR merge blocked for $task_id - no approved review"
+        return 1
+    fi
 
     local pr_number
     pr_number=$(git_state_get_pr "$worker_dir")

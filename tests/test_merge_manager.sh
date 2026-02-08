@@ -44,6 +44,11 @@ setup() {
     git_state_set "$WORKER_DIR" "needs_merge" "test" "Init"
     git_state_set_pr "$WORKER_DIR" 42
 
+    # Set up approved review so _check_merge_approved() passes
+    export WIGGUM_APPROVED_USER_IDS="12345"
+    echo '[{"user_id": 12345, "state": "APPROVED", "submitted_at": "2025-01-01T00:00:00Z"}]' \
+        > "$WORKER_DIR/pr-reviews.json"
+
     # Prepend mock bin to PATH so we can stub gh
     export PATH="$MOCK_BIN:$PATH"
 }

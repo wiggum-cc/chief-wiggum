@@ -575,6 +575,9 @@ cmd_task_resolve() {
         return 1
     fi
 
+    # Ensure lifecycle engine is available for emit_event
+    lifecycle_is_loaded || lifecycle_load
+
     # Find worker directory for this task
     local worker_dir
     worker_dir=$(find_worker_by_task_id "$RALPH_DIR" "$pattern")
@@ -607,6 +610,10 @@ cmd_task_resolve() {
         log_error "The worktree may need to be recreated. Mark worker as failed or delete and restart."
         return 1
     fi
+
+    # Transition to resolving state (needs_resolve → resolving)
+    emit_event "$worker_dir" "resolve.started" "wiggum-pr.cmd_task_resolve" || \
+        git_state_set "$worker_dir" "resolving" "wiggum-pr.cmd_task_resolve" "Starting resolve"
 
     # Sync with main unless --no-fetch is specified
     if [ "$no_fetch" != "true" ]; then
@@ -647,10 +654,6 @@ cmd_task_resolve() {
     if [ -z "$conflicted_files" ]; then
         log "No merge conflicts detected in workspace"
 
-        # Transition state and commit/push any merge commits
-        # (This handles the case where origin/main was merged without conflicts)
-        git_state_set "$worker_dir" "resolved" "wiggum-pr.cmd_task_resolve" "No conflicts after merge"
-
         # Check if there's anything to commit (merge commit or staged changes)
         if ! git -C "$workspace" diff --cached --quiet || \
            ! git -C "$workspace" diff HEAD~1 --quiet 2>/dev/null; then
@@ -664,7 +667,9 @@ cmd_task_resolve() {
             }
         fi
 
-        git_state_set "$worker_dir" "needs_merge" "wiggum-pr.cmd_task_resolve" "Ready for merge retry"
+        # Transition: resolving → resolved → needs_merge (via chain + rm_conflict_queue effect)
+        emit_event "$worker_dir" "resolve.succeeded" "wiggum-pr.cmd_task_resolve" || \
+            git_state_set "$worker_dir" "needs_merge" "wiggum-pr.cmd_task_resolve" "Ready for merge retry"
         return 0
     fi
 
@@ -712,25 +717,26 @@ cmd_task_resolve() {
     if [ -z "$remaining" ]; then
         log "All conflicts resolved and staged"
 
-        # Transition state and commit/push the resolution
-        git_state_set "$worker_dir" "resolved" "wiggum-pr.cmd_task_resolve" "All conflicts resolved by agent"
-
         log "Committing and pushing resolution..."
         cmd_task_commit "$pattern" || {
             log "Warning: commit failed after conflict resolution"
         }
         cmd_task_push "$pattern" || {
             log "Warning: push failed"
-            git_state_set "$worker_dir" "failed" "wiggum-pr.cmd_task_resolve" "Push failed after resolution"
+            emit_event "$worker_dir" "resolve.fail" "wiggum-pr.cmd_task_resolve" || \
+                git_state_set "$worker_dir" "failed" "wiggum-pr.cmd_task_resolve" "Push failed after resolution"
             return 1
         }
 
-        git_state_set "$worker_dir" "needs_merge" "wiggum-pr.cmd_task_resolve" "Ready for merge retry"
+        # Transition: resolving → resolved → needs_merge (via chain + rm_conflict_queue effect)
+        emit_event "$worker_dir" "resolve.succeeded" "wiggum-pr.cmd_task_resolve" || \
+            git_state_set "$worker_dir" "needs_merge" "wiggum-pr.cmd_task_resolve" "Ready for merge retry"
     else
         local remaining_count
         remaining_count=$(echo "$remaining" | wc -l)
         log "Warning: $remaining_count file(s) still have unresolved conflicts"
-        git_state_set "$worker_dir" "failed" "wiggum-pr.cmd_task_resolve" "$remaining_count files still have conflicts"
+        emit_event "$worker_dir" "resolve.fail" "wiggum-pr.cmd_task_resolve" || \
+            git_state_set "$worker_dir" "failed" "wiggum-pr.cmd_task_resolve" "$remaining_count files still have conflicts"
     fi
 
     return $exit_code
