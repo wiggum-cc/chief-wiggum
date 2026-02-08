@@ -33,6 +33,7 @@ source "$WIGGUM_HOME/lib/core/platform.sh"
 source "$WIGGUM_HOME/lib/distributed/server-identity.sh"
 source "$WIGGUM_HOME/lib/distributed/claim-manager.sh"
 source "$WIGGUM_HOME/lib/worker/worker-lifecycle.sh"
+source "$WIGGUM_HOME/lib/github/issue-state.sh"
 
 # =============================================================================
 # Configuration
@@ -279,7 +280,9 @@ heartbeat_update_all() {
     # Ensure issue cache is populated (Python bridge spawns fresh processes
     # per phase, so cache from scheduler_tick is not shared)
     if declare -F _github_refresh_cache &>/dev/null; then
-        _github_refresh_cache 2>/dev/null || true
+        if ! _github_refresh_cache 2>/dev/null; then
+            log_warn "heartbeat: issue cache refresh failed — using sync-state fallback"
+        fi
     fi
 
     # Get all tasks we own
@@ -298,6 +301,15 @@ heartbeat_update_all() {
             task_id=$(_github_parse_task_id "${_GH_ISSUE_CACHE[$issue_number]}") || true
         fi
         task_id="${task_id:-GH-$issue_number}"
+
+        # Fallback: resolve via persisted sync state (no API needed)
+        if [[ "$task_id" == GH-* ]] && [ -f "$ralph_dir/github-sync-state.json" ]; then
+            local sync_tid
+            sync_tid=$(github_sync_state_find_task_by_issue "$ralph_dir" "$issue_number")
+            if [ -n "$sync_tid" ]; then
+                task_id="$sync_tid"
+            fi
+        fi
 
         # Check for step-completed event to force immediate update
         local worker_dir=""
@@ -469,7 +481,9 @@ heartbeat_shutdown() {
 
     # Ensure issue cache is populated for task_id resolution
     if declare -F _github_refresh_cache &>/dev/null; then
-        _github_refresh_cache 2>/dev/null || true
+        if ! _github_refresh_cache 2>/dev/null; then
+            log_warn "heartbeat: issue cache refresh failed — using sync-state fallback"
+        fi
     fi
 
     local owned_issues
@@ -484,6 +498,15 @@ heartbeat_shutdown() {
             task_id=$(_github_parse_task_id "${_GH_ISSUE_CACHE[$issue_number]}") || true
         fi
         task_id="${task_id:-GH-$issue_number}"
+
+        # Fallback: resolve via persisted sync state (no API needed)
+        if [[ "$task_id" == GH-* ]] && [ -f "$ralph_dir/github-sync-state.json" ]; then
+            local sync_tid
+            sync_tid=$(github_sync_state_find_task_by_issue "$ralph_dir" "$issue_number")
+            if [ -n "$sync_tid" ]; then
+                task_id="$sync_tid"
+            fi
+        fi
 
         # Skip if no running worker (nothing to shut down)
         local worker_dir=""

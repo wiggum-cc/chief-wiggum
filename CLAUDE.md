@@ -106,6 +106,47 @@ Each worker operates in `.ralph/workers/worker-TASK-XXX-<timestamp>/` with:
 - `output/<agent>/` - Per-agent outputs
 - `gate_result` - Last agent result (PASS/FAIL/FIX/SKIP)
 
+### Worker Lifecycle State Machine (`config/worker-lifecycle.json`)
+
+Workers transition through states via an event-driven state machine defined in `config/worker-lifecycle.json`. The spec is the single source of truth — adding states or transitions means editing JSON, not bash.
+
+**Engine**: `lib/core/lifecycle-engine.sh` provides `emit_event(worker_dir, event, source, data_json)` — the only function needed to drive transitions. It is entirely generic: zero knowledge of specific states or events.
+
+**Loader**: `lib/core/lifecycle-loader.sh` compiles the JSON spec into bash associative arrays at source time for O(1) lookups.
+
+**State types**:
+| Type | Meaning |
+|------|---------|
+| `initial` | Entry state (`none`) |
+| `waiting` | Awaiting action (`needs_fix`, `needs_merge`, `needs_resolve`, `needs_multi_resolve`) |
+| `running` | Active operation (`fixing`, `merging`, `resolving`) |
+| `transient` | Auto-chained intermediate (`fix_completed`, `merge_conflict`, `resolved`) |
+| `terminal` | Done (`merged`) |
+| `terminal_recoverable` | Done but recoverable (`failed`) |
+
+**Key event families**:
+- `worker.spawned` — initial spawn → `needs_merge`
+- `fix.*` — fix cycle (detected → started → pass/fail/partial/skip/timeout)
+- `merge.*` — merge cycle (start → succeeded/conflict/out_of_date/transient_fail/hard_fail)
+- `conflict.*` / `resolve.*` — conflict resolution cycle
+- `pr.*` — external PR events (conflict_detected, comments_detected, retrack)
+- `recovery.*` — manual recovery from `failed` state
+- `startup.reset` — reset `running` states on restart
+
+**Spec features**:
+- **Guards**: Preconditions on transitions (e.g., `merge_attempts_lt_max`) — if guard fails, engine tries next matching transition
+- **Effects**: Side effects executed on transition (e.g., `sync_github`, `cleanup_worktree`, `add_conflict_queue`)
+- **Kanban sync**: Transitions can set kanban status (e.g., `"kanban": "x"` marks complete, `"kanban": "*"` marks failed)
+- **Chains**: Transient states that auto-resolve (e.g., `fix_completed` chains to parent transition's target)
+- **Wildcard `from: "*"`**: Matches any current state (used for `merge.pr_merged`, `resume.abort`)
+- **Null target `to: null`**: Keeps current state unchanged (used for `resume.retry`, `task.reclaim`)
+
+**Easy to get wrong**:
+- Transitions are evaluated in order — first match with passing guard wins
+- Same event+from can appear multiple times with different guards (guarded first, unguarded fallback last)
+- `running` states get `startup.reset` back to their `waiting` counterpart on orchestrator restart
+- `terminal_recoverable` (`failed`) can re-enter the machine via `recovery.*` events if recovery attempts remain
+
 ### Exit Codes (`lib/core/exit-codes.sh`)
 
 | Code | Meaning |
