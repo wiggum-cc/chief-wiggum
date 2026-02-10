@@ -280,7 +280,7 @@ export_metrics() {
         esac
 
         total_time_seconds=$((total_time_seconds + w_time))
-        total_cost=$(echo "$total_cost + $w_cost" | bc)
+        total_cost=$(echo "$total_cost + $w_cost" | bc 2>/dev/null || echo "0")
         total_input_tokens=$((total_input_tokens + w_input))
         total_output_tokens=$((total_output_tokens + w_output))
         total_cache_creation=$((total_cache_creation + w_ccreate))
@@ -296,7 +296,7 @@ export_metrics() {
     # Calculate totals and success rate
     local success_rate=0
     if [ $total_workers -gt 0 ]; then
-        success_rate=$(echo "scale=2; $successful_workers * 100 / $total_workers" | bc)
+        success_rate=$(echo "scale=2; $successful_workers * 100 / $total_workers" | bc 2>/dev/null || echo "0")
     fi
 
     local total_tokens=$((total_input_tokens + total_output_tokens + total_cache_creation + total_cache_read))

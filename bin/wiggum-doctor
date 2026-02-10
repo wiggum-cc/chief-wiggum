@@ -21,10 +21,12 @@ wiggum doctor - Pre-flight validation command
 Usage: wiggum doctor [options]
 
 Checks:
-  Required tools:
+  Shell & required tools:
+  - Bash version (4.0+ for associative arrays)
   - gh CLI installed + authenticated
   - Claude CLI available + responsive
-  - jq, curl, uuidgen, timeout
+  - jq, bc, curl, uuidgen, setsid, flock, timeout
+  - sha256sum/shasum, nproc
   - git version (2.5+ for worktrees)
 
   POSIX utilities:
@@ -34,9 +36,16 @@ Checks:
   - WIGGUM_HOME/bin in PATH
   - Disk space (500MB minimum)
   - Configuration files valid (JSON syntax)
+  - Pipeline config (valid JSON, agent cross-references)
   - uv (Python package manager)
   - TUI virtual environment
   - Hook scripts executable
+
+  Git & GitHub:
+  - Git remote configured + SSH connectivity
+  - Git worktree support
+  - GitHub token scopes (repo access)
+  - Required GitHub labels (wiggum:*, priority:*)
 
   Project:
   - .ralph directory setup

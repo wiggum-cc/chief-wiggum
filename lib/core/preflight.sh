@@ -323,6 +323,89 @@ check_setsid() {
     return 0
 }
 
+# Check bc is installed (used for floating-point arithmetic in metrics/cost)
+check_bc() {
+    local name="bc (calculator)"
+
+    if ! check_command_exists bc; then
+        _print_check "fail" "$name" "Not installed. Required for metrics/cost calculations. Install: apt install bc / nix-env -iA nixpkgs.bc"
+        return 1
+    fi
+
+    _print_check "pass" "$name" "Available"
+    return 0
+}
+
+# Check flock is installed (used for concurrent file access)
+check_flock() {
+    local name="flock (file locking)"
+
+    if ! check_command_exists flock; then
+        _print_check "fail" "$name" "Not installed. Required for concurrent access. Install: apt install util-linux"
+        return 1
+    fi
+
+    _print_check "pass" "$name" "Available"
+    return 0
+}
+
+# Check Bash version is 4.0+ (required for associative arrays)
+check_bash_version() {
+    local name="Bash version"
+    local min_major=4
+
+    local major="${BASH_VERSINFO[0]}"
+    local minor="${BASH_VERSINFO[1]}"
+    local version="$major.$minor"
+
+    if [ "$major" -lt "$min_major" ]; then
+        _print_check "fail" "$name" "v$version (requires $min_major.0+ for associative arrays)"
+        return 1
+    fi
+
+    _print_check "pass" "$name" "v$version"
+    return 0
+}
+
+# Check sha256sum or shasum is available (used for content hashing)
+check_sha256() {
+    local name="sha256sum/shasum"
+
+    if check_command_exists sha256sum; then
+        _print_check "pass" "$name" "sha256sum available"
+        return 0
+    fi
+
+    if check_command_exists shasum; then
+        _print_check "pass" "$name" "shasum available (fallback)"
+        return 0
+    fi
+
+    _print_check "warn" "$name" "Neither sha256sum nor shasum found (content hashing degraded)"
+    return 0
+}
+
+# Check nproc is available (used for parallel job count)
+check_nproc() {
+    local name="nproc"
+
+    if check_command_exists nproc; then
+        local cpus
+        cpus=$(nproc 2>/dev/null || echo "?")
+        _print_check "pass" "$name" "Available ($cpus CPUs)"
+        return 0
+    fi
+
+    # macOS fallback
+    if check_command_exists sysctl; then
+        _print_check "pass" "$name" "Not found, but sysctl available (macOS)"
+        return 0
+    fi
+
+    _print_check "warn" "$name" "Not found. Usage tracker may default to 1 parallel job."
+    return 0
+}
+
 # Check uv (Python package manager, needed for TUI)
 check_uv() {
     local name="uv (Python package manager)"
@@ -433,20 +516,250 @@ check_tui() {
     return 0
 }
 
+# =============================================================================
+# Git & GitHub Checks
+# =============================================================================
+
+# Check git remote is configured and reachable
+check_git_remote() {
+    local name="Git remote"
+
+    local git_remote
+    git_remote=$(git remote get-url origin 2>/dev/null) || true
+
+    if [ -z "$git_remote" ]; then
+        _print_check "warn" "$name" "No 'origin' remote configured"
+        return 0
+    fi
+
+    # Extract host for SSH test
+    local git_host=""
+    if [[ "$git_remote" =~ ^git@([^:]+): ]]; then
+        git_host="${BASH_REMATCH[1]}"
+    elif [[ "$git_remote" =~ ^ssh://git@([^/]+)/ ]]; then
+        git_host="${BASH_REMATCH[1]}"
+    fi
+
+    if [ -n "$git_host" ]; then
+        local ssh_output
+        ssh_output=$(timeout 10 ssh -o BatchMode=yes -o ConnectTimeout=5 -T "git@$git_host" 2>&1) || true
+        if echo "$ssh_output" | grep -qi "successfully authenticated"; then
+            _print_check "pass" "$name" "$git_remote (SSH authenticated)"
+        else
+            _print_check "fail" "$name" "SSH auth failed to $git_host. Check SSH keys / ssh-agent."
+            return 1
+        fi
+    else
+        # HTTPS remote — just report it
+        _print_check "pass" "$name" "$git_remote"
+    fi
+
+    return 0
+}
+
+# Check git worktree support works
+check_git_worktree() {
+    local name="Git worktree"
+
+    if ! git rev-parse --git-dir &>/dev/null; then
+        _print_check "info" "$name" "Not in a git repository (skipped)"
+        return 0
+    fi
+
+    local worktree_output
+    worktree_output=$(git worktree list 2>&1) || true
+
+    if [ -z "$worktree_output" ]; then
+        _print_check "fail" "$name" "git worktree list returned empty (worktrees may be unsupported)"
+        return 1
+    fi
+
+    local wt_count
+    wt_count=$(echo "$worktree_output" | wc -l | tr -d '[:space:]')
+    _print_check "pass" "$name" "$wt_count worktree(s) active"
+    return 0
+}
+
+# Check gh token has required scopes
+check_gh_token_scopes() {
+    local name="GitHub token scopes"
+
+    if ! check_command_exists gh; then
+        _print_check "info" "$name" "gh not installed (skipped)"
+        return 0
+    fi
+
+    if ! timeout "${WIGGUM_GH_TIMEOUT:-30}" gh auth status &>/dev/null; then
+        _print_check "info" "$name" "gh not authenticated (skipped)"
+        return 0
+    fi
+
+    # Get token scopes via API header inspection
+    local scopes
+    scopes=$(timeout "${WIGGUM_GH_TIMEOUT:-30}" gh api -i user 2>/dev/null | grep -i 'x-oauth-scopes:' | sed 's/x-oauth-scopes: *//i' | tr -d '\r') || true
+
+    if [ -z "$scopes" ]; then
+        # Fine-grained tokens don't expose scopes header — check permissions directly
+        local can_read_issues
+        can_read_issues=$(timeout "${WIGGUM_GH_TIMEOUT:-30}" gh api repos/:owner/:repo/issues --jq 'length' 2>/dev/null) || true
+        if [ -n "$can_read_issues" ]; then
+            _print_check "pass" "$name" "Fine-grained token (repo access verified)"
+        else
+            _print_check "warn" "$name" "Could not verify token permissions"
+        fi
+        return 0
+    fi
+
+    local missing=()
+    # Check for 'repo' scope (covers issues, PRs, labels, commits)
+    if ! echo "$scopes" | grep -q '\brepo\b'; then
+        missing+=("repo")
+    fi
+
+    if [ ${#missing[@]} -gt 0 ]; then
+        _print_check "fail" "$name" "Missing scopes: ${missing[*]} (re-run: gh auth login --scopes repo)"
+        return 1
+    fi
+
+    _print_check "pass" "$name" "$scopes"
+    return 0
+}
+
+# Check required GitHub labels exist in the repo
+check_github_labels() {
+    local name="GitHub labels"
+
+    if ! check_command_exists gh; then
+        _print_check "info" "$name" "gh not installed (skipped)"
+        return 0
+    fi
+
+    if ! timeout "${WIGGUM_GH_TIMEOUT:-30}" gh auth status &>/dev/null; then
+        _print_check "info" "$name" "gh not authenticated (skipped)"
+        return 0
+    fi
+
+    # Check if we're in a GitHub repo
+    local repo_info
+    repo_info=$(timeout "${WIGGUM_GH_TIMEOUT:-30}" gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null) || true
+    if [ -z "$repo_info" ]; then
+        _print_check "info" "$name" "Not a GitHub repository (skipped)"
+        return 0
+    fi
+
+    # Fetch all repo labels
+    local repo_labels
+    repo_labels=$(timeout "${WIGGUM_GH_TIMEOUT:-30}" gh label list --json name -q '.[].name' --limit 200 2>/dev/null) || true
+
+    if [ -z "$repo_labels" ]; then
+        _print_check "warn" "$name" "Could not fetch labels from $repo_info"
+        return 0
+    fi
+
+    # Required labels for Wiggum operation
+    local required_labels=(
+        "wiggum"
+        "wiggum:in-progress"
+        "wiggum:completed"
+        "wiggum:failed"
+        "wiggum:resume-request"
+        "priority:critical"
+        "priority:high"
+        "priority:medium"
+        "priority:low"
+    )
+
+    local missing=()
+    for label in "${required_labels[@]}"; do
+        if ! echo "$repo_labels" | grep -qx "$label"; then
+            missing+=("$label")
+        fi
+    done
+
+    if [ ${#missing[@]} -gt 0 ]; then
+        _print_check "fail" "$name" "Missing ${#missing[@]} label(s): ${missing[*]}"
+        echo "       Run: wiggum github init"
+        return 1
+    fi
+
+    _print_check "pass" "$name" "All ${#required_labels[@]} required labels present"
+    return 0
+}
+
+# =============================================================================
+# Pipeline & Agent Validation
+# =============================================================================
+
+# Check default pipeline is valid and references existing agents
+check_pipeline_config() {
+    local name="Pipeline config"
+    local pipeline_file="$WIGGUM_HOME/config/pipelines/default.json"
+    local agents_file="$WIGGUM_HOME/config/agents.json"
+
+    if [ ! -f "$pipeline_file" ]; then
+        _print_check "fail" "$name" "default.json not found at $pipeline_file"
+        return 1
+    fi
+
+    # Validate JSON syntax
+    if ! jq empty "$pipeline_file" 2>/dev/null; then
+        _print_check "fail" "$name" "Invalid JSON in default.json"
+        return 1
+    fi
+
+    # Check pipeline has steps
+    local step_count
+    step_count=$(jq '.steps | length' "$pipeline_file" 2>/dev/null)
+    step_count="${step_count:-0}"
+    if [ "$step_count" -eq 0 ]; then
+        _print_check "fail" "$name" "Pipeline has no steps"
+        return 1
+    fi
+
+    # Cross-reference agents in pipeline against agents.json
+    if [ -f "$agents_file" ]; then
+        local pipeline_agents
+        pipeline_agents=$(jq -r '.steps[].agent // empty' "$pipeline_file" 2>/dev/null | sort -u)
+        local known_agents
+        known_agents=$(jq -r '.agents | keys[]' "$agents_file" 2>/dev/null)
+
+        local unknown=()
+        while IFS= read -r agent; do
+            [ -z "$agent" ] && continue
+            if ! echo "$known_agents" | grep -qx "$agent"; then
+                unknown+=("$agent")
+            fi
+        done <<< "$pipeline_agents"
+
+        if [ ${#unknown[@]} -gt 0 ]; then
+            _print_check "warn" "$name" "Pipeline references unknown agents: ${unknown[*]}"
+            return 0
+        fi
+    fi
+
+    _print_check "pass" "$name" "$step_count steps in default pipeline"
+    return 0
+}
+
 # Run all pre-flight checks
 # Returns: 0 if all pass, 1 if any fail
 run_preflight_checks() {
     echo "Running pre-flight checks..."
     echo ""
 
-    echo "=== Required Tools ==="
+    echo "=== Shell & Required Tools ==="
+    check_bash_version
     check_wiggum_home
     check_git
     check_jq
+    check_bc
     check_curl
     check_uuidgen
     check_setsid
+    check_flock
     check_timeout
+    check_sha256
+    check_nproc
     check_gh_cli
     check_claude_cli
     echo ""
@@ -459,9 +772,17 @@ run_preflight_checks() {
     check_path
     check_disk_space "."
     check_config_files
+    check_pipeline_config
     check_uv
     check_tui
     check_hooks
+    echo ""
+
+    echo "=== Git & GitHub ==="
+    check_git_remote
+    check_git_worktree
+    check_gh_token_scopes
+    check_github_labels
     echo ""
 
     echo "=== Project ==="
