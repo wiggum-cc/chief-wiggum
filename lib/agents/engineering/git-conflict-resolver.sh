@@ -49,7 +49,7 @@ _auto_resolve_trivial_conflicts() {
     local unmerged auto_resolved=0
     unmerged=$(git -C "$workspace" diff --name-only --diff-filter=U 2>/dev/null) || return 0
 
-    local file basename
+    local file basename pattern
     while IFS= read -r file; do
         [ -z "$file" ] && continue
         basename=$(basename "$file")
