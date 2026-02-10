@@ -12,6 +12,27 @@ source "$WIGGUM_HOME/lib/core/bin-common.sh"
 source "$WIGGUM_HOME/lib/core/logger.sh"
 source "$WIGGUM_HOME/lib/core/safe-path.sh"
 
+# Walk up the directory tree to find .ralph/, like git finds .git/
+# Never creates .ralph/ — errors out if not found.
+_wdoc_find_ralph_dir() {
+    local dir="$PWD"
+    while [[ "$dir" != "/" ]]; do
+        if [[ -d "$dir/.ralph" ]]; then
+            echo "$dir/.ralph"
+            return 0
+        fi
+        dir=$(dirname "$dir")
+    done
+    return 1
+}
+
+RALPH_DIR=$(_wdoc_find_ralph_dir) || {
+    echo "Error: No .ralph/ directory found (searched from $PWD to /)" >&2
+    exit 1
+}
+PROJECT_DIR=$(dirname "$RALPH_DIR")
+export RALPH_DIR PROJECT_DIR
+
 show_help() {
     cat << 'EOF'
 wdoc - Documentation tool for agents
@@ -19,23 +40,17 @@ wdoc - Documentation tool for agents
 Usage: wdoc <command> [options]
 
 Commands:
-  add       Download documentation and/or clone source for a package
-  ask       Ask a question about a package's documentation
-  list      List all registered packages
-  remove    Remove a package and its documentation
+  add <package>                Download documentation and/or clone source
+  ask <package> "<question>"   Ask a question about a package's docs
+  list                         List all registered packages
+  remove <package>             Remove a package and its documentation
 
 Add options:
-  --name <name>       Package name (required)
   --doc <url>         Documentation website URL
   --src <git-url>     Source repository URL (git clone)
 
 Ask options:
-  --name <name>       Package name (required)
-  --ask "<question>"  Question to ask (required)
   --session-id <id>   Resume a previous session for followup
-
-Remove options:
-  --name <name>       Package name (required)
 
 General options:
   -v, --verbose       Verbose output
@@ -45,15 +60,11 @@ General options:
   -h, --help          Show this help
 
 Examples:
-  wdoc add --name textual --doc https://textual.textualize.io --src https://github.com/textualize/textual.git
-  wdoc ask --name textual --ask "How do I create a custom widget?"
-  wdoc ask --name textual --ask "What about styling?" --session-id <uuid>
+  wdoc add textual --doc https://textual.textualize.io --src https://github.com/textualize/textual.git
+  wdoc ask textual "How do I create a custom widget?"
+  wdoc ask textual "What about styling?" --session-id <uuid>
   wdoc list
-  wdoc remove --name textual
-
-The subcommand can be omitted when flags are unambiguous:
-  wdoc --name textual --doc https://textual.textualize.io   (inferred: add)
-  wdoc --name textual --ask "How do I create a custom widget?"  (inferred: ask)
+  wdoc remove textual
 EOF
 }
 
@@ -68,12 +79,14 @@ cmd_add() {
             -n|--name) name="${2:-}"; shift 2 ;;
             --doc) doc_url="${2:-}"; shift 2 ;;
             --src) src_url="${2:-}"; shift 2 ;;
-            *) log_error "Unknown add option: $1"; show_help; exit "$EXIT_USAGE" ;;
+            -*) log_error "Unknown add option: $1"; show_help; exit "$EXIT_USAGE" ;;
+            *)  if [[ -z "$name" ]]; then name="$1"; shift
+                else log_error "Unknown add argument: $1"; show_help; exit "$EXIT_USAGE"; fi ;;
         esac
     done
 
     if [[ -z "$name" ]]; then
-        log_error "Package name required (--name <name>)"
+        log_error "Package name required: wdoc add <package>"
         exit "$EXIT_USAGE"
     fi
 
@@ -99,17 +112,20 @@ cmd_ask() {
             -n|--name) name="${2:-}"; shift 2 ;;
             -a|--ask) question="${2:-}"; shift 2 ;;
             --session-id) session_id="${2:-}"; shift 2 ;;
-            *) log_error "Unknown ask option: $1"; show_help; exit "$EXIT_USAGE" ;;
+            -*) log_error "Unknown ask option: $1"; show_help; exit "$EXIT_USAGE" ;;
+            *)  if [[ -z "$name" ]]; then name="$1"; shift
+                elif [[ -z "$question" ]]; then question="$1"; shift
+                else log_error "Unknown ask argument: $1"; show_help; exit "$EXIT_USAGE"; fi ;;
         esac
     done
 
     if [[ -z "$name" ]]; then
-        log_error "Package name required (--name <name>)"
+        log_error "Package name required: wdoc ask <package> <question>"
         exit "$EXIT_USAGE"
     fi
 
     if [[ -z "$question" ]]; then
-        log_error "Question required (--ask \"<question>\")"
+        log_error "Question required: wdoc ask <package> \"<question>\""
         exit "$EXIT_USAGE"
     fi
 
@@ -156,12 +172,14 @@ cmd_remove() {
     while [[ $# -gt 0 ]]; do
         case $1 in
             -n|--name) name="${2:-}"; shift 2 ;;
-            *) log_error "Unknown remove option: $1"; show_help; exit "$EXIT_USAGE" ;;
+            -*) log_error "Unknown remove option: $1"; show_help; exit "$EXIT_USAGE" ;;
+            *)  if [[ -z "$name" ]]; then name="$1"; shift
+                else log_error "Unknown remove argument: $1"; show_help; exit "$EXIT_USAGE"; fi ;;
         esac
     done
 
     if [[ -z "$name" ]]; then
-        log_error "Package name required (--name <name>)"
+        log_error "Package name required: wdoc remove <package>"
         exit "$EXIT_USAGE"
     fi
 

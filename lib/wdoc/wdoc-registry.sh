@@ -42,8 +42,10 @@ _wdoc_registry_ensure() {
     registry_file=$(wdoc_registry_file)
 
     if [ ! -f "$registry_file" ]; then
-        safe_path "$RALPH_DIR" "RALPH_DIR" || return 1
-        mkdir -p "$RALPH_DIR"
+        if [ ! -d "$RALPH_DIR" ]; then
+            log_error "RALPH_DIR does not exist: $RALPH_DIR"
+            return 1
+        fi
         echo '{"packages":{}}' > "$registry_file"
     fi
 }
