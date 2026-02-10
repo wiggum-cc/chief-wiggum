@@ -112,12 +112,16 @@ EOF
     assert_output_not_contains "$output" "docs/README.md" "Should NOT extract REFERENCE file"
 }
 
-test_conflict_detection_modify_minor_no_conflict() {
-    source "$WIGGUM_HOME/lib/tasks/conflict-detection.sh"
+# MODIFY(minor) conflict matrix:
+#   MODIFY(minor) vs MODIFY(minor) = no conflict
+#   MODIFY        vs MODIFY(minor) = no conflict
+#   MODIFY(minor) vs MODIFY        = no conflict
+#   MODIFY        vs MODIFY        = CONFLICT
 
+test_conflict_minor_vs_minor_no_conflict() {
+    source "$WIGGUM_HOME/lib/tasks/conflict-detection.sh"
     mkdir -p "$RALPH_DIR/plans"
 
-    # Task A uses MODIFY on shared.rs, MODIFY(minor) on tests/main.rs
     cat > "$RALPH_DIR/plans/TASK-001.md" << 'EOF'
 ## Critical Files
 | File | Action | Reason |
@@ -126,7 +130,6 @@ test_conflict_detection_modify_minor_no_conflict() {
 | `tests/main.rs` | MODIFY(minor) | Add test module |
 EOF
 
-    # Task B also uses MODIFY(minor) on tests/main.rs
     cat > "$RALPH_DIR/plans/TASK-002.md" << 'EOF'
 ## Critical Files
 | File | Action | Reason |
@@ -136,11 +139,85 @@ EOF
 EOF
 
     local -A active_workers=([12345]="TASK-002")
-
     local exit_code=0
     has_file_conflict "$RALPH_DIR" "TASK-001" active_workers || exit_code=$?
+    assert_equals "1" "$exit_code" "MODIFY(minor) vs MODIFY(minor) should NOT conflict"
+}
 
-    assert_equals "1" "$exit_code" "MODIFY(minor) files should NOT trigger conflict detection"
+test_conflict_modify_vs_minor_no_conflict() {
+    source "$WIGGUM_HOME/lib/tasks/conflict-detection.sh"
+    mkdir -p "$RALPH_DIR/plans"
+
+    # Candidate has MODIFY on shared file
+    cat > "$RALPH_DIR/plans/TASK-001.md" << 'EOF'
+## Critical Files
+| File | Action | Reason |
+|------|--------|--------|
+| `tests/main.rs` | MODIFY | Significant changes |
+EOF
+
+    # Active worker has MODIFY(minor) on same file
+    cat > "$RALPH_DIR/plans/TASK-002.md" << 'EOF'
+## Critical Files
+| File | Action | Reason |
+|------|--------|--------|
+| `tests/main.rs` | MODIFY(minor) | Add test module |
+EOF
+
+    local -A active_workers=([12345]="TASK-002")
+    local exit_code=0
+    has_file_conflict "$RALPH_DIR" "TASK-001" active_workers || exit_code=$?
+    assert_equals "1" "$exit_code" "MODIFY vs MODIFY(minor) should NOT conflict"
+}
+
+test_conflict_minor_vs_modify_no_conflict() {
+    source "$WIGGUM_HOME/lib/tasks/conflict-detection.sh"
+    mkdir -p "$RALPH_DIR/plans"
+
+    # Candidate has MODIFY(minor) on shared file
+    cat > "$RALPH_DIR/plans/TASK-001.md" << 'EOF'
+## Critical Files
+| File | Action | Reason |
+|------|--------|--------|
+| `tests/main.rs` | MODIFY(minor) | Add test module |
+EOF
+
+    # Active worker has MODIFY on same file
+    cat > "$RALPH_DIR/plans/TASK-002.md" << 'EOF'
+## Critical Files
+| File | Action | Reason |
+|------|--------|--------|
+| `tests/main.rs` | MODIFY | Significant changes |
+EOF
+
+    local -A active_workers=([12345]="TASK-002")
+    local exit_code=0
+    has_file_conflict "$RALPH_DIR" "TASK-001" active_workers || exit_code=$?
+    assert_equals "1" "$exit_code" "MODIFY(minor) vs MODIFY should NOT conflict"
+}
+
+test_conflict_modify_vs_modify_conflicts() {
+    source "$WIGGUM_HOME/lib/tasks/conflict-detection.sh"
+    mkdir -p "$RALPH_DIR/plans"
+
+    cat > "$RALPH_DIR/plans/TASK-001.md" << 'EOF'
+## Critical Files
+| File | Action | Reason |
+|------|--------|--------|
+| `tests/main.rs` | MODIFY | Significant changes |
+EOF
+
+    cat > "$RALPH_DIR/plans/TASK-002.md" << 'EOF'
+## Critical Files
+| File | Action | Reason |
+|------|--------|--------|
+| `tests/main.rs` | MODIFY | Different significant changes |
+EOF
+
+    local -A active_workers=([12345]="TASK-002")
+    local exit_code=0
+    has_file_conflict "$RALPH_DIR" "TASK-001" active_workers || exit_code=$?
+    assert_equals "0" "$exit_code" "MODIFY vs MODIFY SHOULD conflict"
 }
 
 test_plan_parser_handles_missing_section() {
@@ -894,7 +971,10 @@ run_test test_conflict_detection_no_overlap_returns_1
 run_test test_conflict_detection_overlap_returns_0
 run_test test_conflict_detection_self_exclusion
 run_test test_conflict_detection_no_plan_no_conflict
-run_test test_conflict_detection_modify_minor_no_conflict
+run_test test_conflict_minor_vs_minor_no_conflict
+run_test test_conflict_modify_vs_minor_no_conflict
+run_test test_conflict_minor_vs_modify_no_conflict
+run_test test_conflict_modify_vs_modify_conflicts
 run_test test_get_conflicting_files_returns_intersection
 run_test test_get_conflicting_tasks_returns_task_ids
 

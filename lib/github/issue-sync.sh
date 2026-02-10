@@ -1050,6 +1050,16 @@ github_issue_sync() {
                 github_issue_sync_up_create "$ralph_dir" "all" "$dry_run" "true" || {
                     log_warn "Auto-create failed for some tasks (will retry next cycle)"
                 }
+
+                # Push local plans for newly created issues in the same cycle
+                # (the plan-sync service runs separately and might miss them)
+                source "$WIGGUM_HOME/lib/github/plan-sync.sh"
+                local _tid
+                while IFS= read -r _tid; do
+                    [ -n "$_tid" ] || continue
+                    [ -f "$ralph_dir/plans/${_tid}.md" ] || continue
+                    github_plan_sync_task "$ralph_dir" "$_tid" "$dry_run" "" || true
+                done <<< "$untracked_ids"
             fi
         fi
     fi
