@@ -149,7 +149,8 @@ _load_config_cache() {
         (.resume.initial_bonus // 20000),
         (.resume.fail_penalty // 8000),
         (.resume.min_retry_interval // 30),
-        (.resume.max_decide_concurrent // 20)
+        (.resume.max_decide_concurrent // 20),
+        (.task_source.mode // "hybrid")
     ] | join("\u001e")' "$config_file" 2>/dev/null) || true
 
     if [ -n "$extracted" ]; then
@@ -159,7 +160,7 @@ _load_config_cache() {
                          _CACHE_LOG_ROTATE_MAX_ARCHIVES _CACHE_RESUME_MAX_ATTEMPTS \
                          _CACHE_RESUME_COOLDOWN _CACHE_RESUME_INITIAL_BONUS \
                          _CACHE_RESUME_FAIL_PENALTY _CACHE_RESUME_MIN_RETRY \
-                         _CACHE_RESUME_MAX_DECIDE \
+                         _CACHE_RESUME_MAX_DECIDE _CACHE_TASK_SOURCE_MODE \
                          <<< "$extracted"
     fi
 
@@ -274,4 +275,25 @@ load_resume_queue_config() {
     export RESUME_INITIAL_BONUS
     export RESUME_FAIL_PENALTY
     export RESUME_MIN_RETRY_INTERVAL
+}
+
+# Load task source config from config.json (with env var overrides)
+# Sets WIGGUM_TASK_SOURCE_MODE, WIGGUM_SERVER_ID
+load_task_source_config() {
+    _load_config_cache
+
+    # Mode: env → config → "hybrid"
+    WIGGUM_TASK_SOURCE_MODE="${WIGGUM_TASK_SOURCE_MODE:-${_CACHE_TASK_SOURCE_MODE:-}}"
+    WIGGUM_TASK_SOURCE_MODE="${WIGGUM_TASK_SOURCE_MODE:-hybrid}"
+    export WIGGUM_TASK_SOURCE_MODE
+
+    # Server ID: env → identity file → (auto-generated later by task_source_init)
+    if [[ "$WIGGUM_TASK_SOURCE_MODE" != "local" ]] && [[ -z "${WIGGUM_SERVER_ID:-}" ]]; then
+        local identity_file="$RALPH_DIR/server/identity.json"
+        if [[ -f "$identity_file" ]]; then
+            WIGGUM_SERVER_ID=$(jq -r '.server_id // ""' "$identity_file" 2>/dev/null) || true
+        fi
+    fi
+    WIGGUM_SERVER_ID="${WIGGUM_SERVER_ID:-}"
+    export WIGGUM_SERVER_ID
 }

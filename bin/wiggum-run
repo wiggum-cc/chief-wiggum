@@ -77,8 +77,8 @@ WIGGUM_NO_MERGE=false      # --no-merge: disable resolve-workers
 WIGGUM_NO_SYNC=false       # --no-sync: disable github-issue-sync, github-plan-sync, pr-sync
 WIGGUM_USE_PYTHON=true     # default: Python scheduler (--no-python for Bash)
 WIGGUM_SMART_MODE="${WIGGUM_SMART_MODE:-true}"  # default: smart routing (--no-smart to disable)
-WIGGUM_TASK_SOURCE_MODE="${WIGGUM_TASK_SOURCE_MODE:-hybrid}"  # local | github | hybrid
-WIGGUM_SERVER_ID="${WIGGUM_SERVER_ID:-}"   # Custom server ID for distributed modes
+WIGGUM_TASK_SOURCE_MODE="${WIGGUM_TASK_SOURCE_MODE:-}"  # Set by load_task_source_config
+WIGGUM_SERVER_ID="${WIGGUM_SERVER_ID:-}"              # Set by load_task_source_config
 
 show_help() {
     cat << EOF
@@ -217,6 +217,9 @@ main() {
 
     # Load resume config (max_decide_concurrent, max_attempts, cooldown)
     load_resume_config
+
+    # Load task source config (mode + server ID from config.json / identity file)
+    load_task_source_config
 
     # Initialize activity log
     activity_init "$PROJECT_DIR"

@@ -83,6 +83,9 @@
     "min_retry_interval": 30,
     "max_decide_concurrent": 20
   },
+  "task_source": {
+    "mode": "hybrid"
+  },
   "review": {
     "approved_user_ids": [123998984,124862625,124581466,175728472],
     "fix_max_iterations": 10,

@@ -119,6 +119,12 @@ WIGGUM_NO_SYNC="${WIGGUM_NO_SYNC:-false}"
 _ORCH_ITERATION="${_ORCH_ITERATION:-0}"
 _ORCH_TICK_EPOCH="${_ORCH_TICK_EPOCH:-$(date +%s)}"
 
+# Ensure task source mode + server ID are set from config (fallback for missing env)
+load_task_source_config
+# Re-sync _SCHED_DIST_MODE — scheduler-integration.sh read the (possibly empty) env
+# at source time; now that load_task_source_config has resolved the real value, update it.
+_SCHED_DIST_MODE="${WIGGUM_TASK_SOURCE_MODE:-local}"
+
 # Initialize the scheduler module (sets _SCHED_RALPH_DIR, pool state, etc.)
 # In distributed modes (github/hybrid), also initialize the task source adapter
 # so that scheduler_tick_distributed, scheduler_claim_task, etc. work correctly.
