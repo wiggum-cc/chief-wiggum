@@ -74,6 +74,7 @@ init_services() {
 
     # Source service handler functions (svc_* functions called by services.json)
     for handler_file in "$WIGGUM_HOME"/lib/service-handlers/*.sh; do
+        # shellcheck disable=SC1090 # dynamic handler discovery
         [ -f "$handler_file" ] && source "$handler_file" 2>/dev/null || true
     done
 
