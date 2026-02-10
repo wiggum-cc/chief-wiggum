@@ -6,8 +6,8 @@
  * kanban board, worker pool capacity enforcement, and file conflict
  * detection.
  *
- * Simplifies the full lifecycle to 9 states (dropping transient states and
- * multi_resolve for tractability) while preserving the key safety properties:
+ * Models concurrent workers with 11 lifecycle states (including merge_conflict
+ * and needs_multi_resolve routing) while preserving the key safety properties:
  *   - Worker pool capacity limits (main workers, priority workers)
  *   - No duplicate workers per task
  *   - Kanban consistency with worker state
@@ -57,7 +57,8 @@ vars == <<kanban, wState, wType, mergeAttempts, recoveryAttempts>>
 
 WorkerStates == {
     "idle", "needs_fix", "fixing", "needs_merge", "merging",
-    "needs_resolve", "resolving", "merged", "failed"
+    "merge_conflict", "needs_resolve", "needs_multi_resolve",
+    "resolving", "merged", "failed"
 }
 
 KanbanValues == {" ", "=", "x", "*"}
@@ -69,30 +70,32 @@ WorkerTypes == {"none", "main", "fix", "resolve"}
 \* =========================================================================
 
 \* Active main workers (spawned, not terminal/idle)
-ActiveMain == {t \in Tasks : wType[t] = "main" /\ wState[t] \notin {"idle", "merged", "failed"}}
+\* NOTE: Bound variable 'w' avoids shadowing operator parameter 't' --
+\* Apalache's SubstRule cannot resolve substitutions through shadowed bindings.
+ActiveMain == {w \in Tasks : wType[w] = "main" /\ wState[w] \notin {"idle", "merged", "failed"}}
 
 \* Active priority workers (fix/resolve)
-ActivePriority == {t \in Tasks : wType[t] \in {"fix", "resolve"} /\ wState[t] \notin {"idle", "merged", "failed"}}
+ActivePriority == {w \in Tasks : wType[w] \in {"fix", "resolve"} /\ wState[w] \notin {"idle", "merged", "failed"}}
 
 \* Tasks whose dependencies are all completed
-DepsCompleted(t) == \A d \in TaskDeps[t] : kanban[d] = "x"
+DepsCompleted(q) == \A d \in TaskDeps[q] : kanban[d] = "x"
 
 \* Ready tasks: pending in kanban, idle worker state, deps met
-ReadyTasks == {t \in Tasks : kanban[t] = " " /\ wState[t] = "idle" /\ DepsCompleted(t)}
+ReadyTasks == {w \in Tasks : kanban[w] = " " /\ wState[w] = "idle" /\ DepsCompleted(w)}
 
-\* File conflict: task t shares files with an active main worker
-HasFileConflict(t) == \E w \in ActiveMain : w /= t /\ TaskFiles[t] \cap TaskFiles[w] /= {}
+\* File conflict: task q shares files with an active main worker
+HasFileConflict(q) == \E w \in ActiveMain : w /= q /\ TaskFiles[q] \cap TaskFiles[w] /= {}
 
 \* =========================================================================
 \* Init and CInit
 \* =========================================================================
 
 Init ==
-    /\ kanban = [t \in Tasks |-> " "]
-    /\ wState = [t \in Tasks |-> "idle"]
-    /\ wType = [t \in Tasks |-> "none"]
-    /\ mergeAttempts = [t \in Tasks |-> 0]
-    /\ recoveryAttempts = [t \in Tasks |-> 0]
+    /\ kanban = [u \in Tasks |-> " "]
+    /\ wState = [u \in Tasks |-> "idle"]
+    /\ wType = [u \in Tasks |-> "none"]
+    /\ mergeAttempts = [u \in Tasks |-> 0]
+    /\ recoveryAttempts = [u \in Tasks |-> 0]
 
 \* Apalache constant initialization
 \* 3 tasks: T1 uses {f1}, T2 uses {f2}, T3 uses {f1, f3}
@@ -103,14 +106,14 @@ CInit ==
     /\ FixWorkerLimit = 1
     /\ MaxMergeAttempts = 2
     /\ MaxRecoveryAttempts = 1
-    /\ TaskFiles = [t \in {"T1", "T2", "T3"} |->
-        CASE t = "T1" -> {"f1"}
-          [] t = "T2" -> {"f2"}
-          [] t = "T3" -> {"f1", "f3"}]
-    /\ TaskDeps = [t \in {"T1", "T2", "T3"} |->
-        CASE t = "T1" -> {}
-          [] t = "T2" -> {}
-          [] t = "T3" -> {"T1"}]
+    /\ TaskFiles = [u \in {"T1", "T2", "T3"} |->
+        CASE u = "T1" -> {"f1"}
+          [] u = "T2" -> {"f2"}
+          [] u = "T3" -> {"f1", "f3"}]
+    /\ TaskDeps = [u \in {"T1", "T2", "T3"} |->
+        CASE u = "T1" -> {}
+          [] u = "T2" -> {}
+          [] u = "T3" -> {"T1"}]
 
 \* =========================================================================
 \* Actions - Spawn Main Worker
@@ -155,18 +158,29 @@ MergeSucceeded(t) ==
     /\ wType' = [wType EXCEPT ![t] = "none"]
     /\ UNCHANGED <<mergeAttempts, recoveryAttempts>>
 
-\* Merge conflict: merging -> needs_resolve (guarded: merge_attempts < max)
-\* Collapses merging -> merge_conflict -> needs_resolve atomically,
-\* preserving the guard from conflict.needs_resolve
-MergeConflictGuarded(t) ==
+\* Merge conflict detected: merging -> merge_conflict (pure state transition)
+MergeConflictDetected(t) ==
     /\ wState[t] = "merging"
+    /\ wState' = [wState EXCEPT ![t] = "merge_conflict"]
+    /\ UNCHANGED <<kanban, wType, mergeAttempts, recoveryAttempts>>
+
+\* Conflict routed to single-PR resolve (guarded: merge_attempts < max)
+ConflictToResolve(t) ==
+    /\ wState[t] = "merge_conflict"
     /\ mergeAttempts[t] < MaxMergeAttempts
     /\ wState' = [wState EXCEPT ![t] = "needs_resolve"]
     /\ UNCHANGED <<kanban, wType, mergeAttempts, recoveryAttempts>>
 
-\* Merge conflict: merging -> failed (fallback: merge_attempts exhausted)
-MergeConflictFallback(t) ==
-    /\ wState[t] = "merging"
+\* Conflict routed to multi-PR resolve (guarded: merge_attempts < max)
+ConflictToMultiResolve(t) ==
+    /\ wState[t] = "merge_conflict"
+    /\ mergeAttempts[t] < MaxMergeAttempts
+    /\ wState' = [wState EXCEPT ![t] = "needs_multi_resolve"]
+    /\ UNCHANGED <<kanban, wType, mergeAttempts, recoveryAttempts>>
+
+\* Conflict fallback: merge_conflict -> failed (attempts exhausted)
+ConflictToFailed(t) ==
+    /\ wState[t] = "merge_conflict"
     /\ mergeAttempts[t] >= MaxMergeAttempts
     /\ wState' = [wState EXCEPT ![t] = "failed"]
     /\ kanban' = [kanban EXCEPT ![t] =
@@ -276,6 +290,22 @@ ResolveTimeout(t) ==
     /\ UNCHANGED <<kanban, wType, mergeAttempts, recoveryAttempts>>
 
 \* =========================================================================
+\* Actions - Multi-Resolve Cycle
+\* =========================================================================
+
+\* Resolve started from multi-resolve: needs_multi_resolve -> resolving
+ResolveStartedFromMulti(t) ==
+    /\ wState[t] = "needs_multi_resolve"
+    /\ wState' = [wState EXCEPT ![t] = "resolving"]
+    /\ UNCHANGED <<kanban, wType, mergeAttempts, recoveryAttempts>>
+
+\* Multi-resolve batch failed: needs_multi_resolve -> needs_resolve (fallback to single-PR)
+ResolveBatchFailed(t) ==
+    /\ wState[t] = "needs_multi_resolve"
+    /\ wState' = [wState EXCEPT ![t] = "needs_resolve"]
+    /\ UNCHANGED <<kanban, wType, mergeAttempts, recoveryAttempts>>
+
+\* =========================================================================
 \* Actions - Recovery
 \* =========================================================================
 
@@ -344,8 +374,10 @@ Next ==
         \/ WorkerMergeStart(t)
         \/ WorkerMergeStartFallback(t)
         \/ MergeSucceeded(t)
-        \/ MergeConflictGuarded(t)
-        \/ MergeConflictFallback(t)
+        \/ MergeConflictDetected(t)
+        \/ ConflictToResolve(t)
+        \/ ConflictToMultiResolve(t)
+        \/ ConflictToFailed(t)
         \/ MergeOutOfDateOk(t)
         \/ MergeOutOfDateFail(t)
         \/ MergeHardFail(t)
@@ -361,6 +393,9 @@ Next ==
         \/ ResolveSucceeded(t)
         \/ ResolveFail(t)
         \/ ResolveTimeout(t)
+        \* Multi-resolve cycle
+        \/ ResolveStartedFromMulti(t)
+        \/ ResolveBatchFailed(t)
         \* Recovery
         \/ Recovery(t)
         \/ RecoveryFallback(t)
@@ -375,18 +410,26 @@ Next ==
 \* Fairness
 \* =========================================================================
 
+\* NOTE: Fairness uses 'q' (not 't') as its quantifier variable to avoid
+\* Apalache SubstRule collisions with Next (\E t).
+\*
+\* NOTE: Apalache --temporal does not enforce fairness ("Handling fairness
+\* is not supported yet!"). Temporal properties require TLC for verification.
+\* Fairness and Spec are kept for documentation and TLC compatibility.
 Fairness ==
-    /\ \A t \in Tasks :
-        /\ WF_vars(SpawnMainWorker(t))
-        /\ WF_vars(WorkerMergeStart(t) \/ WorkerMergeStartFallback(t))
-        /\ WF_vars(MergeSucceeded(t) \/ MergeHardFail(t)
-                   \/ MergeConflictGuarded(t) \/ MergeConflictFallback(t)
-                   \/ MergeOutOfDateOk(t) \/ MergeOutOfDateFail(t))
-        /\ WF_vars(FixStarted(t))
-        /\ WF_vars(FixPassGuarded(t) \/ FixPassFallback(t) \/ FixFail(t))
-        /\ WF_vars(ResolveStarted(t))
-        /\ WF_vars(ResolveSucceeded(t) \/ ResolveFail(t))
-        /\ WF_vars(Recovery(t) \/ RecoveryFallback(t))
+    /\ \A q \in Tasks :
+        /\ WF_vars(SpawnMainWorker(q))
+        /\ WF_vars(WorkerMergeStart(q) \/ WorkerMergeStartFallback(q))
+        /\ WF_vars(MergeSucceeded(q) \/ MergeHardFail(q)
+                   \/ MergeConflictDetected(q)
+                   \/ MergeOutOfDateOk(q) \/ MergeOutOfDateFail(q))
+        /\ WF_vars(ConflictToResolve(q) \/ ConflictToMultiResolve(q) \/ ConflictToFailed(q))
+        /\ WF_vars(FixStarted(q))
+        /\ WF_vars(FixPassGuarded(q) \/ FixPassFallback(q) \/ FixFail(q))
+        /\ WF_vars(ResolveStarted(q))
+        /\ WF_vars(ResolveStartedFromMulti(q))
+        /\ WF_vars(ResolveSucceeded(q) \/ ResolveFail(q))
+        /\ WF_vars(Recovery(q) \/ RecoveryFallback(q))
 
 Spec == Init /\ [][Next]_vars /\ Fairness
 
@@ -440,14 +483,21 @@ NoDuplicateActiveWorkers ==
 \* Liveness Properties (require fairness)
 \* =========================================================================
 
+\* NOTE: Temporal properties are manually unrolled for CInit's concrete tasks
+\* because Apalache's temporal loop-detection rewriting cannot handle \A-quantified
+\* temporal formulas (SubstRule fails to assign the copied bound variable).
+\* Semantically equivalent to: \A t \in Tasks : wState[t] /= "idle" ~> ...
+
 \* EventualTermination: every spawned worker eventually reaches merged or failed
 EventualTermination ==
-    \A t \in Tasks :
-        wState[t] /= "idle" ~> wState[t] \in {"merged", "failed"}
+    /\ wState["T1"] /= "idle" ~> wState["T1"] \in {"merged", "failed"}
+    /\ wState["T2"] /= "idle" ~> wState["T2"] \in {"merged", "failed"}
+    /\ wState["T3"] /= "idle" ~> wState["T3"] \in {"merged", "failed"}
 
 \* NoStarvation: ready tasks eventually get a worker (or deps become unsat)
 NoStarvation ==
-    \A t \in Tasks :
-        (kanban[t] = " " /\ DepsCompleted(t)) ~> (wState[t] /= "idle" \/ ~DepsCompleted(t))
+    /\ (kanban["T1"] = " " /\ DepsCompleted("T1")) ~> (wState["T1"] /= "idle" \/ ~DepsCompleted("T1"))
+    /\ (kanban["T2"] = " " /\ DepsCompleted("T2")) ~> (wState["T2"] /= "idle" \/ ~DepsCompleted("T2"))
+    /\ (kanban["T3"] = " " /\ DepsCompleted("T3")) ~> (wState["T3"] /= "idle" \/ ~DepsCompleted("T3"))
 
 =============================================================================

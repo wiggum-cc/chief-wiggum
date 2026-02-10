@@ -743,6 +743,9 @@ KanbanFailedConsistency ==
 \* =========================================================================
 
 \* EventualTermination: every worker eventually reaches merged or failed
+\* NOTE: Requires fairness (WF) to hold. Apalache --temporal does not enforce
+\* fairness ("Handling fairness is not supported yet!"), so this property
+\* can only be verified with TLC. Kept here for documentation and TLC use.
 EventualTermination == <>(state \in TerminalStates)
 
 =============================================================================

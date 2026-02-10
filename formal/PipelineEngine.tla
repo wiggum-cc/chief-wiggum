@@ -257,6 +257,8 @@ StatusConsistency ==
 \* Argument: every step has finite max visits. The circuit breaker escalates
 \* repeated non-terminal results to FAIL (abort). Combined, this guarantees
 \* the pipeline cannot loop forever.
+\* NOTE: Requires TLC for verification -- Apalache --temporal does not
+\* enforce fairness ("Handling fairness is not supported yet!").
 PipelineTermination == <>(status \in {"completed", "aborted"})
 
 =============================================================================

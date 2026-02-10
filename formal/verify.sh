@@ -30,7 +30,7 @@ Filter:
     verify.sh Orchestrator        # all Orchestrator checks
     verify.sh TypeInvariant       # TypeInvariant across all specs
 
-Checks (16 total):
+Checks (22 safety invariants):
   WorkerLifecycle.tla   TypeInvariant BoundedCounters TransientStateInvariant
                         KanbanMergedConsistency KanbanFailedConsistency
   PipelineEngine.tla    TypeInvariant VisitsBounded InlineVisitsBounded
@@ -38,6 +38,14 @@ Checks (16 total):
   Orchestrator.tla      TypeInvariant WorkerPoolCapacity BoundedCounters
                         KanbanMergedConsistency NoIdleInProgress
                         NoFileConflictActive DependencyOrdering
+                        NoDuplicateActiveWorkers
+  Scheduler.tla         TypeInvariant CapacityInvariant DependencyInvariant
+                        FileConflictInvariant SkipBoundInvariant
+
+Note: Temporal/liveness properties (EventualTermination, NoStarvation,
+EventualSpawn, SkipDecay, PipelineTermination) are defined in each spec
+but require TLC for verification -- Apalache does not support fairness
+in --temporal mode ("Handling fairness is not supported yet!").
 EOF
 }
 
@@ -156,13 +164,21 @@ run_check PipelineEngine.tla InlineVisitsBounded 30
 run_check PipelineEngine.tla StatusConsistency 30
 
 # Orchestrator
-run_check Orchestrator.tla TypeInvariant 10
-run_check Orchestrator.tla WorkerPoolCapacity 10
-run_check Orchestrator.tla BoundedCounters 10
-run_check Orchestrator.tla KanbanMergedConsistency 10
-run_check Orchestrator.tla NoIdleInProgress 10
-run_check Orchestrator.tla NoFileConflictActive 10
-run_check Orchestrator.tla DependencyOrdering 10
+run_check Orchestrator.tla TypeInvariant 15
+run_check Orchestrator.tla WorkerPoolCapacity 15
+run_check Orchestrator.tla BoundedCounters 15
+run_check Orchestrator.tla KanbanMergedConsistency 15
+run_check Orchestrator.tla NoIdleInProgress 15
+run_check Orchestrator.tla NoFileConflictActive 15
+run_check Orchestrator.tla DependencyOrdering 15
+run_check Orchestrator.tla NoDuplicateActiveWorkers 15
+
+# Scheduler
+run_check Scheduler.tla TypeInvariant 25
+run_check Scheduler.tla CapacityInvariant 25
+run_check Scheduler.tla DependencyInvariant 25
+run_check Scheduler.tla FileConflictInvariant 25
+run_check Scheduler.tla SkipBoundInvariant 25
 
 # =========================================================================
 # Summary
