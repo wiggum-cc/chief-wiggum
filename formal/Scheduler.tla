@@ -3,9 +3,9 @@
  * TLA+ formal model of Chief Wiggum's task scheduler.
  *
  * Models the core scheduling algorithm: priority calculation with plan bonus,
- * aging bonus, dependency bonus, and sibling WIP penalty; capacity management
- * for main and priority (fix) workers; skip cooldown with exponential backoff;
- * and file conflict prevention.
+ * aging bonus, dependency bonus, sibling WIP penalty, and resume terms;
+ * capacity management for main and priority (fix) workers; skip cooldown
+ * with exponential backoff; file conflict prevention; and cycle detection.
  *
  * Simplifications for tractability:
  *   - Worker pipeline abstracted to spawned -> PASS/FAIL (no internal steps)
@@ -16,6 +16,16 @@
  * QUICK WIN #3: Exponential backoff skip cooldown
  * Skip cooldown now uses exponential backoff values {0,1,2,4,8,16,30} matching
  * the real implementation (1,2,4,8,16 capped at 30 cycles).
+ *
+ * GAP CLOSURE #1: Resume priority terms
+ * Resume tasks (failed workers re-entering the queue) get an initial priority
+ * bonus (ResumeBonus) that degrades with each failed attempt (ResumeFailPenalty).
+ * This matches _SCHED_RESUME_INITIAL_BONUS / _SCHED_RESUME_FAIL_PENALTY in
+ * lib/scheduler/scheduler.sh.
+ *
+ * GAP CLOSURE #2: Cycle detection
+ * Tasks with cyclic dependencies (CyclicTasks) are excluded from scheduling,
+ * matching scheduler_detect_cycles() / _SCHED_CYCLIC_TASKS in the implementation.
  *
  * NOTE: Bound variables in set comprehensions use distinct names (w, u, v)
  * to avoid shadowing operator parameters -- Apalache's SubstRule cannot
@@ -46,7 +56,13 @@ CONSTANTS
     \* @type: Str -> Str;
     TaskGroup,             \* task -> group ID (sibling detection)
     \* @type: Int;
-    AgingFactor            \* divisor for aging bonus (default 7 in impl)
+    AgingFactor,           \* divisor for aging bonus (default 7 in impl)
+    \* @type: Int;
+    ResumeBonus,           \* initial priority bonus for resume tasks (default 20000 in impl)
+    \* @type: Int;
+    ResumeFailPenalty,     \* priority penalty per failed resume attempt (default 8000 in impl)
+    \* @type: Set(Str);
+    CyclicTasks            \* tasks with cyclic dependencies (excluded from scheduling)
 
 VARIABLES
     \* @type: Str -> Str;
@@ -62,10 +78,12 @@ VARIABLES
     \* @type: Int;
     priorityCount,         \* current number of active fix workers
     \* @type: Int;
-    tick                   \* global scheduling tick counter
+    tick,                  \* global scheduling tick counter
+    \* @type: Str -> Int;
+    resumeAttempts         \* task -> number of resume attempts (for priority degradation)
 
-\* @type: <<Str -> Str, Str -> Int, Str -> Int, Str -> Str, Int, Int, Int>>;
-vars == <<taskStatus, skipCount, readySince, workerType, mainCount, priorityCount, tick>>
+\* @type: <<Str -> Str, Str -> Int, Str -> Int, Str -> Str, Int, Int, Int, Str -> Int>>;
+vars == <<taskStatus, skipCount, readySince, workerType, mainCount, priorityCount, tick, resumeAttempts>>
 
 \* =========================================================================
 \* Type definitions
@@ -114,6 +132,7 @@ Init ==
     /\ mainCount = 0
     /\ priorityCount = 0
     /\ tick = 0
+    /\ resumeAttempts = [u \in Tasks |-> 0]
 
 \* Apalache constant initialization (Medium Term #2: Expanded task set)
 \* 5 tasks with overlapping sibling groups and files to expose starvation/priority inversions
@@ -159,6 +178,11 @@ CInit ==
           [] u = "T3" -> "B"
           [] u = "T4" -> "B"  \* sibling of T3
           [] u = "T5" -> "C"]
+    \* GAP CLOSURE #1: Resume priority terms
+    /\ ResumeBonus = 20000
+    /\ ResumeFailPenalty = 8000
+    \* GAP CLOSURE #2: Cycle detection (empty = no cyclic tasks in this config)
+    /\ CyclicTasks = {}
 
 \* =========================================================================
 \* Helpers - Derived Sets
@@ -205,6 +229,13 @@ SqrtSiblingPenalty(n) ==
 \* Effective priority: lower value = higher priority
 \* Uses fixed-point arithmetic (10000 = 1.0)
 \* Inlined computation avoids multi-binding LET (Apalache SubstRule issue)
+\*
+\* GAP CLOSURE #1: Resume terms
+\* Resume tasks (resumeAttempts > 0) get an initial bonus (ResumeBonus) that
+\* degrades with each failed attempt (ResumeFailPenalty * resumeAttempts).
+\* Matches get_unified_work_queue() in lib/scheduler/scheduler.sh:
+\*   effective_pri -= ResumeBonus
+\*   effective_pri += attempt_count * ResumeFailPenalty
 \* @type: (Str) => Int;
 EffectivePriority(q) ==
     LET raw == BasePriority[q]
@@ -212,6 +243,8 @@ EffectivePriority(q) ==
                - ((readySince[q] * 8000) \div AgingFactor)
                - (BlockedByCount(q) * 7000)
                + SqrtSiblingPenalty(SiblingActiveCount(q))
+               - (IF resumeAttempts[q] > 0 THEN ResumeBonus ELSE 0)
+               + (resumeAttempts[q] * ResumeFailPenalty)
     IN IF raw < 0 THEN 0 ELSE raw
 
 \* File conflict: task q shares files with an active main worker
@@ -219,13 +252,15 @@ HasFileConflict(q) ==
     \E w \in Tasks : workerType[w] = "main" /\ taskStatus[w] = "spawned"
                    /\ w /= q /\ TaskFiles[q] \cap TaskFiles[w] /= {}
 
-\* Eligible tasks: pending, skip=0, deps met, no file conflict, capacity available
+\* Eligible tasks: pending, skip=0, deps met, no file conflict, capacity available,
+\* not cyclic (GAP CLOSURE #2)
 Eligible(q) ==
     /\ taskStatus[q] = "pending"
     /\ skipCount[q] = 0
     /\ DepsCompleted(q)
     /\ ~HasFileConflict(q)
     /\ mainCount < MaxWorkers
+    /\ q \notin CyclicTasks
 
 \* =========================================================================
 \* Actions - Scheduler Tick (spawn highest priority eligible task)
@@ -242,7 +277,7 @@ SchedulerTick ==
         /\ workerType' = [workerType EXCEPT ![t] = "main"]
         /\ mainCount' = mainCount + 1
         /\ readySince' = readySince  \* freeze aging once spawned
-        /\ UNCHANGED <<skipCount, priorityCount, tick>>
+        /\ UNCHANGED <<skipCount, priorityCount, tick, resumeAttempts>>
 
 \* =========================================================================
 \* Actions - Worker Completion
@@ -255,7 +290,7 @@ WorkerPass(t) ==
     /\ taskStatus' = [taskStatus EXCEPT ![t] = "merged"]
     /\ workerType' = [workerType EXCEPT ![t] = "none"]
     /\ mainCount' = mainCount - 1
-    /\ UNCHANGED <<skipCount, readySince, priorityCount, tick>>
+    /\ UNCHANGED <<skipCount, readySince, priorityCount, tick, resumeAttempts>>
 
 \* Main worker fails: spawned -> failed, apply skip cooldown (exponential backoff)
 WorkerFail(t) ==
@@ -266,7 +301,7 @@ WorkerFail(t) ==
     /\ mainCount' = mainCount - 1
     \* Quick Win #3: Exponential backoff instead of linear increment
     /\ skipCount' = [skipCount EXCEPT ![t] = NextSkipValue(skipCount[t])]
-    /\ UNCHANGED <<readySince, priorityCount, tick>>
+    /\ UNCHANGED <<readySince, priorityCount, tick, resumeAttempts>>
 
 \* =========================================================================
 \* Actions - Fix Worker Cycle (priority workers)
@@ -280,7 +315,7 @@ SpawnFixWorker(t) ==
     /\ taskStatus' = [taskStatus EXCEPT ![t] = "spawned"]
     /\ workerType' = [workerType EXCEPT ![t] = "fix"]
     /\ priorityCount' = priorityCount + 1
-    /\ UNCHANGED <<skipCount, readySince, mainCount, tick>>
+    /\ UNCHANGED <<skipCount, readySince, mainCount, tick, resumeAttempts>>
 
 \* Fix worker passes: spawned -> merged
 FixPass(t) ==
@@ -289,7 +324,7 @@ FixPass(t) ==
     /\ taskStatus' = [taskStatus EXCEPT ![t] = "merged"]
     /\ workerType' = [workerType EXCEPT ![t] = "none"]
     /\ priorityCount' = priorityCount - 1
-    /\ UNCHANGED <<skipCount, readySince, mainCount, tick>>
+    /\ UNCHANGED <<skipCount, readySince, mainCount, tick, resumeAttempts>>
 
 \* Fix worker fails: spawned -> failed
 FixFail(t) ==
@@ -298,7 +333,7 @@ FixFail(t) ==
     /\ taskStatus' = [taskStatus EXCEPT ![t] = "failed"]
     /\ workerType' = [workerType EXCEPT ![t] = "none"]
     /\ priorityCount' = priorityCount - 1
-    /\ UNCHANGED <<skipCount, readySince, mainCount, tick>>
+    /\ UNCHANGED <<skipCount, readySince, mainCount, tick, resumeAttempts>>
 
 \* =========================================================================
 \* Actions - Retry After Cooldown
@@ -307,11 +342,14 @@ FixFail(t) ==
 \* Failed task becomes eligible again after skip cooldown expires.
 \* In the implementation, failed tasks are re-checked by scheduler_can_spawn_task
 \* on each tick and become eligible when skip count reaches 0.
+\* GAP CLOSURE #1: Increment resumeAttempts — this is a retry, so the priority
+\* bonus degrades. Matches resume_state_attempts() usage in get_unified_work_queue().
 RetryAfterCooldown(t) ==
     /\ taskStatus[t] = "failed"
     /\ workerType[t] = "none"
     /\ skipCount[t] = 0
     /\ taskStatus' = [taskStatus EXCEPT ![t] = "pending"]
+    /\ resumeAttempts' = [resumeAttempts EXCEPT ![t] = resumeAttempts[t] + 1]
     /\ UNCHANGED <<skipCount, readySince, workerType, mainCount, priorityCount, tick>>
 
 \* =========================================================================
@@ -327,7 +365,7 @@ TickAging ==
         THEN readySince[u] + 1
         ELSE readySince[u]]
     /\ skipCount' = [u \in Tasks |-> PrevSkipValue(skipCount[u])]
-    /\ UNCHANGED <<taskStatus, workerType, mainCount, priorityCount>>
+    /\ UNCHANGED <<taskStatus, workerType, mainCount, priorityCount, resumeAttempts>>
 
 \* =========================================================================
 \* Next-state relation
@@ -372,6 +410,8 @@ TypeInvariant ==
     /\ mainCount \in 0..MaxWorkers
     /\ priorityCount \in 0..PriorityLimit
     /\ tick \in 0..100
+    \* GAP CLOSURE #1: resumeAttempts bounded
+    /\ \A t \in Tasks : resumeAttempts[t] \in 0..10
 
 \* CapacityInvariant: worker counts within limits
 CapacityInvariant ==
@@ -391,6 +431,10 @@ FileConflictInvariant ==
 \* SkipBoundInvariant: skip cooldown only takes valid exponential values
 SkipBoundInvariant ==
     \A t \in Tasks : skipCount[t] \in SkipCooldownValues
+
+\* GAP CLOSURE #2: Cyclic tasks are never spawned as main workers
+CyclicTasksNeverSpawned ==
+    \A t \in CyclicTasks : taskStatus[t] \in {"pending", "failed"}
 
 \* =========================================================================
 \* Liveness Properties (require fairness)

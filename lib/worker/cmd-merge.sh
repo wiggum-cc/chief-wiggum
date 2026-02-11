@@ -86,8 +86,12 @@ do_start_merge() {
 
     _msg "Attempting to merge PR #$pr_number for $task_id..."
 
-    # Set state to needs_merge
-    git_state_set "$worker_dir" "needs_merge" "wiggum-worker.do_start_merge" "Manual merge via 'wiggum worker merge $task_id'"
+    # Transition to needs_merge via lifecycle engine
+    source "$WIGGUM_HOME/lib/core/lifecycle-engine.sh"
+    lifecycle_is_loaded || lifecycle_load
+    if ! emit_event "$worker_dir" "manual.start_merge" "cmd-merge.do_start_merge"; then
+        log_warn "manual.start_merge event failed, current state may not support merge"
+    fi
 
     # Attempt merge (synchronous)
     local merge_result=0

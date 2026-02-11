@@ -121,6 +121,20 @@
 
     { "event": "resume.abort",          "from": "*",          "to": "failed",       "kanban": "*", "effects": ["sync_github"] },
     { "event": "resume.retry",          "from": "*",          "to": null,           "kanban": "=" },
-    { "event": "task.reclaim",          "from": "*",          "to": null,           "kanban": " " }
+    { "event": "task.reclaim",          "from": "*",          "to": null,           "kanban": " " },
+
+    { "event": "task.pending_approval", "from": "*",          "to": null,           "kanban": "P", "effects": ["sync_github"] },
+
+    { "event": "planner.completed",     "from": "needs_multi_resolve", "to": "needs_resolve" },
+
+    { "event": "manual.start_merge",    "from": "needs_fix",  "to": "needs_merge" },
+    { "event": "manual.start_merge",    "from": "failed",     "to": "needs_merge",  "guard": "recovery_attempts_lt_max", "kanban": "=", "effects": ["inc_recovery"] },
+    { "event": "manual.start_merge",    "from": "failed",     "to": "failed" },
+    { "event": "manual.start_merge",    "from": "*",          "to": null },
+
+    { "event": "manual.start_fix",      "from": "needs_merge","to": "fixing" },
+    { "event": "manual.start_fix",      "from": "needs_fix",  "to": "fixing" },
+    { "event": "manual.start_fix",      "from": "failed",     "to": "fixing",       "guard": "recovery_attempts_lt_max", "kanban": "=", "effects": ["inc_recovery"] },
+    { "event": "manual.start_fix",      "from": "failed",     "to": "failed" }
   ]
 }

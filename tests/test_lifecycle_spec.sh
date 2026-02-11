@@ -384,7 +384,7 @@ test_spec_kanban_values_are_valid() {
         [ -n "$kanban" ] || continue
         [ "$kanban" = "null" ] && continue
         case "$kanban" in
-            x|"="|"*"|" ") ;; # Valid
+            x|"="|"*"|" "|P|N) ;; # Valid: x=complete, ==in-progress, *=failed, " "=pending, P=pending-approval, N=not-planned
             *)
                 echo "  ERROR: Invalid kanban status: '$kanban'" >&2
                 ((++bad_count))

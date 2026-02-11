@@ -121,8 +121,12 @@ do_worker_fix() {
         fi
     fi
 
-    # Set git state: fixing
-    git_state_set "$worker_dir" "fixing" "wiggum-worker.do_worker_fix" "Manual fix via 'wiggum worker fix $task_id'"
+    # Transition to fixing via lifecycle engine
+    source "$WIGGUM_HOME/lib/core/lifecycle-engine.sh"
+    lifecycle_is_loaded || lifecycle_load
+    if ! emit_event "$worker_dir" "manual.start_fix" "cmd-fix.do_worker_fix"; then
+        log_warn "manual.start_fix event failed, current state may not support fix"
+    fi
 
     # Determine which agent/pipeline to use
     # Default: full fix pipeline with test verification

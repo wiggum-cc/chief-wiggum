@@ -216,9 +216,13 @@ _resume_decide_for_worker() {
                 fi
             fi
 
-            # Mark task [P] and set terminal
-            update_kanban_pending_approval "$RALPH_DIR/kanban.md" "$task_id" || true
-            github_issue_sync_task_status "$RALPH_DIR" "$task_id" "P" || true
+            # Mark task [P] via lifecycle engine
+            lifecycle_is_loaded || lifecycle_load
+            if ! emit_event "$worker_dir" "task.pending_approval" "orch-resume-decide.COMPLETE"; then
+                # Fallback for backward compatibility
+                update_kanban_pending_approval "$RALPH_DIR/kanban.md" "$task_id" || true
+                github_issue_sync_task_status "$RALPH_DIR" "$task_id" "P" || true
+            fi
             resume_state_set_terminal "$worker_dir" "Work complete, task marked [P]"
 
             # Remove decision file so it doesn't enter unified queue
@@ -513,8 +517,13 @@ _recover_stranded_decisions() {
                 fi
 
                 if [ -n "$pr_url" ] || [ -d "$worker_dir/workspace" ]; then
-                    update_kanban_pending_approval "$RALPH_DIR/kanban.md" "$task_id" || true
-                    github_issue_sync_task_status "$RALPH_DIR" "$task_id" "P" || true
+                    # Mark task [P] via lifecycle engine
+                    lifecycle_is_loaded || lifecycle_load
+                    if ! emit_event "$worker_dir" "task.pending_approval" "orch-resume-decide.recovered_COMPLETE"; then
+                        # Fallback for backward compatibility
+                        update_kanban_pending_approval "$RALPH_DIR/kanban.md" "$task_id" || true
+                        github_issue_sync_task_status "$RALPH_DIR" "$task_id" "P" || true
+                    fi
                     resume_state_set_terminal "$worker_dir" "Recovered: work complete, task marked [P]"
                 else
                     # No workspace, no PR — work was lost
@@ -630,8 +639,12 @@ _launch_resume_worker() {
 
     log "Launching resume worker for $task_id from step '$resume_step' (index $step_idx)"
 
-    # Move task back to [=] in-progress (e.g., from [*] failed)
-    update_kanban_status "$RALPH_DIR/kanban.md" "$task_id" "=" || true
+    # Move task back to [=] in-progress via lifecycle engine (e.g., from [*] failed)
+    lifecycle_is_loaded || lifecycle_load
+    if ! emit_event "$worker_dir" "resume.retry" "orch-resume-decide._launch_resume_worker"; then
+        # Fallback for backward compatibility
+        update_kanban_status "$RALPH_DIR/kanban.md" "$task_id" "=" || true
+    fi
     github_issue_sync_task_status "$RALPH_DIR" "$task_id" "=" || true
 
     # Launch worker via setsid (same pattern as bin/wiggum-worker resume)

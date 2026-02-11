@@ -398,47 +398,12 @@ _scheduler_reconcile_merged_workers() {
         local task_id
         task_id=$(get_task_id_from_worker "$worker_name")
 
-        local needs_reconcile=false
-
-        # Bug 1: kanban not updated to "x" (complete)
-        local kanban_status
-        kanban_status=$(get_task_status "$_SCHED_RALPH_DIR/kanban.md" "$task_id")
-        if [[ "$kanban_status" != "x" ]]; then
-            update_kanban_status "$_SCHED_RALPH_DIR/kanban.md" "$task_id" "x" || true
-            log "Reconciled merged worker $task_id: kanban $kanban_status → x"
-            needs_reconcile=true
-        fi
-
-        # Bug 2: conflict queue not cleared (no-op if not in queue)
-        conflict_queue_remove "$_SCHED_RALPH_DIR" "$task_id"
-
-        # Bug 4: GitHub issue not synced (sync_github effect didn't run)
-        # Only sync if kanban was wrong (indicates mid-crash)
-        if [[ "$needs_reconcile" == "true" ]]; then
-            if declare -F github_issue_sync_task_status &>/dev/null; then
-                github_issue_sync_task_status "$_SCHED_RALPH_DIR" "$task_id" "x" 2>/dev/null || true
-                log_debug "Reconciled merged worker $task_id: synced GitHub issue"
-            fi
-        fi
-
-        # Bug 5: error field not cleared (clear_error effect didn't run)
-        local last_error
-        last_error=$(git_state_get_error "$worker_dir" 2>/dev/null || echo "")
-        if [[ -n "$last_error" && "$last_error" != "null" ]]; then
-            git_state_clear_error "$worker_dir" || true
-            log_debug "Reconciled merged worker $task_id: cleared stale error"
-            needs_reconcile=true
-        fi
-
-        # Bug 3: workspace not cleaned up (must run last — archives worker dir)
-        if [ -d "$worker_dir/workspace" ]; then
-            _cleanup_merged_pr_worktree "$worker_dir"
-            log "Reconciled merged worker $task_id: cleaned up workspace"
-            ((++reconciled)) || true
-            continue  # worker_dir moved to history/, skip further access
-        fi
-
-        if [[ "$needs_reconcile" == "true" ]]; then
+        # Use merge.pr_merged event to reconcile all effects atomically
+        # This event handles: kanban→x, sync_github, cleanup_batch, cleanup_worktree,
+        # release_claim, clear_error, rm_conflict_queue
+        # The wildcard "from": "*" allows it to fire from any state.
+        if emit_event "$worker_dir" "merge.pr_merged" "scheduler.reconcile_merged" 2>/dev/null; then
+            log "Reconciled merged worker $task_id via lifecycle engine"
             ((++reconciled)) || true
         fi
     done
@@ -522,6 +487,9 @@ _scheduler_reclaim_workerless_tasks() {
 
         if [ -z "$worker_dir" ] || [ ! -d "$worker_dir" ]; then
             log_warn "Reclaiming in-progress task $task_id — no worker directory found"
+            # Direct kanban update is acceptable here: no worker_dir exists, so there's
+            # no lifecycle state to transition. This is a crash-recovery path where the
+            # orchestrator crashed between marking kanban [=] and creating the worker.
             update_kanban_status "$_SCHED_RALPH_DIR/kanban.md" "$task_id" " " || true
             ((++reclaimed)) || true
         fi

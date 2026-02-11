@@ -216,7 +216,10 @@ _orch_check_completed_planners() {
                         if [ ! -d "$worker_dir/workspace" ]; then
                             continue
                         fi
-                        git_state_set "$worker_dir" "needs_resolve" "orchestrator-functions._orch_check_completed_planners" "Resolution plan ready"
+                        # Use lifecycle engine for state transition
+                        lifecycle_is_loaded || lifecycle_load
+                        emit_event "$worker_dir" "planner.completed" "orchestrator-functions._orch_check_completed_planners" || \
+                            log_warn "planner.completed event failed for $task_id (state=$current_state)"
                     fi
                 done <<< "$task_ids"
             else
@@ -615,26 +618,33 @@ orch_spawn_ready_tasks() {
         local task_priority
         task_priority=$(get_task_priority "$ralph_dir/kanban.md" "$task_id")
 
-        # Mark task as in-progress
         log "Assigning $task_id (Priority: ${task_priority:-MEDIUM}) to new worker"
-        if ! update_kanban_status "$ralph_dir/kanban.md" "$task_id" "="; then
-            log_error "Failed to mark $task_id as in-progress"
-            scheduler_increment_skip "$task_id"
-            continue
-        fi
 
         # Claim task in distributed mode (assign issue + server label)
         if ! scheduler_claim_task "$task_id"; then
-            log_debug "Failed to claim $task_id - reverting to pending"
-            update_kanban_status "$ralph_dir/kanban.md" "$task_id" " " || true
+            log_debug "Failed to claim $task_id - claimed by another server"
             continue
         fi
 
-        # Spawn worker
+        # Spawn worker - worker.spawned event inside cmd-start.sh handles kanban update
         if ! _orch_spawn_worker "$task_id" "$max_iterations" "$max_turns" "$agent_type"; then
             log_error "Failed to spawn worker for $task_id"
-            update_kanban_status "$ralph_dir/kanban.md" "$task_id" "*"
-            github_issue_sync_task_status "$ralph_dir" "$task_id" "*" || true
+            # Find worker_dir if it was partially created
+            local failed_worker_dir
+            failed_worker_dir=$(find_worker_by_task_id "$ralph_dir" "$task_id" 2>/dev/null) || true
+            if [ -n "$failed_worker_dir" ] && [ -d "$failed_worker_dir" ]; then
+                # Use lifecycle engine for consistent state transition
+                lifecycle_is_loaded || lifecycle_load
+                emit_event "$failed_worker_dir" "resume.abort" "orchestrator-functions.spawn_failed" || {
+                    # Fallback if no worker_dir or emit_event fails
+                    update_kanban_status "$ralph_dir/kanban.md" "$task_id" "*" || true
+                    github_issue_sync_task_status "$ralph_dir" "$task_id" "*" || true
+                }
+            else
+                # No worker_dir created yet - direct kanban update is acceptable
+                update_kanban_status "$ralph_dir/kanban.md" "$task_id" "*" || true
+                github_issue_sync_task_status "$ralph_dir" "$task_id" "*" || true
+            fi
             scheduler_release_task "$task_id"
             continue
         fi
@@ -1398,9 +1408,12 @@ orch_github_resume_trigger() {
               "$worker_dir/recovery-attempted"
         find "$worker_dir" -maxdepth 1 -name 'stop-reason-*' -delete
 
-        # Ensure kanban is [=] (emit_event handles failed→needs_merge case;
-        # this is a safety net for workers not in failed state)
-        update_kanban_status "$ralph_dir/kanban.md" "$task_id" "=" || true
+        # Ensure kanban is [=] via lifecycle engine
+        # (user.resume already handled failed→needs_merge, resume.retry handles kanban)
+        if ! emit_event "$worker_dir" "resume.retry" "github-resume-trigger.kanban_safety"; then
+            # Fallback for workers where lifecycle transition isn't applicable
+            update_kanban_status "$ralph_dir/kanban.md" "$task_id" "=" || true
+        fi
 
         # Update GitHub issue: reopen, swap labels, remove resume-request
         github_issue_reopen "$issue_number" || true

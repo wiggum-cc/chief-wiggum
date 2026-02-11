@@ -22,6 +22,13 @@
  *   - "effect applied but state not updated" bugs
  *   - cross-worker consistency violations after crash
  *
+ * STARTUP RECONCILIATION (GAP CLOSURE #6):
+ * Models _scheduler_reconcile_merged_workers() from scheduler.sh.
+ * After mid-transition crashes, per-task effect-state variables (kanban,
+ * conflict queue, GitHub sync, worktree, error) may be inconsistent with
+ * lifecycle state. StartupReconcileMerged(t) and StartupReconcileConflict(t)
+ * repair these inconsistencies on restart, achieving eventual consistency.
+ *
  * STRUCTURED NONDETERMINISM:
  * Per-task baseMoved/hasConflict environment variables constrain merge
  * outcomes, preventing implausible state combinations.
@@ -537,6 +544,55 @@ StartupResetResolving(t) ==
     /\ AllAuxUnchanged
 
 \* =========================================================================
+\* Actions - Startup Reconciliation (Effect-State Repair)
+\*
+\* Models _scheduler_reconcile_merged_workers() from scheduler.sh.
+\* After a mid-transition crash, the state machine may be in a terminal
+\* state but with stale effect-state variables. These actions fire on
+\* startup to bring effect-state into consistency with lifecycle state.
+\* =========================================================================
+
+\* Reconcile merged worker: wState="merged" but effect-state inconsistent.
+\* Matches _scheduler_reconcile_merged_workers() which checks:
+\*   Bug 1: kanban != "x" => update_kanban_status("x")
+\*   Bug 2: conflict queue not cleared => conflict_queue_remove()
+\*   Bug 4: GitHub not synced => github_issue_sync_task_status()
+\* Also handles worktree leaked (cleanup_worktree never ran) and stale error.
+StartupReconcileMerged(t) ==
+    /\ wState[t] = "merged"
+    \* Guard: at least one effect-state variable is inconsistent
+    /\ \/ kanban[t] /= "x"
+       \/ inConflictQueue[t] = TRUE
+       \/ githubSynced[t] = FALSE
+       \/ worktreeState[t] = "present"
+       \/ lastError[t] /= ""
+    \* Reconcile: set all effect-state to expected values for merged
+    /\ kanban' = [kanban EXCEPT ![t] = "x"]
+    /\ inConflictQueue' = [inConflictQueue EXCEPT ![t] = FALSE]
+    /\ githubSynced' = [githubSynced EXCEPT ![t] = TRUE]
+    /\ worktreeState' = [worktreeState EXCEPT ![t] =
+        IF worktreeState[t] = "present" THEN "cleaning" ELSE worktreeState[t]]
+    /\ lastError' = [lastError EXCEPT ![t] = ""]
+    /\ UNCHANGED <<wState, wType, mergeAttempts, recoveryAttempts>>
+    /\ EnvVarsUnchanged
+
+\* Reconcile conflict state: wState="merge_conflict" but effects not applied.
+\* After MidCrashMergeConflict, set_error and add_conflict_queue didn't run.
+\* On restart, the scheduler detects merge_conflict state and ensures
+\* the task is queued for resolution and error is set.
+StartupReconcileConflict(t) ==
+    /\ wState[t] = "merge_conflict"
+    \* Guard: effect-state inconsistent with merge_conflict state
+    /\ \/ inConflictQueue[t] = FALSE
+       \/ lastError[t] /= "merge_conflict"
+    \* Reconcile: apply the effects that should have run
+    /\ inConflictQueue' = [inConflictQueue EXCEPT ![t] = TRUE]
+    /\ lastError' = [lastError EXCEPT ![t] = "merge_conflict"]
+    /\ UNCHANGED <<wState, kanban, wType, mergeAttempts, recoveryAttempts,
+                   worktreeState, githubSynced>>
+    /\ EnvVarsUnchanged
+
+\* =========================================================================
 \* Actions - Crash
 \* Models process crash at two granularities:
 \*   1. Pre-transition crash: process dies during running state before any
@@ -726,6 +782,9 @@ Next ==
         \/ StartupResetFixing(t)
         \/ StartupResetMerging(t)
         \/ StartupResetResolving(t)
+        \* Startup reconciliation (effect-state repair after mid-transition crash)
+        \/ StartupReconcileMerged(t)
+        \/ StartupReconcileConflict(t)
         \* Pre-transition crash
         \/ CrashWhileFixing(t)
         \/ CrashWhileMerging(t)
@@ -769,6 +828,8 @@ Fairness ==
         /\ WF_vars(ResolveStartedFromMulti(q))
         /\ WF_vars(ResolveSucceeded(q) \/ ResolveFail(q))
         /\ WF_vars(Recovery(q) \/ RecoveryFallback(q))
+        /\ WF_vars(StartupReconcileMerged(q))
+        /\ WF_vars(StartupReconcileConflict(q))
         /\ WF_vars(CleanupCompleted(q))
 
 Spec == Init /\ [][Next]_vars /\ Fairness
@@ -803,12 +864,11 @@ BoundedCounters ==
 
 \* KanbanMergedConsistency: crash-safe version.
 \* DESIGN GOAL: kanban "x" <=> wState "merged"
-\*   Violated by MidCrashMergeSucceeded — emit_event() crashes after
-\*   git_state_set("merged") but before _lifecycle_update_kanban("x").
-\*   No recovery path reconciles this. Implementation fix needed:
-\*   scheduler_restore_workers should check git_state="merged" with kanban!="x"
-\*   and reconcile.
-\* Crash-safe: the converse still holds — kanban "x" always means merged.
+\*   Violated transiently by MidCrashMergeSucceeded — emit_event() crashes
+\*   after git_state_set("merged") but before _lifecycle_update_kanban("x").
+\*   RECONCILED by StartupReconcileMerged(t) (models _scheduler_reconcile_merged_workers)
+\*   which detects kanban != "x" for merged workers and fixes it on restart.
+\* Crash-safe: the converse always holds — kanban "x" always means merged.
 KanbanMergedConsistency ==
     \A t \in Tasks : kanban[t] = "x" => wState[t] = "merged"
 
@@ -846,10 +906,11 @@ KanbanFailedConsistency ==
 
 \* ConflictQueueConsistency: crash-safe version.
 \* DESIGN GOAL: inConflictQueue => wState \in {conflict-related states only}
-\*   Violated when MidCrashFixPass + MidCrashMergeSucceeded chain: queue TRUE
-\*   persists from conflict through fix/merge all the way to "merged" because
-\*   rm_conflict_queue effects never run. Implementation fix: reconcile queue
-\*   membership on terminal state transitions.
+\*   Violated transiently when MidCrashFixPass + MidCrashMergeSucceeded chain:
+\*   queue TRUE persists from conflict through fix/merge all the way to "merged"
+\*   because rm_conflict_queue effects never run.
+\*   RECONCILED by StartupReconcileMerged(t) which clears inConflictQueue for
+\*   merged workers on restart.
 \* Crash-safe: allow any non-idle state (queue is never set during "idle").
 ConflictQueueConsistency ==
     \A t \in Tasks :

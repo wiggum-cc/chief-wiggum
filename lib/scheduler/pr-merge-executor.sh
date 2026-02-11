@@ -425,11 +425,13 @@ pr_merge_handle_remaining() {
             local files_modified
             files_modified=$(jq -r --arg t "$task_id" '.prs[$t].files_modified' "$state_file")
             conflict_registry_add "$ralph_dir" "$task_id" "$pr_number" "$(echo "$files_modified" | jq -r '.[]')"
-            emit_event "$worker_dir" "pr.multi_conflict_detected" "pr-merge-executor.handle_remaining" \
-                "$(jq -n --arg pr "$pr_number" --argjson af "$files_modified" '{pr_number: $pr, affected_files: $af}')" || {
+            # Use lifecycle engine exclusively - no fallback to bypass guards
+            if ! emit_event "$worker_dir" "pr.multi_conflict_detected" "pr-merge-executor.handle_remaining" \
+                "$(jq -n --arg pr "$pr_number" --argjson af "$files_modified" '{pr_number: $pr, affected_files: $af}')"; then
+                log_debug "  $task_id: pr.multi_conflict_detected rejected by lifecycle (state=$(git_state_get "$worker_dir" 2>/dev/null))"
+                # Still add to queue for tracking, but don't bypass lifecycle guards
                 conflict_queue_add "$ralph_dir" "$task_id" "$worker_dir" "$pr_number" "$files_modified"
-                git_state_set "$worker_dir" "needs_multi_resolve" "pr-merge-optimizer" "Multi-PR conflict detected"
-            }
+            fi
             ((++needs_multi_resolve))
         else
             # Check current state - don't interrupt active resolution
@@ -445,9 +447,11 @@ pr_merge_handle_remaining() {
 
             log "  $task_id: needs_resolve (single-PR conflict with main)"
 
-            emit_event "$worker_dir" "pr.conflict_detected" "pr-merge-executor.handle_remaining" \
-                "$(jq -n --arg pr "$pr_number" --argjson af "$conflict_files" '{pr_number: $pr, affected_files: $af}')" || \
-                git_state_set "$worker_dir" "needs_resolve" "pr-merge-optimizer" "Merge conflict with main"
+            # Use lifecycle engine exclusively - no fallback to bypass guards
+            if ! emit_event "$worker_dir" "pr.conflict_detected" "pr-merge-executor.handle_remaining" \
+                "$(jq -n --arg pr "$pr_number" --argjson af "$conflict_files" '{pr_number: $pr, affected_files: $af}')"; then
+                log_debug "  $task_id: pr.conflict_detected rejected by lifecycle (state=$(git_state_get "$worker_dir" 2>/dev/null))"
+            fi
             ((++needs_resolve))
         fi
     done <<< "$task_ids"

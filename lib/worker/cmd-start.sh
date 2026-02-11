@@ -98,14 +98,6 @@ do_start() {
             exit $EXIT_WORKER_ALREADY_EXISTS
         fi
 
-        # Update kanban status to in-progress (wip)
-        if ! update_kanban_status "$RALPH_DIR/kanban.md" "$task_id" "="; then
-            echo "Warning: Failed to update kanban status to in-progress"
-        fi
-
-        # Update linked GitHub issue to in-progress
-        github_issue_sync_task_status "$RALPH_DIR" "$task_id" "=" || true
-
         # Create worker directory with unique timestamp
         local timestamp
         timestamp=$(date +%s)
@@ -116,6 +108,20 @@ do_start() {
 
         # Extract task from kanban and create worker PRD
         extract_task "$task_id" "$RALPH_DIR/kanban.md" > "$worker_dir/prd.md"
+
+        # Emit worker.spawned event via lifecycle engine
+        # This atomically: sets git state to needs_merge, kanban to "="
+        source "$WIGGUM_HOME/lib/core/lifecycle-engine.sh"
+        lifecycle_is_loaded || lifecycle_load
+        if ! emit_event "$worker_dir" "worker.spawned" "cmd-start.do_start"; then
+            # Fallback: lifecycle not loaded or event failed — use direct update
+            # This preserves backward compatibility during transition
+            log_warn "worker.spawned event failed, falling back to direct kanban update"
+            update_kanban_status "$RALPH_DIR/kanban.md" "$task_id" "=" || true
+        fi
+
+        # Update linked GitHub issue to in-progress
+        github_issue_sync_task_status "$RALPH_DIR" "$task_id" "=" || true
 
         _msg "Starting worker $worker_id for task $task_id"
     fi
