@@ -167,8 +167,8 @@ CInit ==
     /\ Tasks = {"T1", "T2", "T3"}
     /\ MaxWorkers = 2
     /\ FixWorkerLimit = 1
-    /\ MaxMergeAttempts = 2
-    /\ MaxRecoveryAttempts = 1
+    /\ MaxMergeAttempts = 3
+    /\ MaxRecoveryAttempts = 2
     /\ TaskFiles = [u \in {"T1", "T2", "T3"} |->
         CASE u = "T1" -> {"f1"}
           [] u = "T2" -> {"f2"}
@@ -412,39 +412,47 @@ FixPartial(t) ==
 \* =========================================================================
 
 \* Resolve started: needs_resolve -> resolving
+\* Sets wType to "resolve" and checks priority capacity (shared with fix workers).
+\* Matches implementation: resolve-workers.sh calls pool_add <pid> "resolve"
 ResolveStarted(t) ==
     /\ wState[t] = "needs_resolve"
+    /\ Cardinality(ActivePriority) < FixWorkerLimit
     /\ wState' = [wState EXCEPT ![t] = "resolving"]
-    /\ UNCHANGED <<kanban, wType, mergeAttempts, recoveryAttempts>>
+    /\ wType' = [wType EXCEPT ![t] = "resolve"]
+    /\ UNCHANGED <<kanban, mergeAttempts, recoveryAttempts>>
     /\ AllAuxUnchanged
 
 \* Resolve succeeded: resolving -> needs_merge (chain through resolved)
-\* Effects: rm_conflict_queue, clear_error
+\* Effects: rm_conflict_queue, clear_error. Worker process exits.
 ResolveSucceeded(t) ==
     /\ wState[t] = "resolving"
     /\ wState' = [wState EXCEPT ![t] = "needs_merge"]
+    /\ wType' = [wType EXCEPT ![t] = "none"]
     /\ inConflictQueue' = [inConflictQueue EXCEPT ![t] = FALSE]
     /\ lastError' = [lastError EXCEPT ![t] = ""]
-    /\ UNCHANGED <<kanban, wType, mergeAttempts, recoveryAttempts,
+    /\ UNCHANGED <<kanban, mergeAttempts, recoveryAttempts,
                    worktreeState, githubSynced>>
     /\ EnvVarsUnchanged
 
 \* Resolve fail: resolving -> failed
-\* Effect: check_permanent
+\* Effect: check_permanent. Worker process exits, clearing pool type.
 ResolveFail(t) ==
     /\ wState[t] = "resolving"
     /\ wState' = [wState EXCEPT ![t] = "failed"]
+    /\ wType' = [wType EXCEPT ![t] = "none"]
     /\ kanban' = [kanban EXCEPT ![t] = KanbanAfterCheckPermanent(t)]
     /\ githubSynced' = [githubSynced EXCEPT ![t] = FALSE]
-    /\ UNCHANGED <<wType, mergeAttempts, recoveryAttempts,
+    /\ UNCHANGED <<mergeAttempts, recoveryAttempts,
                    inConflictQueue, worktreeState, lastError>>
     /\ EnvVarsUnchanged
 
 \* Resolve timeout: resolving -> needs_resolve
+\* Worker process exits on timeout, clearing pool type.
 ResolveTimeout(t) ==
     /\ wState[t] = "resolving"
     /\ wState' = [wState EXCEPT ![t] = "needs_resolve"]
-    /\ UNCHANGED <<kanban, wType, mergeAttempts, recoveryAttempts>>
+    /\ wType' = [wType EXCEPT ![t] = "none"]
+    /\ UNCHANGED <<kanban, mergeAttempts, recoveryAttempts>>
     /\ AllAuxUnchanged
 
 \* =========================================================================
@@ -452,10 +460,13 @@ ResolveTimeout(t) ==
 \* =========================================================================
 
 \* Resolve started from multi-resolve: needs_multi_resolve -> resolving
+\* Sets wType to "resolve" and checks priority capacity (shared with fix workers).
 ResolveStartedFromMulti(t) ==
     /\ wState[t] = "needs_multi_resolve"
+    /\ Cardinality(ActivePriority) < FixWorkerLimit
     /\ wState' = [wState EXCEPT ![t] = "resolving"]
-    /\ UNCHANGED <<kanban, wType, mergeAttempts, recoveryAttempts>>
+    /\ wType' = [wType EXCEPT ![t] = "resolve"]
+    /\ UNCHANGED <<kanban, mergeAttempts, recoveryAttempts>>
     /\ AllAuxUnchanged
 
 \* Multi-resolve batch failed: needs_multi_resolve -> needs_resolve
@@ -520,32 +531,34 @@ StartupResetMerging(t) ==
 StartupResetResolving(t) ==
     /\ wState[t] = "resolving"
     /\ wState' = [wState EXCEPT ![t] = "needs_resolve"]
+    /\ wType' = [wType EXCEPT ![t] = "none"]
     /\ mergeAttempts' = [mergeAttempts EXCEPT ![t] = 0]
-    /\ UNCHANGED <<kanban, wType, recoveryAttempts>>
+    /\ UNCHANGED <<kanban, recoveryAttempts>>
     /\ AllAuxUnchanged
 
 \* =========================================================================
 \* Actions - Crash
-\* Models process crash during a running state, leaving effects partially
-\* applied. After crash, orchestrator restart triggers startup.reset events.
+\* Models process crash at two granularities:
+\*   1. Pre-transition crash: process dies during running state before any
+\*      transition fires. State unchanged, effects may be partial.
+\*   2. Mid-transition crash: emit_event() wrote git_state_set() (atomic)
+\*      but crashed before _lifecycle_update_kanban() or effects ran.
+\*      State updated to target, kanban stale, effects not applied.
 \*
-\* Key insight: crash can interrupt between "state update" and "effect
-\* application", leaving effect-state inconsistent. This is the #1 class
-\* of real bugs in Bash orchestrators.
+\* The implementation's emit_event() applies changes sequentially:
+\*   git_state_set -> kanban update -> event log -> effects
+\* Each is individually atomic (temp+mv), but the sequence is not.
 \* =========================================================================
 
-\* Crash while fixing: state stays, githubSynced may drift
-\* (e.g., git changes applied but not committed/synced)
+\* Pre-transition crash while fixing: state stays, githubSynced may drift
 CrashWhileFixing(t) ==
     /\ wState[t] = "fixing"
     /\ UNCHANGED <<wState, kanban, wType, mergeAttempts, recoveryAttempts>>
-    \* Effects can be partially applied - nondeterministic githubSynced
     /\ \E v \in BOOLEAN : githubSynced' = [githubSynced EXCEPT ![t] = v]
     /\ UNCHANGED <<inConflictQueue, worktreeState, lastError>>
     /\ EnvVarsUnchanged
 
-\* Crash while merging: state stays, githubSynced may drift
-\* (e.g., merge attempt counted but merge not completed/synced)
+\* Pre-transition crash while merging: state stays, githubSynced may drift
 CrashWhileMerging(t) ==
     /\ wState[t] = "merging"
     /\ UNCHANGED <<wState, kanban, wType, mergeAttempts, recoveryAttempts>>
@@ -553,8 +566,7 @@ CrashWhileMerging(t) ==
     /\ UNCHANGED <<inConflictQueue, worktreeState, lastError>>
     /\ EnvVarsUnchanged
 
-\* Crash while resolving: state stays, githubSynced AND inConflictQueue may drift
-\* (conflict queue operations can be partially applied during resolution)
+\* Pre-transition crash while resolving: state stays, queue may drift
 CrashWhileResolving(t) ==
     /\ wState[t] = "resolving"
     /\ UNCHANGED <<wState, kanban, wType, mergeAttempts, recoveryAttempts>>
@@ -562,6 +574,44 @@ CrashWhileResolving(t) ==
     /\ \E v2 \in BOOLEAN : inConflictQueue' = [inConflictQueue EXCEPT ![t] = v2]
     /\ UNCHANGED <<worktreeState, lastError>>
     /\ EnvVarsUnchanged
+
+\* Mid-transition crash: merge.succeeded wrote state="merged" but kanban
+\* still at old value. Effects (sync_github, cleanup_worktree, release_claim)
+\* not applied. Catches "state=merged but kanban='='" inconsistency.
+MidCrashMergeSucceeded(t) ==
+    /\ wState[t] = "merging"
+    /\ wState' = [wState EXCEPT ![t] = "merged"]
+    /\ wType' = [wType EXCEPT ![t] = "none"]
+    \* kanban NOT updated (crash before _lifecycle_update_kanban)
+    /\ UNCHANGED <<kanban, mergeAttempts, recoveryAttempts>>
+    /\ EnvVarsUnchanged
+    \* Effects not applied
+    /\ githubSynced' = [githubSynced EXCEPT ![t] = FALSE]
+    /\ UNCHANGED <<inConflictQueue, worktreeState, lastError>>
+
+\* Mid-transition crash: merge.conflict wrote state="merge_conflict" but
+\* effects (set_error, add_conflict_queue) not applied.
+MidCrashMergeConflict(t) ==
+    /\ wState[t] = "merging"
+    /\ hasConflict[t] = TRUE
+    /\ wState' = [wState EXCEPT ![t] = "merge_conflict"]
+    /\ UNCHANGED <<kanban, wType, mergeAttempts, recoveryAttempts>>
+    /\ EnvVarsUnchanged
+    \* set_error and add_conflict_queue not applied
+    /\ UNCHANGED <<inConflictQueue, worktreeState, lastError, githubSynced>>
+
+\* Mid-transition crash: fix.pass wrote state via chain but effects
+\* (inc_merge_attempts, rm_conflict_queue) not applied.
+MidCrashFixPass(t) ==
+    /\ wState[t] = "fixing"
+    /\ wState' = [wState EXCEPT ![t] =
+        IF mergeAttempts[t] < MaxMergeAttempts
+        THEN "needs_merge"
+        ELSE "failed"]
+    /\ UNCHANGED <<kanban, wType, mergeAttempts, recoveryAttempts>>
+    /\ EnvVarsUnchanged
+    \* inc_merge_attempts and rm_conflict_queue not applied
+    /\ UNCHANGED <<inConflictQueue, worktreeState, lastError, githubSynced>>
 
 \* =========================================================================
 \* Actions - Worktree Cleanup Completion
@@ -676,10 +726,14 @@ Next ==
         \/ StartupResetFixing(t)
         \/ StartupResetMerging(t)
         \/ StartupResetResolving(t)
-        \* Crash
+        \* Pre-transition crash
         \/ CrashWhileFixing(t)
         \/ CrashWhileMerging(t)
         \/ CrashWhileResolving(t)
+        \* Mid-transition crash (state written, kanban/effects not)
+        \/ MidCrashMergeSucceeded(t)
+        \/ MidCrashMergeConflict(t)
+        \/ MidCrashFixPass(t)
         \* Worktree cleanup
         \/ CleanupCompleted(t)
         \* Null-target transitions
@@ -748,6 +802,9 @@ BoundedCounters ==
     /\ \A t \in Tasks : recoveryAttempts[t] <= MaxRecoveryAttempts + 1
 
 \* KanbanMergedConsistency: kanban "x" iff worker state is "merged"
+\* NOTE: MidCrashMergeSucceeded intentionally violates this — it models
+\* emit_event() crashing after git_state_set("merged") but before
+\* _lifecycle_update_kanban("x"). This is a real implementation gap.
 KanbanMergedConsistency ==
     \A t \in Tasks : kanban[t] = "x" <=> wState[t] = "merged"
 
@@ -814,6 +871,7 @@ ErrorStateConsistency ==
         /\ (lastError[t] = "hard_fail" => wState[t] = "failed")
 
 \* MergedCleanupConsistency: merged workers have worktree cleaning or absent
+\* NOTE: MidCrashMergeSucceeded intentionally violates this — see WorkerLifecycle.
 MergedCleanupConsistency ==
     \A t \in Tasks :
         wState[t] = "merged" => worktreeState[t] \in {"absent", "cleaning"}

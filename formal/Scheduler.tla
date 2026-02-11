@@ -301,19 +301,31 @@ FixFail(t) ==
     /\ UNCHANGED <<skipCount, readySince, mainCount, tick>>
 
 \* =========================================================================
+\* Actions - Retry After Cooldown
+\* =========================================================================
+
+\* Failed task becomes eligible again after skip cooldown expires.
+\* In the implementation, failed tasks are re-checked by scheduler_can_spawn_task
+\* on each tick and become eligible when skip count reaches 0.
+RetryAfterCooldown(t) ==
+    /\ taskStatus[t] = "failed"
+    /\ workerType[t] = "none"
+    /\ skipCount[t] = 0
+    /\ taskStatus' = [taskStatus EXCEPT ![t] = "pending"]
+    /\ UNCHANGED <<skipCount, readySince, workerType, mainCount, priorityCount, tick>>
+
+\* =========================================================================
 \* Actions - Aging and Skip Decay
 \* =========================================================================
 
 \* Tick: increment aging for pending tasks with met deps, decay skip cooldown
-\* Quick Win #3: Skip cooldown decays using halving (inverse of exponential backoff)
+\* Halving matches implementation's exponential backoff decay
 TickAging ==
     /\ tick' = tick + 1
     /\ readySince' = [u \in Tasks |->
         IF taskStatus[u] = "pending" /\ DepsCompleted(u)
         THEN readySince[u] + 1
         ELSE readySince[u]]
-    \* Exponential decay: halve the cooldown each tick (matches implementation's
-    \* "decrement each check" behavior in scheduler_can_spawn_task)
     /\ skipCount' = [u \in Tasks |-> PrevSkipValue(skipCount[u])]
     /\ UNCHANGED <<taskStatus, workerType, mainCount, priorityCount>>
 
@@ -330,6 +342,7 @@ Next ==
         \/ SpawnFixWorker(t)
         \/ FixPass(t)
         \/ FixFail(t)
+        \/ RetryAfterCooldown(t)
 
 \* =========================================================================
 \* Fairness
@@ -341,6 +354,7 @@ Fairness ==
     /\ \A t \in Tasks :
         /\ WF_vars(WorkerPass(t) \/ WorkerFail(t))
         /\ WF_vars(FixPass(t) \/ FixFail(t))
+        /\ WF_vars(RetryAfterCooldown(t))
 
 Spec == Init /\ [][Next]_vars /\ Fairness
 

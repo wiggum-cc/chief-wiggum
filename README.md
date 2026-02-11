@@ -120,6 +120,7 @@ export PATH="$WIGGUM_HOME/bin:$PATH"
 ```bash
 cd /path/to/your/project
 wiggum init
+wiggum github init
 ```
 
 Creates `.ralph/kanban.md` for task definitions.

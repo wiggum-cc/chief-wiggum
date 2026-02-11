@@ -94,8 +94,8 @@ Init ==
 
 \* Apalache constant initialization (replaces .cfg)
 CInit ==
-    /\ MAX_MERGE_ATTEMPTS = 2
-    /\ MAX_RECOVERY_ATTEMPTS = 1
+    /\ MAX_MERGE_ATTEMPTS = 3
+    /\ MAX_RECOVERY_ATTEMPTS = 2
 
 \* Helper: unchanged environment variables
 EnvVarsUnchanged == UNCHANGED <<baseMoved, hasConflict>>
@@ -797,22 +797,27 @@ StartupResetMerging ==
 
 \* =========================================================================
 \* Actions - Crash (Quick Win #2)
-\* Models process crash during a running state, leaving effects partial.
-\* After crash, orchestrator restart will trigger startup.reset events.
+\* Models process crash at two granularities:
+\*   1. Pre-transition crash: process dies during running state before any
+\*      transition fires. State unchanged, effects may be partial.
+\*   2. Mid-transition crash: emit_event() wrote git_state_set() (atomic)
+\*      but crashed before _lifecycle_update_kanban() or effects ran.
+\*      State updated to target, kanban stale, effects not applied.
+\*
+\* The implementation's emit_event() applies changes sequentially:
+\*   git_state_set -> kanban update -> event log -> effects
+\* Each is individually atomic (temp+mv), but the sequence is not.
 \* =========================================================================
 
-\* Crash while fixing: state unchanged, but effects may be partial
-\* (e.g., git changes applied but not committed)
+\* Pre-transition crash while fixing: state unchanged, githubSynced may drift
 CrashWhileFixing ==
     /\ state = "fixing"
     /\ UNCHANGED <<state, mergeAttempts, recoveryAttempts, kanban>>
     /\ EnvVarsUnchanged
-    \* Effects can be partially applied - nondeterministic effect-state
     /\ githubSynced' \in {TRUE, FALSE}
     /\ UNCHANGED <<inConflictQueue, worktreeState, lastError>>
 
-\* Crash while merging: state unchanged, effects may be partial
-\* (e.g., merge attempt counted but merge not completed)
+\* Pre-transition crash while merging: state unchanged, githubSynced may drift
 CrashWhileMerging ==
     /\ state = "merging"
     /\ UNCHANGED <<state, mergeAttempts, recoveryAttempts, kanban>>
@@ -820,7 +825,7 @@ CrashWhileMerging ==
     /\ githubSynced' \in {TRUE, FALSE}
     /\ UNCHANGED <<inConflictQueue, worktreeState, lastError>>
 
-\* Crash while resolving: state unchanged, effects may be partial
+\* Pre-transition crash while resolving: state unchanged, queue may drift
 CrashWhileResolving ==
     /\ state = "resolving"
     /\ UNCHANGED <<state, mergeAttempts, recoveryAttempts, kanban>>
@@ -828,6 +833,42 @@ CrashWhileResolving ==
     /\ githubSynced' \in {TRUE, FALSE}
     /\ inConflictQueue' \in {TRUE, FALSE}
     /\ UNCHANGED <<worktreeState, lastError>>
+
+\* Mid-transition crash: merge.succeeded wrote state="merged" but kanban
+\* still "=" (or whatever it was). Effects (sync_github, cleanup_worktree,
+\* release_claim) not applied. This is the #1 real-world crash bug class.
+MidCrashMergeSucceeded ==
+    /\ state = "merging"
+    /\ state' = "merged"
+    /\ UNCHANGED <<kanban, mergeAttempts, recoveryAttempts>>
+    /\ EnvVarsUnchanged
+    \* Effects not applied: worktree not cleaned, github not synced, queue not cleared
+    /\ githubSynced' = FALSE
+    /\ UNCHANGED <<inConflictQueue, worktreeState, lastError>>
+
+\* Mid-transition crash: merge.conflict wrote state="merge_conflict" but
+\* effects (set_error, add_conflict_queue) not applied.
+MidCrashMergeConflict ==
+    /\ state = "merging"
+    /\ hasConflict = TRUE
+    /\ state' = "merge_conflict"
+    /\ UNCHANGED <<kanban, mergeAttempts, recoveryAttempts>>
+    /\ EnvVarsUnchanged
+    \* set_error and add_conflict_queue not applied
+    /\ UNCHANGED <<inConflictQueue, worktreeState, lastError, githubSynced>>
+
+\* Mid-transition crash: fix.pass wrote state to target via chain
+\* (fix_completed -> needs_merge or failed) but effects not applied.
+\* inc_merge_attempts and rm_conflict_queue not run.
+MidCrashFixPass ==
+    /\ state = "fixing"
+    /\ state' = IF mergeAttempts < MAX_MERGE_ATTEMPTS
+                 THEN "needs_merge"
+                 ELSE "failed"
+    /\ UNCHANGED <<kanban, mergeAttempts, recoveryAttempts>>
+    /\ EnvVarsUnchanged
+    \* inc_merge_attempts not applied, rm_conflict_queue not applied
+    /\ UNCHANGED <<inConflictQueue, worktreeState, lastError, githubSynced>>
 
 \* =========================================================================
 \* Actions - Resume Abort (wildcard)
@@ -1000,10 +1041,14 @@ Next ==
     \* Startup reset
     \/ StartupResetFixing
     \/ StartupResetMerging
-    \* Crash (Quick Win #2)
+    \* Pre-transition crash
     \/ CrashWhileFixing
     \/ CrashWhileMerging
     \/ CrashWhileResolving
+    \* Mid-transition crash (state written, kanban/effects not)
+    \/ MidCrashMergeSucceeded
+    \/ MidCrashMergeConflict
+    \/ MidCrashFixPass
     \* Resume abort
     \/ ResumeAbort
     \/ ResumeAbortFromFailed
@@ -1071,6 +1116,11 @@ TransientStateInvariant ==
 \*  which requires state = "merging".)
 
 \* KanbanConsistency: if merged, kanban must be "x"
+\* NOTE: MidCrashMergeSucceeded intentionally violates this — it models
+\* emit_event() crashing after git_state_set("merged") but before
+\* _lifecycle_update_kanban("x"). This is a real implementation gap:
+\* no recovery path reconciles merged state with stale kanban.
+\* When Apalache reports a counterexample, it is a genuine bug.
 KanbanMergedConsistency ==
     state = "merged" => kanban = "x"
 
@@ -1085,11 +1135,13 @@ KanbanFailedConsistency ==
 
 \* ConflictQueueConsistency: if in conflict queue, state must be conflict-related
 \* Exception: crash can leave inConflictQueue TRUE with state unchanged
-\* Also, recovery from failed while in conflict queue can go to needs_fix
+\* Also: recovery from failed while in conflict queue can go to needs_fix
+\* Also: MidCrashFixPass can move fixing->needs_merge without rm_conflict_queue
 ConflictQueueConsistency ==
     inConflictQueue => state \in {"merge_conflict", "needs_resolve",
                                    "needs_multi_resolve", "resolving",
-                                   "fixing", "merging", "failed", "needs_fix"}
+                                   "fixing", "merging", "failed", "needs_fix",
+                                   "needs_merge"}
 
 \* WorktreeStateConsistency: worktree should be present when worker is active
 WorktreeStateConsistency ==
@@ -1107,6 +1159,10 @@ ErrorStateConsistency ==
 
 \* MergedCleanupConsistency: merged state should trigger cleanup
 \* (worktree should be cleaning or absent when merged)
+\* NOTE: MidCrashMergeSucceeded intentionally violates this — state becomes
+\* "merged" but cleanup_worktree effect never runs, leaving worktree "present".
+\* This is a real implementation gap: no reconciliation recovers leaked worktrees
+\* after a mid-transition crash of merge.succeeded.
 MergedCleanupConsistency ==
     state = "merged" => worktreeState \in {"absent", "cleaning"}
 

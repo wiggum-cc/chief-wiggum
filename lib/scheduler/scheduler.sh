@@ -477,8 +477,9 @@ scheduler_can_spawn_task() {
 
     # Skip tasks with active cooldown (count acts as cycles-to-skip)
     if [ -n "${_SCHED_SKIP_TASKS[$task_id]+x}" ] && [ "${_SCHED_SKIP_TASKS[$task_id]}" -gt 0 ]; then
-        # Decrement cooldown each check
-        _SCHED_SKIP_TASKS[$task_id]=$(( ${_SCHED_SKIP_TASKS[$task_id]} - 1 ))
+        # Halve cooldown each check (exponential decay matching backoff)
+        local _skip_cur=${_SCHED_SKIP_TASKS[$task_id]}
+        _SCHED_SKIP_TASKS[$task_id]=$(( _skip_cur / 2 ))
         if [ "${_SCHED_SKIP_TASKS[$task_id]}" -le 0 ]; then
             unset "_SCHED_SKIP_TASKS[$task_id]"
         fi

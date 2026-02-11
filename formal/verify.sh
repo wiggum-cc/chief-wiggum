@@ -33,20 +33,24 @@ Filter:
     verify.sh TypeInvariant       # TypeInvariant across all specs
 
 Checks (32 safety invariants):
-  WorkerLifecycle.tla   TypeInvariant BoundedCounters TransientStateInvariant
-                        KanbanMergedConsistency KanbanFailedConsistency
-                        ConflictQueueConsistency WorktreeStateConsistency
-                        ErrorStateConsistency MergedCleanupConsistency
-  PipelineEngine.tla    TypeInvariant VisitsBounded InlineVisitsBounded
-                        StatusConsistency SupervisorRestartsBounded
-  Orchestrator.tla      TypeInvariant WorkerPoolCapacity BoundedCounters
-                        KanbanMergedConsistency NoIdleInProgress
-                        NoFileConflictActive DependencyOrdering
-                        NoDuplicateActiveWorkers KanbanFailedConsistency
-                        ConflictQueueConsistency WorktreeStateConsistency
-                        ErrorStateConsistency MergedCleanupConsistency
-  Scheduler.tla         TypeInvariant CapacityInvariant DependencyInvariant
-                        FileConflictInvariant SkipBoundInvariant
+  WorkerLifecycle.tla   (length 25) TypeInvariant BoundedCounters
+                        TransientStateInvariant KanbanMergedConsistency
+                        KanbanFailedConsistency ConflictQueueConsistency
+                        WorktreeStateConsistency ErrorStateConsistency
+                        MergedCleanupConsistency
+  PipelineEngine.tla    (length 30) TypeInvariant VisitsBounded
+                        InlineVisitsBounded StatusConsistency
+                        SupervisorRestartsBounded
+  Orchestrator.tla      (length 20) TypeInvariant WorkerPoolCapacity
+                        BoundedCounters KanbanMergedConsistency
+                        NoIdleInProgress NoFileConflictActive
+                        DependencyOrdering NoDuplicateActiveWorkers
+                        KanbanFailedConsistency ConflictQueueConsistency
+                        WorktreeStateConsistency ErrorStateConsistency
+                        MergedCleanupConsistency
+  Scheduler.tla         (length 15) TypeInvariant CapacityInvariant
+                        DependencyInvariant FileConflictInvariant
+                        SkipBoundInvariant
 
 Note: Temporal/liveness properties (EventualTermination, NoStarvation,
 EventualSpawn, SkipDecay, PipelineTermination) are defined in each spec
@@ -256,11 +260,12 @@ run_check() {
         else
             printf " FAIL\n"
         fi
-        # Collect failure details
+        # Collect and print failure details immediately
         local detail=""
         detail=$(grep -E '(violation|error|Error|EXITCODE|invariant.*violated|Check the trace)' "$tmpout" \
             | sed 's/^/    /' || true)
         if [[ -n "$detail" ]]; then
+            echo "$detail"
             FAILURES+=("  ${spec_name}::${inv} (exit $rc)"$'\n'"$detail")
         else
             FAILURES+=("  ${spec_name}::${inv} (exit $rc)")
@@ -284,16 +289,16 @@ _print_summary() {
 # =========================================================================
 
 _run_all_checks() {
-    # WorkerLifecycle
-    run_check WorkerLifecycle.tla TypeInvariant 20
-    run_check WorkerLifecycle.tla BoundedCounters 20
-    run_check WorkerLifecycle.tla TransientStateInvariant 20
-    run_check WorkerLifecycle.tla KanbanMergedConsistency 20
-    run_check WorkerLifecycle.tla KanbanFailedConsistency 20
-    run_check WorkerLifecycle.tla ConflictQueueConsistency 20
-    run_check WorkerLifecycle.tla WorktreeStateConsistency 20
-    run_check WorkerLifecycle.tla ErrorStateConsistency 20
-    run_check WorkerLifecycle.tla MergedCleanupConsistency 20
+    # WorkerLifecycle (length 25: higher merge/recovery bounds need more steps)
+    run_check WorkerLifecycle.tla TypeInvariant 25
+    run_check WorkerLifecycle.tla BoundedCounters 25
+    run_check WorkerLifecycle.tla TransientStateInvariant 25
+    run_check WorkerLifecycle.tla KanbanMergedConsistency 25
+    run_check WorkerLifecycle.tla KanbanFailedConsistency 25
+    run_check WorkerLifecycle.tla ConflictQueueConsistency 25
+    run_check WorkerLifecycle.tla WorktreeStateConsistency 25
+    run_check WorkerLifecycle.tla ErrorStateConsistency 25
+    run_check WorkerLifecycle.tla MergedCleanupConsistency 25
 
     # PipelineEngine
     run_check PipelineEngine.tla TypeInvariant 30
@@ -302,20 +307,20 @@ _run_all_checks() {
     run_check PipelineEngine.tla StatusConsistency 30
     run_check PipelineEngine.tla SupervisorRestartsBounded 30
 
-    # Orchestrator
-    run_check Orchestrator.tla TypeInvariant 15
-    run_check Orchestrator.tla WorkerPoolCapacity 15
-    run_check Orchestrator.tla BoundedCounters 15
-    run_check Orchestrator.tla KanbanMergedConsistency 15
-    run_check Orchestrator.tla NoIdleInProgress 15
-    run_check Orchestrator.tla NoFileConflictActive 15
-    run_check Orchestrator.tla DependencyOrdering 15
-    run_check Orchestrator.tla NoDuplicateActiveWorkers 15
-    run_check Orchestrator.tla KanbanFailedConsistency 15
-    run_check Orchestrator.tla ConflictQueueConsistency 15
-    run_check Orchestrator.tla WorktreeStateConsistency 15
-    run_check Orchestrator.tla ErrorStateConsistency 15
-    run_check Orchestrator.tla MergedCleanupConsistency 15
+    # Orchestrator (length 20: higher merge/recovery bounds need more steps)
+    run_check Orchestrator.tla TypeInvariant 20
+    run_check Orchestrator.tla WorkerPoolCapacity 20
+    run_check Orchestrator.tla BoundedCounters 20
+    run_check Orchestrator.tla KanbanMergedConsistency 20
+    run_check Orchestrator.tla NoIdleInProgress 20
+    run_check Orchestrator.tla NoFileConflictActive 20
+    run_check Orchestrator.tla DependencyOrdering 20
+    run_check Orchestrator.tla NoDuplicateActiveWorkers 20
+    run_check Orchestrator.tla KanbanFailedConsistency 20
+    run_check Orchestrator.tla ConflictQueueConsistency 20
+    run_check Orchestrator.tla WorktreeStateConsistency 20
+    run_check Orchestrator.tla ErrorStateConsistency 20
+    run_check Orchestrator.tla MergedCleanupConsistency 20
 
     # Scheduler
     run_check Scheduler.tla TypeInvariant 15
