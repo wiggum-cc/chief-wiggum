@@ -468,6 +468,62 @@ test_reclaim_skips_task_in_pool() {
 }
 
 # =============================================================================
+# _scheduler_reconcile_merged_workers() Tests
+# =============================================================================
+
+test_reconcile_merged_worker_fixes_kanban() {
+    # Create worker with git-state="merged" but kanban still "=" (in-progress)
+    local worker_dir="$RALPH_DIR/workers/worker-TASK-001-1234567890"
+    mkdir -p "$worker_dir"
+    echo '{"current_state": "merged"}' > "$worker_dir/git-state.json"
+    update_kanban_status "$RALPH_DIR/kanban.md" "TASK-001" "="
+
+    scheduler_restore_workers
+
+    local status
+    status=$(get_task_status "$RALPH_DIR/kanban.md" "TASK-001")
+    assert_equals "x" "$status" "Merged worker kanban should be updated to complete"
+}
+
+test_reconcile_merged_worker_clears_conflict_queue() {
+    # Create worker with git-state="merged" and conflict queue entry
+    local worker_dir="$RALPH_DIR/workers/worker-TASK-001-1234567890"
+    mkdir -p "$worker_dir"
+    echo '{"current_state": "merged"}' > "$worker_dir/git-state.json"
+    update_kanban_status "$RALPH_DIR/kanban.md" "TASK-001" "x"
+
+    # Add task to conflict queue
+    conflict_queue_add "$RALPH_DIR" "TASK-001" "$worker_dir" 42 '["src/file.ts"]'
+
+    scheduler_restore_workers
+
+    # Verify task was removed from conflict queue
+    local queue_count
+    queue_count=$(jq '[.queue[] | select(.task_id == "TASK-001")] | length' "$RALPH_DIR/batches/queue.json" 2>/dev/null)
+    queue_count="${queue_count:-0}"
+    assert_equals "0" "$queue_count" "Merged worker should be removed from conflict queue"
+}
+
+test_reconcile_merged_worker_cleans_workspace() {
+    # Create worker with git-state="merged" and workspace directory
+    local worker_dir="$RALPH_DIR/workers/worker-TASK-001-1234567890"
+    mkdir -p "$worker_dir/workspace"
+    echo '{"current_state": "merged"}' > "$worker_dir/git-state.json"
+    update_kanban_status "$RALPH_DIR/kanban.md" "TASK-001" "x"
+
+    scheduler_restore_workers
+
+    # Worker dir should no longer exist under workers/ (moved to history)
+    local still_exists=false
+    [ -d "$worker_dir" ] && still_exists=true
+    assert_equals "false" "$still_exists" "Worker dir should be removed from workers/"
+
+    # Worker should be archived to history
+    assert_dir_exists "$RALPH_DIR/history/worker-TASK-001-1234567890" \
+        "Worker should be archived to history"
+}
+
+# =============================================================================
 # Run Tests
 # =============================================================================
 
@@ -504,6 +560,9 @@ run_test test_get_resumable_workers_output_has_four_fields
 run_test test_reclaim_workerless_in_progress_task
 run_test test_reclaim_skips_task_with_worker_dir
 run_test test_reclaim_skips_task_in_pool
+run_test test_reconcile_merged_worker_fixes_kanban
+run_test test_reconcile_merged_worker_clears_conflict_queue
+run_test test_reconcile_merged_worker_cleans_workspace
 
 print_test_summary
 exit_with_test_result

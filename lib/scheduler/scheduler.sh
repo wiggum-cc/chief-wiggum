@@ -172,6 +172,9 @@ scheduler_restore_workers() {
         # Reset dead workers stuck in running/transient states via lifecycle events
         _scheduler_reset_dead_workers
 
+        # Reconcile merged workers with incomplete effects (mid-crash recovery)
+        _scheduler_reconcile_merged_workers
+
         # Migrate legacy .needs-fix markers to git-state.json
         # (must be inside the workers-dir check since it iterates worker-*)
         for worker_dir in "$_SCHED_RALPH_DIR/workers"/worker-*; do
@@ -346,6 +349,63 @@ _scheduler_reset_dead_workers() {
     log_debug "reset_dead: scanned=$scanned reset=$reset_count"
     if [ "$reset_count" -gt 0 ]; then
         log "Reset $reset_count dead worker(s) at startup"
+    fi
+}
+
+# Reconcile merged workers with incomplete side effects
+#
+# When emit_event() crashes after writing git-state.json (state="merged")
+# but before applying kanban updates and effects, the worker is left in an
+# inconsistent state. _scheduler_reset_dead_workers skips terminal states,
+# so these inconsistencies persist forever without explicit reconciliation.
+#
+# Fixes three crash-recovery bugs:
+#   1. kanban still "=" but state="merged" — task stuck in-progress
+#   2. conflict queue still has entry — stale queue entry never cleaned
+#   3. workspace/ still exists — leaked worktree wasting disk + git registration
+_scheduler_reconcile_merged_workers() {
+    [ -d "$_SCHED_RALPH_DIR/workers" ] || return 0
+
+    local reconciled=0
+    for worker_dir in "$_SCHED_RALPH_DIR/workers"/worker-*; do
+        [ -d "$worker_dir" ] || continue
+
+        # Skip running workers
+        is_worker_running "$worker_dir" && continue
+
+        local current_state
+        current_state=$(git_state_get "$worker_dir" 2>/dev/null || echo "none")
+        [ "$current_state" = "merged" ] || continue
+
+        local worker_name
+        worker_name=$(basename "$worker_dir")
+        local task_id
+        task_id=$(get_task_id_from_worker "$worker_name")
+
+        # Bug 1: kanban not updated to "x" (complete)
+        local kanban_status
+        kanban_status=$(get_task_status "$_SCHED_RALPH_DIR/kanban.md" "$task_id")
+        if [[ "$kanban_status" != "x" ]]; then
+            update_kanban_status "$_SCHED_RALPH_DIR/kanban.md" "$task_id" "x" || true
+            log "Reconciled merged worker $task_id: kanban $kanban_status → x"
+        fi
+
+        # Bug 2: conflict queue not cleared (no-op if not in queue)
+        conflict_queue_remove "$_SCHED_RALPH_DIR" "$task_id"
+
+        # Bug 3: workspace not cleaned up (must run last — archives worker dir)
+        if [ -d "$worker_dir/workspace" ]; then
+            _cleanup_merged_pr_worktree "$worker_dir"
+            log "Reconciled merged worker $task_id: cleaned up workspace"
+            ((++reconciled)) || true
+            continue  # worker_dir moved to history/, skip further access
+        fi
+
+        ((++reconciled)) || true
+    done
+
+    if [ "$reconciled" -gt 0 ]; then
+        log "Reconciled $reconciled merged worker(s) with incomplete effects"
     fi
 }
 

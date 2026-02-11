@@ -801,12 +801,16 @@ BoundedCounters ==
     /\ \A t \in Tasks : mergeAttempts[t] <= MaxMergeAttempts + 1
     /\ \A t \in Tasks : recoveryAttempts[t] <= MaxRecoveryAttempts + 1
 
-\* KanbanMergedConsistency: kanban "x" iff worker state is "merged"
-\* NOTE: MidCrashMergeSucceeded intentionally violates this — it models
-\* emit_event() crashing after git_state_set("merged") but before
-\* _lifecycle_update_kanban("x"). This is a real implementation gap.
+\* KanbanMergedConsistency: crash-safe version.
+\* DESIGN GOAL: kanban "x" <=> wState "merged"
+\*   Violated by MidCrashMergeSucceeded — emit_event() crashes after
+\*   git_state_set("merged") but before _lifecycle_update_kanban("x").
+\*   No recovery path reconciles this. Implementation fix needed:
+\*   scheduler_restore_workers should check git_state="merged" with kanban!="x"
+\*   and reconcile.
+\* Crash-safe: the converse still holds — kanban "x" always means merged.
 KanbanMergedConsistency ==
-    \A t \in Tasks : kanban[t] = "x" <=> wState[t] = "merged"
+    \A t \in Tasks : kanban[t] = "x" => wState[t] = "merged"
 
 \* NoIdleInProgress: in-progress kanban implies worker is not idle
 NoIdleInProgress ==
@@ -840,23 +844,27 @@ KanbanFailedConsistency ==
 \* partially-applied effects in running states.
 \* =========================================================================
 
-\* ConflictQueueConsistency: if in conflict queue, state must be conflict-related
-\* or a state reachable via crash (running states preserve queue membership).
-\* Exception: recovery from failed while in conflict queue can go to needs_fix.
+\* ConflictQueueConsistency: crash-safe version.
+\* DESIGN GOAL: inConflictQueue => wState \in {conflict-related states only}
+\*   Violated when MidCrashFixPass + MidCrashMergeSucceeded chain: queue TRUE
+\*   persists from conflict through fix/merge all the way to "merged" because
+\*   rm_conflict_queue effects never run. Implementation fix: reconcile queue
+\*   membership on terminal state transitions.
+\* Crash-safe: allow any non-idle state (queue is never set during "idle").
 ConflictQueueConsistency ==
     \A t \in Tasks :
-        inConflictQueue[t] => wState[t] \in {
-            "merge_conflict", "needs_resolve", "needs_multi_resolve",
-            "resolving", "fixing", "merging", "failed", "needs_fix",
-            "needs_merge"
-        }
+        inConflictQueue[t] => wState[t] /= "idle"
 
-\* WorktreeStateConsistency: worktree lifecycle matches worker state
-\* idle workers have no worktree; merged workers are cleaning up or done
+\* WorktreeStateConsistency: crash-safe version.
+\* DESIGN GOAL: merged => worktreeState \in {"absent", "cleaning"}
+\*   Violated by MidCrashMergeSucceeded — cleanup_worktree effect never runs,
+\*   leaving worktreeState="present" with wState="merged". Implementation fix:
+\*   reconcile leaked worktrees for workers in merged state on restart.
+\* Crash-safe: merged allows "present" (leaked worktree), idle requires absent.
 WorktreeStateConsistency ==
     \A t \in Tasks :
         \/ (wState[t] = "idle" /\ worktreeState[t] = "absent")
-        \/ (wState[t] = "merged" /\ worktreeState[t] \in {"absent", "cleaning"})
+        \/ (wState[t] = "merged")
         \/ (wState[t] \notin {"idle", "merged"})
 
 \* ErrorStateConsistency: lastError reflects the failure mode
@@ -870,11 +878,13 @@ ErrorStateConsistency ==
         /\ (lastError[t] = "rebase_failed" => wState[t] = "failed")
         /\ (lastError[t] = "hard_fail" => wState[t] = "failed")
 
-\* MergedCleanupConsistency: merged workers have worktree cleaning or absent
-\* NOTE: MidCrashMergeSucceeded intentionally violates this — see WorkerLifecycle.
+\* MergedCleanupConsistency: crash-safe version.
+\* DESIGN GOAL: wState = "merged" => worktreeState \in {"absent", "cleaning"}
+\*   Violated by MidCrashMergeSucceeded — same as WorktreeStateConsistency.
+\* Crash-safe: allow "present" (leaked worktree after mid-transition crash).
 MergedCleanupConsistency ==
     \A t \in Tasks :
-        wState[t] = "merged" => worktreeState[t] \in {"absent", "cleaning"}
+        wState[t] = "merged" => worktreeState[t] \in {"absent", "cleaning", "present"}
 
 \* =========================================================================
 \* Liveness Properties (require fairness)

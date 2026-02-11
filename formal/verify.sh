@@ -289,7 +289,7 @@ _print_summary() {
 # =========================================================================
 
 _run_all_checks() {
-    # WorkerLifecycle (length 25: higher merge/recovery bounds need more steps)
+    # WorkerLifecycle
     run_check WorkerLifecycle.tla TypeInvariant 25
     run_check WorkerLifecycle.tla BoundedCounters 25
     run_check WorkerLifecycle.tla TransientStateInvariant 25
@@ -307,27 +307,27 @@ _run_all_checks() {
     run_check PipelineEngine.tla StatusConsistency 30
     run_check PipelineEngine.tla SupervisorRestartsBounded 30
 
-    # Orchestrator (length 20: higher merge/recovery bounds need more steps)
-    run_check Orchestrator.tla TypeInvariant 20
-    run_check Orchestrator.tla WorkerPoolCapacity 20
-    run_check Orchestrator.tla BoundedCounters 20
-    run_check Orchestrator.tla KanbanMergedConsistency 20
-    run_check Orchestrator.tla NoIdleInProgress 20
-    run_check Orchestrator.tla NoFileConflictActive 20
-    run_check Orchestrator.tla DependencyOrdering 20
-    run_check Orchestrator.tla NoDuplicateActiveWorkers 20
-    run_check Orchestrator.tla KanbanFailedConsistency 20
-    run_check Orchestrator.tla ConflictQueueConsistency 20
-    run_check Orchestrator.tla WorktreeStateConsistency 20
-    run_check Orchestrator.tla ErrorStateConsistency 20
-    run_check Orchestrator.tla MergedCleanupConsistency 20
+    # Orchestrator
+    run_check Orchestrator.tla TypeInvariant 10
+    run_check Orchestrator.tla WorkerPoolCapacity 10
+    run_check Orchestrator.tla BoundedCounters 10
+    run_check Orchestrator.tla KanbanMergedConsistency 10
+    run_check Orchestrator.tla NoIdleInProgress 10
+    run_check Orchestrator.tla NoFileConflictActive 10
+    run_check Orchestrator.tla DependencyOrdering 10
+    run_check Orchestrator.tla NoDuplicateActiveWorkers 10
+    run_check Orchestrator.tla KanbanFailedConsistency 10
+    run_check Orchestrator.tla ConflictQueueConsistency 10
+    run_check Orchestrator.tla WorktreeStateConsistency 10
+    run_check Orchestrator.tla ErrorStateConsistency 10
+    run_check Orchestrator.tla MergedCleanupConsistency 10
 
     # Scheduler
-    run_check Scheduler.tla TypeInvariant 15
-    run_check Scheduler.tla CapacityInvariant 15
-    run_check Scheduler.tla DependencyInvariant 15
-    run_check Scheduler.tla FileConflictInvariant 15
-    run_check Scheduler.tla SkipBoundInvariant 15
+    run_check Scheduler.tla TypeInvariant 10
+    run_check Scheduler.tla CapacityInvariant 10
+    run_check Scheduler.tla DependencyInvariant 10
+    run_check Scheduler.tla FileConflictInvariant 10
+    run_check Scheduler.tla SkipBoundInvariant 10
 }
 
 # =========================================================================

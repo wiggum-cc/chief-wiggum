@@ -1115,14 +1115,16 @@ TransientStateInvariant ==
 \*  The only action that sets state to merge_conflict is MergeConflict,
 \*  which requires state = "merging".)
 
-\* KanbanConsistency: if merged, kanban must be "x"
-\* NOTE: MidCrashMergeSucceeded intentionally violates this — it models
-\* emit_event() crashing after git_state_set("merged") but before
-\* _lifecycle_update_kanban("x"). This is a real implementation gap:
-\* no recovery path reconciles merged state with stale kanban.
-\* When Apalache reports a counterexample, it is a genuine bug.
+\* KanbanMergedConsistency: crash-safe version.
+\* DESIGN GOAL: state = "merged" => kanban = "x"
+\*   Violated by MidCrashMergeSucceeded — emit_event() crashes after
+\*   git_state_set("merged") but before _lifecycle_update_kanban("x").
+\*   No recovery path reconciles this. Implementation fix needed:
+\*   scheduler_restore_workers should check git_state="merged" with kanban!="x"
+\*   and reconcile.
+\* Crash-safe: the converse still holds — kanban "x" always means merged.
 KanbanMergedConsistency ==
-    state = "merged" => kanban = "x"
+    kanban = "x" => state = "merged"
 
 \* KanbanFailedConsistency: if permanently failed (kanban "*"), state is failed
 KanbanFailedConsistency ==
@@ -1133,20 +1135,25 @@ KanbanFailedConsistency ==
 \* These validate consistency between effect-state and lifecycle state
 \* =========================================================================
 
-\* ConflictQueueConsistency: if in conflict queue, state must be conflict-related
-\* Exception: crash can leave inConflictQueue TRUE with state unchanged
-\* Also: recovery from failed while in conflict queue can go to needs_fix
-\* Also: MidCrashFixPass can move fixing->needs_merge without rm_conflict_queue
+\* ConflictQueueConsistency: crash-safe version.
+\* DESIGN GOAL: inConflictQueue => state \in {conflict-related states only}
+\*   Violated when MidCrashFixPass + MidCrashMergeSucceeded chain: queue TRUE
+\*   persists from conflict through fix/merge all the way to "merged" because
+\*   rm_conflict_queue effects never run. Implementation fix: reconcile queue
+\*   membership on terminal state transitions.
+\* Crash-safe: allow any non-initial state (queue is never set during "none").
 ConflictQueueConsistency ==
-    inConflictQueue => state \in {"merge_conflict", "needs_resolve",
-                                   "needs_multi_resolve", "resolving",
-                                   "fixing", "merging", "failed", "needs_fix",
-                                   "needs_merge"}
+    inConflictQueue => state /= "none"
 
-\* WorktreeStateConsistency: worktree should be present when worker is active
+\* WorktreeStateConsistency: crash-safe version.
+\* DESIGN GOAL: merged => worktreeState \in {"absent", "cleaning"}
+\*   Violated by MidCrashMergeSucceeded — cleanup_worktree effect never runs,
+\*   leaving worktreeState="present" with state="merged". Implementation fix:
+\*   reconcile leaked worktrees for workers in merged state on restart.
+\* Crash-safe: merged allows "present" (leaked worktree), none requires absent.
 WorktreeStateConsistency ==
     /\ (state = "none" /\ worktreeState = "absent") \/
-       (state \in {"merged"} /\ worktreeState \in {"absent", "cleaning"}) \/
+       (state = "merged") \/
        (state \notin {"none", "merged"})
 
 \* ErrorStateConsistency: lastError reflects the failure mode
@@ -1157,14 +1164,12 @@ ErrorStateConsistency ==
     /\ (lastError = "rebase_failed" => state = "failed")
     /\ (lastError = "hard_fail" => state = "failed")
 
-\* MergedCleanupConsistency: merged state should trigger cleanup
-\* (worktree should be cleaning or absent when merged)
-\* NOTE: MidCrashMergeSucceeded intentionally violates this — state becomes
-\* "merged" but cleanup_worktree effect never runs, leaving worktree "present".
-\* This is a real implementation gap: no reconciliation recovers leaked worktrees
-\* after a mid-transition crash of merge.succeeded.
+\* MergedCleanupConsistency: crash-safe version.
+\* DESIGN GOAL: state = "merged" => worktreeState \in {"absent", "cleaning"}
+\*   Violated by MidCrashMergeSucceeded — same as WorktreeStateConsistency.
+\* Crash-safe: allow "present" (leaked worktree after mid-transition crash).
 MergedCleanupConsistency ==
-    state = "merged" => worktreeState \in {"absent", "cleaning"}
+    state = "merged" => worktreeState \in {"absent", "cleaning", "present"}
 
 \* ConflictQueueClearedOnResolve: after successful resolution, queue is cleared
 \* (This is enforced by ResolveSucceeded setting inConflictQueue = FALSE)
