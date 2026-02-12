@@ -107,7 +107,7 @@ WorkerStates == {
     "resolving", "merged", "failed"
 }
 
-KanbanValues == {" ", "=", "x", "*"}
+KanbanValues == {" ", "=", "x", "*", "P"}
 
 WorkerTypes == {"none", "main", "fix", "resolve"}
 
@@ -710,6 +710,100 @@ TaskReclaim(t) ==
     /\ AllAuxUnchanged
 
 \* =========================================================================
+\* Actions - Pending Approval (null-target, kanban-only)
+\* =========================================================================
+
+\* task.pending_approval: * -> null, kanban "P"
+\* Effect: sync_github. Marks task as awaiting approval.
+TaskPendingApproval(t) ==
+    /\ wState[t] \notin {"idle", "merged"}
+    /\ kanban' = [kanban EXCEPT ![t] = "P"]
+    /\ githubSynced' = [githubSynced EXCEPT ![t] = TRUE]
+    /\ UNCHANGED <<wState, wType, mergeAttempts, recoveryAttempts,
+                   inConflictQueue, worktreeState, lastError>>
+    /\ EnvVarsUnchanged
+
+\* =========================================================================
+\* Actions - Planner Completed
+\* =========================================================================
+
+\* planner.completed: needs_multi_resolve -> needs_resolve
+PlannerCompleted(t) ==
+    /\ wState[t] = "needs_multi_resolve"
+    /\ wState' = [wState EXCEPT ![t] = "needs_resolve"]
+    /\ UNCHANGED <<kanban, wType, mergeAttempts, recoveryAttempts>>
+    /\ AllAuxUnchanged
+
+\* =========================================================================
+\* Actions - Manual Start Merge
+\* =========================================================================
+
+\* manual.start_merge: needs_fix -> needs_merge
+ManualStartMergeFromNeedsFix(t) ==
+    /\ wState[t] = "needs_fix"
+    /\ wState' = [wState EXCEPT ![t] = "needs_merge"]
+    /\ UNCHANGED <<kanban, wType, mergeAttempts, recoveryAttempts>>
+    /\ AllAuxUnchanged
+
+\* manual.start_merge: failed -> needs_merge (guarded: recovery_attempts_lt_max)
+\* Effects: inc_recovery, clear_error. kanban "="
+ManualStartMergeFromFailedGuarded(t) ==
+    /\ wState[t] = "failed"
+    /\ recoveryAttempts[t] < MaxRecoveryAttempts
+    /\ wState' = [wState EXCEPT ![t] = "needs_merge"]
+    /\ recoveryAttempts' = [recoveryAttempts EXCEPT ![t] = recoveryAttempts[t] + 1]
+    /\ kanban' = [kanban EXCEPT ![t] = "="]
+    /\ lastError' = [lastError EXCEPT ![t] = ""]
+    /\ githubSynced' = [githubSynced EXCEPT ![t] = FALSE]
+    /\ UNCHANGED <<wType, mergeAttempts, inConflictQueue, worktreeState>>
+    /\ EnvVarsUnchanged
+
+\* manual.start_merge: failed -> failed (fallback: guard failed)
+ManualStartMergeFromFailedFallback(t) ==
+    /\ wState[t] = "failed"
+    /\ recoveryAttempts[t] >= MaxRecoveryAttempts
+    /\ UNCHANGED <<wState, kanban, wType, mergeAttempts, recoveryAttempts>>
+    /\ AllAuxUnchanged
+
+\* =========================================================================
+\* Actions - Manual Start Fix
+\* =========================================================================
+
+\* manual.start_fix: needs_merge -> fixing
+ManualStartFixFromNeedsMerge(t) ==
+    /\ wState[t] = "needs_merge"
+    /\ wState' = [wState EXCEPT ![t] = "fixing"]
+    /\ UNCHANGED <<kanban, wType, mergeAttempts, recoveryAttempts>>
+    /\ AllAuxUnchanged
+
+\* manual.start_fix: needs_fix -> fixing
+ManualStartFixFromNeedsFix(t) ==
+    /\ wState[t] = "needs_fix"
+    /\ wState' = [wState EXCEPT ![t] = "fixing"]
+    /\ UNCHANGED <<kanban, wType, mergeAttempts, recoveryAttempts>>
+    /\ AllAuxUnchanged
+
+\* manual.start_fix: failed -> fixing (guarded: recovery_attempts_lt_max)
+\* Effects: inc_recovery, clear_error. kanban "="
+ManualStartFixFromFailedGuarded(t) ==
+    /\ wState[t] = "failed"
+    /\ recoveryAttempts[t] < MaxRecoveryAttempts
+    /\ wState' = [wState EXCEPT ![t] = "fixing"]
+    /\ recoveryAttempts' = [recoveryAttempts EXCEPT ![t] = recoveryAttempts[t] + 1]
+    /\ kanban' = [kanban EXCEPT ![t] = "="]
+    /\ lastError' = [lastError EXCEPT ![t] = ""]
+    /\ githubSynced' = [githubSynced EXCEPT ![t] = FALSE]
+    /\ UNCHANGED <<wType, mergeAttempts, inConflictQueue, worktreeState>>
+    /\ EnvVarsUnchanged
+
+\* manual.start_fix: failed -> failed (fallback: guard failed)
+ManualStartFixFromFailedFallback(t) ==
+    /\ wState[t] = "failed"
+    /\ recoveryAttempts[t] >= MaxRecoveryAttempts
+    /\ UNCHANGED <<wState, kanban, wType, mergeAttempts, recoveryAttempts>>
+    /\ AllAuxUnchanged
+
+\* =========================================================================
 \* Actions - Environment Changes (Structured Nondeterminism)
 \* Per-task: each PR branch can independently become out-of-date or
 \* develop conflicts. Only active (non-terminal, non-idle) workers are
@@ -798,6 +892,18 @@ Next ==
         \* Null-target transitions
         \/ ResumeRetry(t)
         \/ TaskReclaim(t)
+        \/ TaskPendingApproval(t)
+        \* Planner completed
+        \/ PlannerCompleted(t)
+        \* Manual start merge
+        \/ ManualStartMergeFromNeedsFix(t)
+        \/ ManualStartMergeFromFailedGuarded(t)
+        \/ ManualStartMergeFromFailedFallback(t)
+        \* Manual start fix
+        \/ ManualStartFixFromNeedsMerge(t)
+        \/ ManualStartFixFromNeedsFix(t)
+        \/ ManualStartFixFromFailedGuarded(t)
+        \/ ManualStartFixFromFailedFallback(t)
         \* Environment changes
         \/ EnvBaseMoved(t)
         \/ EnvConflictAppears(t)
@@ -831,6 +937,9 @@ Fairness ==
         /\ WF_vars(StartupReconcileMerged(q))
         /\ WF_vars(StartupReconcileConflict(q))
         /\ WF_vars(CleanupCompleted(q))
+        /\ WF_vars(PlannerCompleted(q))
+        /\ WF_vars(ManualStartMergeFromFailedGuarded(q) \/ ManualStartMergeFromFailedFallback(q))
+        /\ WF_vars(ManualStartFixFromFailedGuarded(q) \/ ManualStartFixFromFailedFallback(q))
 
 Spec == Init /\ [][Next]_vars /\ Fairness
 

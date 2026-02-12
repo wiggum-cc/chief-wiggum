@@ -9,7 +9,7 @@
     "fix_completed":       { "type": "transient" },
     "needs_merge":         { "type": "waiting" },
     "merging":             { "type": "running" },
-    "merge_conflict":      { "type": "transient" },
+    "merge_conflict":      { "type": "waiting" },
     "needs_resolve":       { "type": "waiting" },
     "needs_multi_resolve": { "type": "waiting" },
     "resolving":           { "type": "running" },
@@ -52,7 +52,7 @@
     { "event": "fix.fail",              "from": "fixing",     "to": "failed",       "effects": ["check_permanent"] },
     { "event": "fix.timeout",           "from": "fixing",     "to": "needs_fix" },
     { "event": "fix.already_merged",    "from": "needs_fix",  "to": "merged",       "kanban": "x", "effects": ["sync_github", "cleanup_batch", "cleanup_worktree", "release_claim", "clear_error", "rm_conflict_queue"] },
-    { "event": "fix.detected",          "from": "failed",     "to": "needs_fix",    "guard": "recovery_attempts_lt_max", "kanban": "=", "effects": ["inc_recovery"] },
+    { "event": "fix.detected",          "from": "failed",     "to": "needs_fix",    "guard": "recovery_attempts_lt_max", "kanban": "=", "effects": ["inc_recovery", "clear_error"] },
 
     { "event": "merge.start",           "from": "needs_merge","to": "merging",      "guard": "merge_attempts_lt_max", "effects": ["inc_merge_attempts"] },
     { "event": "merge.start",           "from": "needs_merge","to": "failed",       "effects": ["check_permanent"] },
@@ -94,24 +94,24 @@
     { "event": "pr.conflict_detected",  "from": "none",              "to": "needs_resolve", "effects": ["add_conflict_queue"] },
     { "event": "pr.conflict_detected",  "from": "needs_merge",       "to": "needs_resolve", "effects": ["add_conflict_queue"] },
     { "event": "pr.conflict_detected",  "from": "needs_fix",         "to": "needs_resolve", "effects": ["add_conflict_queue"] },
-    { "event": "pr.conflict_detected",  "from": "failed",            "to": "needs_resolve", "guard": "recovery_attempts_lt_max", "kanban": "=", "effects": ["inc_recovery", "reset_merge", "add_conflict_queue"] },
+    { "event": "pr.conflict_detected",  "from": "failed",            "to": "needs_resolve", "guard": "recovery_attempts_lt_max", "kanban": "=", "effects": ["inc_recovery", "reset_merge", "add_conflict_queue", "clear_error"] },
 
     { "event": "pr.multi_conflict_detected", "from": "none",              "to": "needs_multi_resolve", "effects": ["add_conflict_queue"] },
     { "event": "pr.multi_conflict_detected", "from": "needs_merge",       "to": "needs_multi_resolve", "effects": ["add_conflict_queue"] },
     { "event": "pr.multi_conflict_detected", "from": "needs_fix",         "to": "needs_multi_resolve", "effects": ["add_conflict_queue"] },
-    { "event": "pr.multi_conflict_detected", "from": "failed",            "to": "needs_multi_resolve", "guard": "recovery_attempts_lt_max", "kanban": "=", "effects": ["inc_recovery", "reset_merge", "add_conflict_queue"] },
+    { "event": "pr.multi_conflict_detected", "from": "failed",            "to": "needs_multi_resolve", "guard": "recovery_attempts_lt_max", "kanban": "=", "effects": ["inc_recovery", "reset_merge", "add_conflict_queue", "clear_error"] },
 
     { "event": "pr.comments_detected",  "from": "none",              "to": "needs_fix" },
     { "event": "pr.comments_detected",  "from": "needs_merge",       "to": "needs_fix" },
-    { "event": "pr.comments_detected",  "from": "failed",            "to": "needs_fix", "guard": "recovery_attempts_lt_max", "kanban": "=", "effects": ["inc_recovery"] },
+    { "event": "pr.comments_detected",  "from": "failed",            "to": "needs_fix", "guard": "recovery_attempts_lt_max", "kanban": "=", "effects": ["inc_recovery", "clear_error"] },
 
     { "event": "pr.retrack",            "from": "none",              "to": "needs_merge" },
 
-    { "event": "recovery.to_resolve",   "from": "failed",     "to": "needs_resolve","guard": "recovery_attempts_lt_max", "kanban": "=", "effects": ["inc_recovery", "reset_merge"] },
-    { "event": "recovery.to_fix",       "from": "failed",     "to": "needs_fix",    "guard": "recovery_attempts_lt_max", "kanban": "=", "effects": ["inc_recovery"] },
+    { "event": "recovery.to_resolve",   "from": "failed",     "to": "needs_resolve","guard": "recovery_attempts_lt_max", "kanban": "=", "effects": ["inc_recovery", "reset_merge", "clear_error"] },
+    { "event": "recovery.to_fix",       "from": "failed",     "to": "needs_fix",    "guard": "recovery_attempts_lt_max", "kanban": "=", "effects": ["inc_recovery", "clear_error"] },
     { "event": "recovery.to_resolve",   "from": "failed",     "to": "failed",       "kanban": "*", "effects": ["check_permanent"] },
     { "event": "recovery.to_fix",       "from": "failed",     "to": "failed",       "kanban": "*", "effects": ["check_permanent"] },
-    { "event": "user.resume",           "from": "failed",     "to": "needs_merge",  "kanban": "=", "effects": ["rm_conflict_queue"] },
+    { "event": "user.resume",           "from": "failed",     "to": "needs_merge",  "kanban": "=", "effects": ["rm_conflict_queue", "clear_error"] },
     { "event": "permanent_failure",     "from": "failed",     "to": "failed",       "kanban": "*", "effects": ["sync_github"] },
 
     { "event": "startup.reset",          "from": "fixing",     "to": "needs_fix" },
@@ -128,13 +128,13 @@
     { "event": "planner.completed",     "from": "needs_multi_resolve", "to": "needs_resolve" },
 
     { "event": "manual.start_merge",    "from": "needs_fix",  "to": "needs_merge" },
-    { "event": "manual.start_merge",    "from": "failed",     "to": "needs_merge",  "guard": "recovery_attempts_lt_max", "kanban": "=", "effects": ["inc_recovery"] },
+    { "event": "manual.start_merge",    "from": "failed",     "to": "needs_merge",  "guard": "recovery_attempts_lt_max", "kanban": "=", "effects": ["inc_recovery", "clear_error"] },
     { "event": "manual.start_merge",    "from": "failed",     "to": "failed" },
     { "event": "manual.start_merge",    "from": "*",          "to": null },
 
     { "event": "manual.start_fix",      "from": "needs_merge","to": "fixing" },
     { "event": "manual.start_fix",      "from": "needs_fix",  "to": "fixing" },
-    { "event": "manual.start_fix",      "from": "failed",     "to": "fixing",       "guard": "recovery_attempts_lt_max", "kanban": "=", "effects": ["inc_recovery"] },
+    { "event": "manual.start_fix",      "from": "failed",     "to": "fixing",       "guard": "recovery_attempts_lt_max", "kanban": "=", "effects": ["inc_recovery", "clear_error"] },
     { "event": "manual.start_fix",      "from": "failed",     "to": "failed" }
   ]
 }

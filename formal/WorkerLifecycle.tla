@@ -78,7 +78,7 @@ RunningStates == {"fixing", "merging", "resolving"}
 
 TerminalStates == {"merged", "failed"}
 
-KanbanValues == {" ", "=", "x", "*"}
+KanbanValues == {" ", "=", "x", "*", "P"}
 
 WorktreeValues == {"absent", "present", "cleaning"}
 
@@ -982,6 +982,100 @@ TaskReclaim ==
     /\ EnvVarsUnchanged
 
 \* =========================================================================
+\* Actions - Pending Approval (null-target, kanban-only)
+\* =========================================================================
+
+\* task.pending_approval: * -> null, kanban "P"
+\* Effect: sync_github. Marks task as awaiting approval.
+TaskPendingApproval ==
+    /\ state \notin {"none", "merged"}
+    /\ kanban' = "P"
+    /\ githubSynced' = TRUE
+    /\ UNCHANGED <<state, mergeAttempts, recoveryAttempts, inConflictQueue,
+                   worktreeState, lastError>>
+    /\ EnvVarsUnchanged
+
+\* =========================================================================
+\* Actions - Planner Completed
+\* =========================================================================
+
+\* planner.completed: needs_multi_resolve -> needs_resolve
+PlannerCompleted ==
+    /\ state = "needs_multi_resolve"
+    /\ state' = "needs_resolve"
+    /\ UNCHANGED <<mergeAttempts, recoveryAttempts, kanban>>
+    /\ AllAuxUnchanged
+
+\* =========================================================================
+\* Actions - Manual Start Merge
+\* =========================================================================
+
+\* manual.start_merge: needs_fix -> needs_merge
+ManualStartMergeFromNeedsFix ==
+    /\ state = "needs_fix"
+    /\ state' = "needs_merge"
+    /\ UNCHANGED <<mergeAttempts, recoveryAttempts, kanban>>
+    /\ AllAuxUnchanged
+
+\* manual.start_merge: failed -> needs_merge (guarded: recovery_attempts_lt_max)
+\* Effects: inc_recovery, clear_error. kanban "="
+ManualStartMergeFromFailedGuarded ==
+    /\ state = "failed"
+    /\ recoveryAttempts < MAX_RECOVERY_ATTEMPTS
+    /\ state' = "needs_merge"
+    /\ recoveryAttempts' = recoveryAttempts + 1
+    /\ kanban' = "="
+    /\ lastError' = ""
+    /\ githubSynced' = FALSE
+    /\ UNCHANGED <<mergeAttempts, inConflictQueue, worktreeState>>
+    /\ EnvVarsUnchanged
+
+\* manual.start_merge: failed -> failed (fallback: guard failed)
+ManualStartMergeFromFailedFallback ==
+    /\ state = "failed"
+    /\ recoveryAttempts >= MAX_RECOVERY_ATTEMPTS
+    /\ UNCHANGED <<state, mergeAttempts, recoveryAttempts, kanban>>
+    /\ AllAuxUnchanged
+
+\* =========================================================================
+\* Actions - Manual Start Fix
+\* =========================================================================
+
+\* manual.start_fix: needs_merge -> fixing
+ManualStartFixFromNeedsMerge ==
+    /\ state = "needs_merge"
+    /\ state' = "fixing"
+    /\ UNCHANGED <<mergeAttempts, recoveryAttempts, kanban>>
+    /\ AllAuxUnchanged
+
+\* manual.start_fix: needs_fix -> fixing
+ManualStartFixFromNeedsFix ==
+    /\ state = "needs_fix"
+    /\ state' = "fixing"
+    /\ UNCHANGED <<mergeAttempts, recoveryAttempts, kanban>>
+    /\ AllAuxUnchanged
+
+\* manual.start_fix: failed -> fixing (guarded: recovery_attempts_lt_max)
+\* Effects: inc_recovery, clear_error. kanban "="
+ManualStartFixFromFailedGuarded ==
+    /\ state = "failed"
+    /\ recoveryAttempts < MAX_RECOVERY_ATTEMPTS
+    /\ state' = "fixing"
+    /\ recoveryAttempts' = recoveryAttempts + 1
+    /\ kanban' = "="
+    /\ lastError' = ""
+    /\ githubSynced' = FALSE
+    /\ UNCHANGED <<mergeAttempts, inConflictQueue, worktreeState>>
+    /\ EnvVarsUnchanged
+
+\* manual.start_fix: failed -> failed (fallback: guard failed)
+ManualStartFixFromFailedFallback ==
+    /\ state = "failed"
+    /\ recoveryAttempts >= MAX_RECOVERY_ATTEMPTS
+    /\ UNCHANGED <<state, mergeAttempts, recoveryAttempts, kanban>>
+    /\ AllAuxUnchanged
+
+\* =========================================================================
 \* Actions - Environment Changes (Medium Term #1: Structured Nondeterminism)
 \* Models external events that change the merge environment
 \* =========================================================================
@@ -1118,6 +1212,18 @@ Next ==
     \* Null-target transitions
     \/ ResumeRetry
     \/ TaskReclaim
+    \/ TaskPendingApproval
+    \* Planner completed
+    \/ PlannerCompleted
+    \* Manual start merge
+    \/ ManualStartMergeFromNeedsFix
+    \/ ManualStartMergeFromFailedGuarded
+    \/ ManualStartMergeFromFailedFallback
+    \* Manual start fix
+    \/ ManualStartFixFromNeedsMerge
+    \/ ManualStartFixFromNeedsFix
+    \/ ManualStartFixFromFailedGuarded
+    \/ ManualStartFixFromFailedFallback
     \* Worktree cleanup
     \/ CleanupCompleted
     \* Environment changes (Medium Term #1: Structured Nondeterminism)
@@ -1143,6 +1249,9 @@ Fairness ==
     /\ WF_vars(StartupReconcileMerged)
     /\ WF_vars(StartupReconcileConflict)
     /\ WF_vars(CleanupCompleted)
+    /\ WF_vars(PlannerCompleted)
+    /\ WF_vars(ManualStartMergeFromFailedGuarded \/ ManualStartMergeFromFailedFallback)
+    /\ WF_vars(ManualStartFixFromFailedGuarded \/ ManualStartFixFromFailedFallback)
 
 Spec == Init /\ [][Next]_vars /\ Fairness
 
