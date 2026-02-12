@@ -90,12 +90,15 @@ VARIABLES
     \* @type: Str -> Bool;
     baseMoved,         \* task -> TRUE if upstream base moved (per-PR)
     \* @type: Str -> Bool;
-    hasConflict        \* task -> TRUE if merge would conflict (per-PR)
+    hasConflict,       \* task -> TRUE if merge would conflict (per-PR)
+    \* === AUXILIARY COUNTER ===
+    \* @type: Int;
+    manualStarts       \* cumulative count of manual start actions from failed
 
-\* @type: <<Str -> Str, Str -> Str, Str -> Str, Str -> Int, Str -> Int, Str -> Bool, Str -> Str, Str -> Str, Str -> Bool, Str -> Bool, Str -> Bool>>;
+\* @type: <<Str -> Str, Str -> Str, Str -> Str, Str -> Int, Str -> Int, Str -> Bool, Str -> Str, Str -> Str, Str -> Bool, Str -> Bool, Str -> Bool, Int>>;
 vars == <<kanban, wState, wType, mergeAttempts, recoveryAttempts,
           inConflictQueue, worktreeState, lastError, githubSynced,
-          baseMoved, hasConflict>>
+          baseMoved, hasConflict, manualStarts>>
 
 \* =========================================================================
 \* State and type definitions
@@ -142,7 +145,7 @@ HasFileConflict(q) == \E w \in ActiveMain : w /= q /\ TaskFiles[q] \cap TaskFile
 
 \* Unchanged groups for concise UNCHANGED clauses
 EffectVarsUnchanged == UNCHANGED <<inConflictQueue, worktreeState, lastError, githubSynced>>
-EnvVarsUnchanged == UNCHANGED <<baseMoved, hasConflict>>
+EnvVarsUnchanged == UNCHANGED <<baseMoved, hasConflict, manualStarts>>
 AllAuxUnchanged == EffectVarsUnchanged /\ EnvVarsUnchanged
 
 \* check_permanent effect: if recovery exhausted, set kanban to "*"
@@ -166,6 +169,7 @@ Init ==
     /\ githubSynced = [u \in Tasks |-> TRUE]
     /\ baseMoved = [u \in Tasks |-> FALSE]
     /\ hasConflict = [u \in Tasks |-> FALSE]
+    /\ manualStarts = 0
 
 \* Apalache constant initialization
 \* 3 tasks: T1 uses {f1}, T2 uses {f2}, T3 uses {f1, f3}
@@ -291,7 +295,7 @@ MergeOutOfDateOk(t) ==
     /\ hasConflict[t] = FALSE
     /\ wState' = [wState EXCEPT ![t] = "needs_merge"]
     /\ baseMoved' = [baseMoved EXCEPT ![t] = FALSE]  \* rebase brings up to date
-    /\ UNCHANGED <<kanban, wType, mergeAttempts, recoveryAttempts, hasConflict>>
+    /\ UNCHANGED <<kanban, wType, mergeAttempts, recoveryAttempts, hasConflict, manualStarts>>
     /\ EffectVarsUnchanged
 
 \* Merge out of date: rebase failed due to conflict
@@ -941,17 +945,20 @@ ManualStartMergeFromNeedsFix(t) ==
     /\ AllAuxUnchanged
 
 \* manual.start_merge: failed -> needs_merge (guarded: recovery_attempts_lt_max)
-\* Effects: inc_recovery, clear_error. kanban "="
+\* Effects: inc_recovery, clear_error. kanban "=". Reset wType to "main".
+\* Bypasses pool capacity — increments manualStarts counter.
 ManualStartMergeFromFailedGuarded(t) ==
     /\ wState[t] = "failed"
     /\ recoveryAttempts[t] < MaxRecoveryAttempts
     /\ wState' = [wState EXCEPT ![t] = "needs_merge"]
+    /\ wType' = [wType EXCEPT ![t] = "main"]
     /\ recoveryAttempts' = [recoveryAttempts EXCEPT ![t] = recoveryAttempts[t] + 1]
     /\ kanban' = [kanban EXCEPT ![t] = "="]
     /\ lastError' = [lastError EXCEPT ![t] = ""]
     /\ githubSynced' = [githubSynced EXCEPT ![t] = FALSE]
-    /\ UNCHANGED <<wType, mergeAttempts, inConflictQueue, worktreeState>>
-    /\ EnvVarsUnchanged
+    /\ manualStarts' = manualStarts + 1
+    /\ UNCHANGED <<mergeAttempts, inConflictQueue, worktreeState>>
+    /\ UNCHANGED <<baseMoved, hasConflict>>
 
 \* manual.start_merge: failed -> failed (fallback: guard failed)
 ManualStartMergeFromFailedFallback(t) ==
@@ -979,17 +986,20 @@ ManualStartFixFromNeedsFix(t) ==
     /\ AllAuxUnchanged
 
 \* manual.start_fix: failed -> fixing (guarded: recovery_attempts_lt_max)
-\* Effects: inc_recovery, clear_error. kanban "="
+\* Effects: inc_recovery, clear_error. kanban "=". Set wType to "fix".
+\* Bypasses pool capacity — increments manualStarts counter.
 ManualStartFixFromFailedGuarded(t) ==
     /\ wState[t] = "failed"
     /\ recoveryAttempts[t] < MaxRecoveryAttempts
     /\ wState' = [wState EXCEPT ![t] = "fixing"]
+    /\ wType' = [wType EXCEPT ![t] = "fix"]
     /\ recoveryAttempts' = [recoveryAttempts EXCEPT ![t] = recoveryAttempts[t] + 1]
     /\ kanban' = [kanban EXCEPT ![t] = "="]
     /\ lastError' = [lastError EXCEPT ![t] = ""]
     /\ githubSynced' = [githubSynced EXCEPT ![t] = FALSE]
-    /\ UNCHANGED <<wType, mergeAttempts, inConflictQueue, worktreeState>>
-    /\ EnvVarsUnchanged
+    /\ manualStarts' = manualStarts + 1
+    /\ UNCHANGED <<mergeAttempts, inConflictQueue, worktreeState>>
+    /\ UNCHANGED <<baseMoved, hasConflict>>
 
 \* manual.start_fix: failed -> failed (fallback: guard failed)
 ManualStartFixFromFailedFallback(t) ==
@@ -1010,7 +1020,7 @@ EnvBaseMoved(t) ==
     /\ wState[t] \notin {"idle", "merged", "failed"}
     /\ baseMoved[t] = FALSE
     /\ baseMoved' = [baseMoved EXCEPT ![t] = TRUE]
-    /\ UNCHANGED <<wState, kanban, wType, mergeAttempts, recoveryAttempts, hasConflict>>
+    /\ UNCHANGED <<wState, kanban, wType, mergeAttempts, recoveryAttempts, hasConflict, manualStarts>>
     /\ EffectVarsUnchanged
 
 \* A conflict appears (e.g., concurrent changes to same files)
@@ -1018,14 +1028,14 @@ EnvConflictAppears(t) ==
     /\ wState[t] \notin {"idle", "merged", "failed"}
     /\ hasConflict[t] = FALSE
     /\ hasConflict' = [hasConflict EXCEPT ![t] = TRUE]
-    /\ UNCHANGED <<wState, kanban, wType, mergeAttempts, recoveryAttempts, baseMoved>>
+    /\ UNCHANGED <<wState, kanban, wType, mergeAttempts, recoveryAttempts, baseMoved, manualStarts>>
     /\ EffectVarsUnchanged
 
 \* Conflict resolved externally (e.g., blocking PR merged, files no longer overlap)
 EnvConflictResolved(t) ==
     /\ hasConflict[t] = TRUE
     /\ hasConflict' = [hasConflict EXCEPT ![t] = FALSE]
-    /\ UNCHANGED <<wState, kanban, wType, mergeAttempts, recoveryAttempts, baseMoved>>
+    /\ UNCHANGED <<wState, kanban, wType, mergeAttempts, recoveryAttempts, baseMoved, manualStarts>>
     /\ EffectVarsUnchanged
 
 \* =========================================================================
@@ -1181,11 +1191,17 @@ TypeInvariant ==
     /\ \A t \in Tasks : githubSynced[t] \in BOOLEAN
     /\ \A t \in Tasks : baseMoved[t] \in BOOLEAN
     /\ \A t \in Tasks : hasConflict[t] \in BOOLEAN
+    /\ manualStarts \in 0..(Cardinality(Tasks) * (MaxRecoveryAttempts + 1))
 
-\* WorkerPoolCapacity: main and priority workers within limits
+\* WorkerPoolCapacity: pool size bounded by limit + manual overrides.
+\* Manual actions (ManualStartMerge/FixFromFailed) bypass pool capacity checks,
+\* allowing temporary overflow. Automated spawns (SpawnMainWorker, SpawnFixWorker,
+\* ResolveStarted, etc.) gate on capacity and won't fire until the count drops
+\* back below the limit. The manualStarts counter tracks cumulative manual
+\* overrides, bounding how far pools can exceed their limits.
 WorkerPoolCapacity ==
-    /\ Cardinality(ActiveMain) <= MaxWorkers
-    /\ Cardinality(ActivePriority) <= FixWorkerLimit
+    /\ Cardinality(ActiveMain) <= MaxWorkers + manualStarts
+    /\ Cardinality(ActivePriority) <= FixWorkerLimit + manualStarts
 
 \* BoundedCounters: merge/recovery within limits per task
 BoundedCounters ==
