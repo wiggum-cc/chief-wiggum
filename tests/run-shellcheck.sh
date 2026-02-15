@@ -24,8 +24,13 @@ check_files() {
         [ -f "$f" ] || continue
         ((++checked))
         ((++count))
-        if ! shellcheck "${SC_OPTS[@]}" "$f"; then
+        if ! shellcheck "${SC_OPTS[@]}" "$f" >/dev/null 2>&1; then
+            echo "✗ $f"
+            # Re-run to show the error
+            shellcheck "${SC_OPTS[@]}" "$f" 2>&1 | head -5
             ((++errors))
+        else
+            echo "✓"
         fi
     done
 

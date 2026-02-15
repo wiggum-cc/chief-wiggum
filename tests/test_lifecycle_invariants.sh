@@ -187,8 +187,7 @@ test_running_states_reset_on_startup() {
     for state in "${running_states[@]}"; do
         git_state_set "$WORKER_DIR" "$state" "test" "Setup"
 
-        local result=0
-        emit_event "$WORKER_DIR" "startup.reset" "test" '{}' 2>/dev/null || result=$?
+        emit_event "$WORKER_DIR" "startup.reset" "test" '{}' 2>/dev/null || true
 
         local new_state
         new_state=$(git_state_get "$WORKER_DIR")
