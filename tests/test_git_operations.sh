@@ -16,6 +16,7 @@ WORKER_DIR=""
 
 setup() {
     TEST_DIR=$(mktemp -d)
+    export LOG_FILE="/dev/null"
     WORKSPACE="$TEST_DIR/workspace"
     WORKER_DIR="$TEST_DIR/worker"
     mkdir -p "$WORKSPACE"
@@ -452,7 +453,7 @@ test_cherry_pick_recovery_missing_branch() {
 # Worktree Config Tests (rerere + diff3)
 # =============================================================================
 
-test_worktree_rerere_enabled() {
+test_worktree_rerere_and_diff3() {
     # Create a project repo to host the worktree
     local project_dir="$TEST_DIR/project"
     mkdir -p "$project_dir"
@@ -477,30 +478,7 @@ test_worktree_rerere_enabled() {
     local rerere_val
     rerere_val=$(git -C "$ws" config rerere.enabled 2>/dev/null)
     assert_equals "true" "$rerere_val" "rerere.enabled should be true after setup_worktree"
-}
 
-test_worktree_diff3_conflictstyle() {
-    # Create a project repo to host the worktree
-    local project_dir="$TEST_DIR/project"
-    mkdir -p "$project_dir"
-    git -C "$project_dir" init -q
-    git -C "$project_dir" config user.email "test@test.com"
-    git -C "$project_dir" config user.name "Test User"
-    echo "init" > "$project_dir/file.txt"
-    git -C "$project_dir" add .
-    git -C "$project_dir" commit -q -m "Initial"
-
-    local worker_dir_wt="$TEST_DIR/worker-WT-002-12345"
-    mkdir -p "$worker_dir_wt"
-
-    (
-        export WIGGUM_HOME
-        source "$WIGGUM_HOME/lib/git/worktree-helpers.sh"
-        export WIGGUM_SKIP_MERGE_CHECK=true
-        setup_worktree "$project_dir" "$worker_dir_wt" "WT-002"
-    )
-
-    local ws="$worker_dir_wt/workspace"
     local style_val
     style_val=$(git -C "$ws" config merge.conflictstyle 2>/dev/null)
     assert_equals "diff3" "$style_val" "merge.conflictstyle should be diff3 after setup_worktree"
@@ -552,12 +530,8 @@ test_advance_to_main_already_up_to_date() {
 test_advance_to_main_fast_forward() {
     _setup_advance_repos
 
-    # Push a new commit to origin/main via a temp clone
-    local tmp2="$TEST_DIR/tmp2"
-    git clone -q "$ORIGIN_DIR" "$tmp2"
-    cd "$tmp2" || return 1
-    git config user.email "test@test.com"
-    git config user.name "Test User"
+    # Push a new commit to origin/main via the existing tmp-clone
+    cd "$TEST_DIR/tmp-clone" || return 1
     echo "new main content" > new_file.txt
     git add new_file.txt
     git commit -q -m "Advance main"
@@ -583,12 +557,8 @@ test_advance_to_main_conflict_leaves_clean() {
     git commit -q -m "Task branch change"
     cd "$TESTS_DIR" || return 1
 
-    # Push a conflicting change to origin/main
-    local tmp3="$TEST_DIR/tmp3"
-    git clone -q "$ORIGIN_DIR" "$tmp3"
-    cd "$tmp3" || return 1
-    git config user.email "test@test.com"
-    git config user.name "Test User"
+    # Push a conflicting change to origin/main via the existing tmp-clone
+    cd "$TEST_DIR/tmp-clone" || return 1
     echo "conflicting main content" > README.md
     git add README.md
     git commit -q -m "Conflicting main change"
@@ -630,12 +600,8 @@ test_advance_to_main_conflict_leaves_clean() {
 test_advance_to_main_skip_env() {
     _setup_advance_repos
 
-    # Push a new commit to origin/main
-    local tmp4="$TEST_DIR/tmp4"
-    git clone -q "$ORIGIN_DIR" "$tmp4"
-    cd "$tmp4" || return 1
-    git config user.email "test@test.com"
-    git config user.name "Test User"
+    # Push a new commit to origin/main via the existing tmp-clone
+    cd "$TEST_DIR/tmp-clone" || return 1
     echo "should not appear" > skipped.txt
     git add skipped.txt
     git commit -q -m "Advance that should be skipped"
@@ -683,8 +649,7 @@ run_test test_cherry_pick_recovery_aborts_on_conflict
 run_test test_cherry_pick_recovery_missing_branch
 
 # worktree config tests
-run_test test_worktree_rerere_enabled
-run_test test_worktree_diff3_conflictstyle
+run_test test_worktree_rerere_and_diff3
 
 # git_advance_to_main tests
 run_test test_advance_to_main_already_up_to_date

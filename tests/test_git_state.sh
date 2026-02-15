@@ -15,6 +15,7 @@ WORKER_DIR=""
 
 setup() {
     TEST_DIR=$(mktemp -d)
+    export LOG_FILE="/dev/null"
     WORKER_DIR="$TEST_DIR/worker-TASK-001-12345"
     mkdir -p "$WORKER_DIR"
 }

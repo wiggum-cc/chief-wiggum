@@ -21,6 +21,7 @@ source "$WIGGUM_HOME/lib/github/issue-sync.sh"
 # Suppress log output in tests
 LOG_LEVEL=ERROR
 export LOG_LEVEL
+export LOG_FILE="/dev/null"
 
 TEST_DIR=""
 MOCK_BIN=""

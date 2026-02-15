@@ -419,7 +419,7 @@ git_set_identity() {
 # any changes the agent may have made (which it shouldn't have).
 
 # List of agent types that are read-only (should not modify workspace)
-_GIT_READONLY_AGENTS="engineering.security-audit engineering.validation-review product.plan-mode engineering.code-review"
+_GIT_READONLY_AGENTS="engineering.security-audit engineering.validation-review product.plan-mode engineering.code-review redteam.recon redteam.vuln-analysis redteam.exploit-validation redteam.report"
 
 # Check if an agent type is read-only
 # Args: <agent_type>

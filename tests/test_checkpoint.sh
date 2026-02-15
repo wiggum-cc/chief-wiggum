@@ -14,7 +14,7 @@ source "$WIGGUM_HOME/lib/core/checkpoint.sh"
 TEST_DIR=""
 setup() {
     TEST_DIR=$(mktemp -d)
-    export LOG_FILE="$TEST_DIR/test.log"
+    export LOG_FILE="/dev/null"
     export RALPH_RUN_ID="test"
 }
 teardown() {

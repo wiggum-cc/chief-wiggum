@@ -22,7 +22,7 @@ TEST_DIR=""
 
 setup() {
     TEST_DIR=$(mktemp -d)
-    export LOG_FILE="$TEST_DIR/test.log"
+    export LOG_FILE="/dev/null"
     # Override projects dir to use test fixture
     export CLAUDE_PROJECTS_DIR="$TEST_DIR/projects"
     export USAGE_DATA_DIR="$TEST_DIR/data"

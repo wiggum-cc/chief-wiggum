@@ -23,7 +23,7 @@ TEST_DIR=""
 
 setup() {
     TEST_DIR=$(mktemp -d)
-    export LOG_FILE="$TEST_DIR/test.log"
+    export LOG_FILE="/dev/null"
 
     # Source resume-state (needed by _is_terminal_failure)
     source "$WIGGUM_HOME/lib/core/resume-state.sh"

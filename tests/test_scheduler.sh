@@ -20,6 +20,7 @@ RALPH_DIR=""
 
 setup() {
     TEST_DIR=$(mktemp -d)
+    export LOG_FILE="/dev/null"
     RALPH_DIR="$TEST_DIR/.ralph"
     mkdir -p "$RALPH_DIR/workers"
     mkdir -p "$RALPH_DIR/logs"

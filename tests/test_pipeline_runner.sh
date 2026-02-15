@@ -42,7 +42,7 @@ _mock_epoch() { echo "$(( ++_MOCK_EPOCH ))"; }
 
 setup() {
     TEST_DIR=$(mktemp -d)
-    export LOG_FILE="$TEST_DIR/test.log"
+    export LOG_FILE="/dev/null"
     export WIGGUM_TASK_ID="TEST-001"
 
     # Create project and worker dirs

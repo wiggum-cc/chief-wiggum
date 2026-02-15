@@ -307,6 +307,54 @@
         "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" },
         "SKIP": { "status": "success", "exit_code": 0, "default_jump": "next" }
       }
+    },
+    "redteam.recon": {
+      "max_iterations": 10,
+      "max_turns": 80,
+      "timeout_seconds": 3600,
+      "result_mappings": {
+        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
+        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" }
+      }
+    },
+    "redteam.vuln-analysis": {
+      "max_iterations": 15,
+      "max_turns": 100,
+      "timeout_seconds": 7200,
+      "result_mappings": {
+        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
+        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" },
+        "FIX":  { "status": "partial", "exit_code": 0, "default_jump": "next" }
+      }
+    },
+    "redteam.exploit-validation": {
+      "max_iterations": 10,
+      "max_turns": 80,
+      "timeout_seconds": 5400,
+      "result_mappings": {
+        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
+        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" },
+        "FIX":  { "status": "partial", "exit_code": 0, "default_jump": "next" }
+      }
+    },
+    "redteam.report": {
+      "max_iterations": 1,
+      "max_turns": 80,
+      "timeout_seconds": 1800,
+      "result_mappings": {
+        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
+        "FIX":  { "status": "partial", "exit_code": 0, "default_jump": "next" }
+      }
+    },
+    "redteam.remediate": {
+      "max_iterations": 10,
+      "max_turns": 100,
+      "timeout_seconds": 7200,
+      "result_mappings": {
+        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
+        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" },
+        "FIX":  { "status": "partial", "exit_code": 0, "default_jump": "prev" }
+      }
     }
   },
   "defaults": {

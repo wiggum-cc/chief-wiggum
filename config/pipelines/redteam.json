@@ -1,0 +1,40 @@
+{
+  "name": "redteam",
+  "steps": [
+    {
+      "id": "recon",
+      "agent": "redteam.recon",
+      "max": 3,
+      "readonly": true
+    },
+    {
+      "id": "vuln-analysis",
+      "agent": "redteam.vuln-analysis",
+      "max": 5,
+      "readonly": true
+    },
+    {
+      "id": "exploit-validation",
+      "agent": "redteam.exploit-validation",
+      "max": 4,
+      "readonly": true
+    },
+    {
+      "id": "report",
+      "agent": "redteam.report",
+      "readonly": true,
+      "on_result": {
+        "FIX": {
+          "id": "remediate",
+          "agent": "redteam.remediate",
+          "max": 3,
+          "commit_after": true,
+          "on_result": {
+            "FIX": { "jump": "vuln-analysis" },
+            "PASS": { "jump": "next" }
+          }
+        }
+      }
+    }
+  ]
+}

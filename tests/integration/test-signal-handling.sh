@@ -24,7 +24,7 @@ setup() {
     TEST_DIR=$(mktemp -d)
     mock_setup
     export CLAUDE="$TESTS_DIR/mocks/mock-claude.sh"
-    export LOG_FILE="$TEST_DIR/test.log"
+    export LOG_FILE="/dev/null"
 }
 
 teardown() {

@@ -17,6 +17,7 @@ source "$WIGGUM_HOME/lib/worker/git-state.sh"
 # Suppress log output during tests
 LOG_LEVEL=ERROR
 export LOG_LEVEL
+export LOG_FILE="/dev/null"
 
 # Test isolation
 TEST_DIR=""

@@ -13,6 +13,7 @@ source "$SCRIPT_DIR/test-framework.sh"
 
 # Setup WIGGUM_HOME for tests
 export WIGGUM_HOME="$PROJECT_ROOT"
+export LOG_FILE="/dev/null"
 
 # =============================================================================
 # Test Fixtures

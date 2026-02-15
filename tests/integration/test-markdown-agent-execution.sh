@@ -45,7 +45,7 @@ setup() {
     export CLAUDE="$TESTS_DIR/mocks/mock-claude.sh"
     export MOCK_CLAUDE_DELAY="0"
     export WIGGUM_LOOP_DELAY="0"
-    export LOG_FILE="$TEST_DIR/test.log"
+    export LOG_FILE="/dev/null"
     export LOG_LEVEL="ERROR"
 
     # Ensure clean state - unset any previous agent state

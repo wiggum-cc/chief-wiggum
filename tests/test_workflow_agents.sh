@@ -522,21 +522,21 @@ test_auto_resolve_lockfile() {
 
     local workspace="$WORKER_DIR/workspace"
 
-    # Create a branch with a Cargo.lock
+    # Create a branch with a Cargo.lock (force-add to bypass global gitignore)
     echo "lockfile-v1" > "$workspace/Cargo.lock"
-    git -C "$workspace" add Cargo.lock
+    git -C "$workspace" add -f Cargo.lock
     git -C "$workspace" commit -q -m "Add Cargo.lock"
 
     # Create a side branch
     git -C "$workspace" checkout -b side-branch 2>/dev/null
     echo "lockfile-side" > "$workspace/Cargo.lock"
-    git -C "$workspace" add Cargo.lock
+    git -C "$workspace" add -f Cargo.lock
     git -C "$workspace" commit -q -m "Side branch lock"
 
     # Go back to main and make a different change
     git -C "$workspace" checkout - 2>/dev/null
     echo "lockfile-main" > "$workspace/Cargo.lock"
-    git -C "$workspace" add Cargo.lock
+    git -C "$workspace" add -f Cargo.lock
     git -C "$workspace" commit -q -m "Main branch lock"
 
     # Merge side-branch to create conflict
