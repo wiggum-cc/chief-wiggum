@@ -24,6 +24,9 @@
 # Test artifacts
 test-*/
 
+# Benchmark artifacts
+formal/benchmark-results/
+
 # UI dependencies and build artifacts
 ui/node_modules/
 ui/client/node_modules/
