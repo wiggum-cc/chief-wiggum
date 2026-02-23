@@ -172,7 +172,7 @@ _get_system_prompt() {
 CODE PATTERN DISTILLER:
 
 You analyze codebases and extract architectural patterns into Intent DSL specifications
-using `distilled pattern` and `distilled constraint` constructs.
+using `distilled pattern`, `distilled constraint`, and `rationale` constructs.
 
 ## Three-Phase Methodology
 
@@ -181,7 +181,7 @@ using `distilled pattern` and `distilled constraint` constructs.
 
 2. **Behavioral Summarization** (iteration 1): For each significant component, read
    implementation code. Extract state machines, retry patterns, lifecycle flows, layering
-   rules. Write first draft of `reports/distilled.intent`.
+   rules, design decisions. Write first draft of `reports/distilled.intent`.
 
 3. **Tool-Validated Refinement** (iteration 2+): Run `intent lint reports/distilled.intent`,
    fix any errors, add missing patterns, refine confidence scores. Iterate until lint passes.
@@ -192,8 +192,8 @@ using `distilled pattern` and `distilled constraint` constructs.
 
 ```intent
 distilled pattern <Name> {
-    source: "<glob>"           // where the pattern was found
-    commit: "<hash>"           // commit at extraction time
+    source: "<glob>"           // where the pattern was found (required)
+    commit: "<hash>"           // commit at extraction time (required)
     extracted: "<date>"        // ISO date of extraction
     confidence: <0.0-1.0>     // extraction certainty
 
@@ -203,9 +203,14 @@ distilled pattern <Name> {
 
     parameters {
         <name>: <Type> { default: <value> }
+        // Types: Int, Nat, Float, String, Bool, Duration, Set(T), Seq(T)
     }
 
     behavior {
+        variables {
+            <name>: <Type> = <initial_value>
+        }
+
         states {
             <name> { initial: true }
             <name>
@@ -216,6 +221,25 @@ distilled pattern <Name> {
             <from> -> <to> on <event>
             <from> -> <to> on <event> where { <condition> }
             <from> -> <to> on <event> effect { <action> }
+            <from> -> <to> on <event> after { <duration> }
+            * -> <to> on <event>                           // wildcard source
+            [s1, s2] -> <to> on <event>                    // multi-source
+            <from> -> fork { s1, s2 } on <event>           // parallel fork
+            join { s1, s2 } -> <to> on <event>             // parallel join
+        }
+
+        // Effects execute simultaneously (not sequentially):
+        // variable = expr, emit Event(args), send Channel.Msg(args)
+
+        composes [BehaviorA, BehaviorB]    // composition
+
+        property <name> {
+            <temporal_expression>
+        }
+
+        fairness {
+            weak(<from> -> <to>)
+            strong(<from> -> <to>)
         }
     }
 
@@ -237,15 +261,48 @@ distilled constraint <Name> {
 
     constraint {
         // Predicates:
-        //   A.depends(B)      - A imports/uses B
-        //   A.references(B)   - A mentions type B
-        //   A.implements(T)   - A implements trait T
-        //   A.contains(B)     - A is parent of B
+        //   A.depends(B)              - A imports/uses B (direct)
+        //   A.depends_transitively(B) - A depends on B through a chain
+        //   A.references(B)           - A mentions type B (no import needed)
+        //   A.implements(T)           - A implements trait/interface T
+        //   A.contains(B)             - B is nested within A
         //
-        // Operators: ! (negation), && (conjunction), => (implication)
+        // Operators: ! (negation), && (and), || (or), => (implies), <=> (iff)
         // Quantifiers: forall x in S: P(x), exists x in S: P(x)
+        // Scopes: [A, B], all, { x | x matches *Glob }, A | B, A & B, A \ B
+        // Comparison: forall x in S: check x.field < value
         <predicate_expression>
+
+        // Optional suppression for known exceptions:
+        // !A.depends(B) allow {
+        //     exception: [LegacyA]
+        //     reason: "Migration in progress"
+        //     tracking: "TASK-123"
+        // }
     }
+}
+```
+
+### User-Defined Predicates
+
+```intent
+predicate isolated(source, target) {
+    !source.depends(target) && !source.references(target)
+}
+```
+
+### Rationale (captures observed design decisions)
+
+```intent
+rationale <Name> {
+    discovered: "<date>"
+    source: "<origin>"
+
+    observation { "<what was observed>" }
+    decided because { "<reason>" }
+    rejected { <alternative>: "<why rejected>" }
+    revisit when { "<condition>" }
+    traces_to { file: "<path>", commit: "<hash>" }
 }
 ```
 
@@ -253,6 +310,11 @@ distilled constraint <Name> {
 
 ```intent
 behavior <Name> {
+    variables {
+        retries: Nat = 0
+        pending: Set(Id) = {}
+    }
+
     states {
         pending   { initial: true }
         active
@@ -264,11 +326,26 @@ behavior <Name> {
         pending -> active      on start
         active -> completed    on finish     where { all_checks_pass }
         active -> failed       on error
-        active -> active       on retry      where { attempts < max_retries }
-                                             effect { attempts += 1 }
+        active -> active       on retry      where { retries < max_retries }
+                                             effect { retries = retries + 1 }
+        * -> failed            on fatal_error
+    }
+
+    property eventual_completion {
+        always(pending => eventually(completed | failed))
     }
 }
 ```
+
+### Temporal Operators
+
+- `always(P)` — P holds in every state (safety)
+- `eventually(P)` — P holds in some future state (liveness)
+- `next(P)` — P holds in the next state
+- `P until Q` — P holds until Q becomes true (strong)
+- `P releases Q` — Q holds until P becomes true (weak)
+- `P <=> Q` — biconditional
+- `count(state)` — cardinality (distributed systems)
 
 ### Constraint Predicates
 
@@ -279,6 +356,17 @@ constraint <name> {
     m.depends(cache) => m.depends(cache_invalidation)
     forall s in services: s.references([AppError])
     forall c in { x | x matches *Client }: storage.contains(c)
+    a.depends(b) <=> b.implements(Interface)
+}
+```
+
+### Non-Functional Constraints
+
+```intent
+constraint performance {
+    p99(settle) < 100ms
+    p95(validate) < 10ms
+    throughput(system) > 10_000 / s
 }
 ```
 
@@ -303,6 +391,10 @@ distilled pattern RetryWithBackoff {
     }
 
     behavior {
+        variables {
+            attempt: Nat = 0
+        }
+
         states {
             idle       { initial: true }
             attempting
@@ -315,10 +407,14 @@ distilled pattern RetryWithBackoff {
             idle -> attempting       on request
             attempting -> succeeded  on success
             attempting -> waiting    on transient_error  where { attempt < max_attempts }
-                                                        effect { attempt += 1 }
+                                                        effect { attempt = attempt + 1 }
             attempting -> failed     on transient_error  where { attempt >= max_attempts }
             attempting -> failed     on permanent_error
             waiting -> attempting    on backoff_elapsed
+        }
+
+        property eventual_resolution {
+            always(attempting => eventually(succeeded | failed))
         }
     }
 
@@ -344,6 +440,32 @@ distilled constraint ObservedLayering {
 }
 ```
 
+### Example 3: Design Decision
+
+```intent
+rationale EventDrivenLifecycle {
+    discovered: "2026-02-23"
+    source: "Code analysis"
+
+    observation {
+        "State machine loaded from JSON config rather than hardcoded transitions."
+    }
+
+    decided because {
+        "Decouples state machine definition from engine implementation."
+    }
+
+    rejected {
+        hardcoded_states: "Requires code changes for every new state."
+    }
+
+    traces_to {
+        file: "config/worker-lifecycle.json"
+        commit: "d4e5f6a"
+    }
+}
+```
+
 ## Confidence Calibration
 
 - **0.9+**: Pattern found in 5+ locations with consistent structure
@@ -363,6 +485,9 @@ certainty based on pattern frequency and consistency across the codebase.
 - Prefer fewer high-confidence patterns over many low-confidence ones
 - Each pattern/constraint needs a clear `observation` explaining what was found
 - Use `git rev-parse HEAD` for the commit hash
+- Declare variables explicitly with types in behavior blocks
+- Use temporal properties to express invariants patterns should satisfy
+- Use `rationale` for design decisions that aren't purely patterns or constraints
 SYSPROMPT_EOF
 
     echo ""
