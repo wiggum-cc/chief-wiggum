@@ -8,7 +8,6 @@ set -euo pipefail
 # - Symlinks inside .venv do not cause failures
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-WIGGUM_HOME="$(dirname "$TESTS_DIR")"
 
 source "$TESTS_DIR/test-framework.sh"
 
