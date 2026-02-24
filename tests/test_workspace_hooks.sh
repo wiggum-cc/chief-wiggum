@@ -105,6 +105,11 @@ setup() {
 }
 
 teardown() {
+    if [[ -n "${_WT_REPO_DIR:-}" && -d "${_WT_REPO_DIR:-}" ]]; then
+        git -C "$_WT_REPO_DIR" worktree remove "${_WT_WORKTREE_DIR:-}" --force 2>/dev/null || true
+    fi
+    _WT_REPO_DIR=""
+    _WT_WORKTREE_DIR=""
     if [ -n "$TEST_WORKSPACE" ] && [ -d "$TEST_WORKSPACE" ]; then
         [ -n "$TEST_WORKSPACE" ] && rm -rf "$TEST_WORKSPACE"
     fi
@@ -565,6 +570,108 @@ test_full_integration_claude_project_dir_only() {
 }
 
 # =============================================================================
+# Tests: Git Worktree Path Resolution
+# =============================================================================
+
+# Helper: create a real git repo + worktree, return paths via globals
+# Sets: _WT_REPO_DIR (original repo), _WT_WORKTREE_DIR (worktree workspace)
+_setup_worktree_env() {
+    mkdir -p "$TEST_WORKSPACE/original-repo" "$TEST_WORKSPACE/worker"
+    git -C "$TEST_WORKSPACE/original-repo" init -q
+    git -C "$TEST_WORKSPACE/original-repo" config user.email "test@test.com"
+    git -C "$TEST_WORKSPACE/original-repo" config user.name "Test"
+    echo "init" > "$TEST_WORKSPACE/original-repo/file.txt"
+    mkdir -p "$TEST_WORKSPACE/original-repo/src"
+    echo "code" > "$TEST_WORKSPACE/original-repo/src/main.ts"
+    git -C "$TEST_WORKSPACE/original-repo" add .
+    git -C "$TEST_WORKSPACE/original-repo" commit -q -m "initial"
+    git -C "$TEST_WORKSPACE/original-repo" worktree add --detach \
+        "$TEST_WORKSPACE/worker/workspace" HEAD 2>/dev/null
+
+    # Resolve symlinks (macOS: /tmp -> /private/tmp) so paths match
+    # realpath output used by the hook for boundary checks
+    _WT_REPO_DIR=$(realpath "$TEST_WORKSPACE/original-repo")
+    _WT_WORKTREE_DIR=$(realpath "$TEST_WORKSPACE/worker/workspace")
+}
+
+_teardown_worktree_env() {
+    if [[ -n "${_WT_REPO_DIR:-}" && -d "${_WT_REPO_DIR:-}" ]]; then
+        git -C "$_WT_REPO_DIR" worktree remove "$_WT_WORKTREE_DIR" --force 2>/dev/null || true
+    fi
+}
+
+test_worktree_glob_allows_original_repo_path() {
+    _setup_worktree_env
+
+    local json
+    json=$(jq -n --arg path "$_WT_REPO_DIR" \
+        '{"tool":"Glob","tool_input":{"pattern":"**/*.ts","path":$path}}')
+
+    local rc=0
+    run_validate_hook "$json" "$_WT_WORKTREE_DIR" "" || rc=$?
+    assert_equals "0" "$rc" "Glob on original repo path should be allowed from worktree"
+
+    _teardown_worktree_env
+}
+
+test_worktree_read_allows_original_repo_file() {
+    _setup_worktree_env
+
+    local json
+    json=$(tool_json "Read" "$_WT_REPO_DIR/src/main.ts")
+
+    local rc=0
+    run_validate_hook "$json" "$_WT_WORKTREE_DIR" "" || rc=$?
+    assert_equals "0" "$rc" "Read file in original repo should be allowed from worktree"
+
+    _teardown_worktree_env
+}
+
+test_worktree_write_allows_original_repo_path() {
+    _setup_worktree_env
+
+    local json
+    json=$(tool_json "Write" "$_WT_REPO_DIR/src/new.ts")
+
+    local rc=0
+    run_validate_hook "$json" "$_WT_WORKTREE_DIR" "" || rc=$?
+    assert_equals "0" "$rc" "Write to original repo path should be allowed from worktree"
+
+    _teardown_worktree_env
+}
+
+test_worktree_still_blocks_unrelated_paths() {
+    _setup_worktree_env
+
+    local json
+    json=$(tool_json "Read" "/etc/passwd")
+
+    local rc=0
+    run_validate_hook "$json" "$_WT_WORKTREE_DIR" "" || rc=$?
+    assert_equals "2" "$rc" "Unrelated paths should still be blocked from worktree"
+
+    _teardown_worktree_env
+}
+
+test_non_worktree_blocks_external_repo_path() {
+    # Regular workspace (not a worktree) should NOT allow external repo paths
+    local external_repo
+    external_repo=$(mktemp -d)
+
+    local resolved_ws
+    resolved_ws=$(realpath "$TEST_WORKSPACE")
+
+    local json
+    json=$(tool_json "Read" "$external_repo/file.txt")
+
+    local rc=0
+    run_validate_hook "$json" "$resolved_ws" "" || rc=$?
+
+    [ -n "$external_repo" ] && rm -rf "$external_repo"
+    assert_equals "2" "$rc" "Non-worktree workspace should block external paths"
+}
+
+# =============================================================================
 # Run Tests
 # =============================================================================
 
@@ -617,6 +724,13 @@ run_test test_hook_allows_grep_inside_workspace
 # Full integration
 run_test test_full_integration_setup_then_enforce
 run_test test_full_integration_claude_project_dir_only
+
+# Git worktree path resolution
+run_test test_worktree_glob_allows_original_repo_path
+run_test test_worktree_read_allows_original_repo_file
+run_test test_worktree_write_allows_original_repo_path
+run_test test_worktree_still_blocks_unrelated_paths
+run_test test_non_worktree_blocks_external_repo_path
 
 # Summary
 print_test_summary

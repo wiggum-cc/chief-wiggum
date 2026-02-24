@@ -86,6 +86,19 @@ elif [[ -n "$workspace_abs" ]]; then
     ralph_dir_abs=$(realpath "$workspace/../../.." 2>/dev/null)
 fi
 
+# Detect worktree -> resolve original repo as additional allowed path.
+# Git worktrees have a .git *file* (not directory) pointing back to the
+# main repo. Claude Code follows this reference and resolves its project
+# root to the original repo, causing tool paths to point there instead of
+# the worktree. We allow those paths so agents are not blocked.
+original_repo_abs=""
+if [[ -f "$workspace/.git" ]]; then
+    original_repo_abs=$(git -C "$workspace" rev-parse --show-superproject-working-tree 2>/dev/null)
+    if [[ -z "$original_repo_abs" ]]; then
+        original_repo_abs=$(git -C "$workspace" rev-parse --path-format=absolute --git-common-dir 2>/dev/null | sed 's|/\.git.*$||')
+    fi
+fi
+
 # Helper function to check if path is in blocked worker_dir locations
 # Returns 0 if blocked, 1 if allowed
 #
@@ -163,6 +176,11 @@ validate_path() {
 
     # 1. workspace (worker_dir/workspace) - always allowed
     if [[ "$abs_path" == "$workspace_abs"* ]]; then
+        return 0
+    fi
+
+    # 1b. original repo (when workspace is a worktree) - allowed
+    if [[ -n "$original_repo_abs" && "$abs_path" == "$original_repo_abs"* ]]; then
         return 0
     fi
 

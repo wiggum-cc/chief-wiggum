@@ -47,11 +47,16 @@ runtime_backend_init() {
 # =============================================================================
 
 # Invoke Claude CLI with auth token scoped only to that process
+#
+# Sets CLAUDE_PROJECT_DIR to PWD when not already set, ensuring Claude
+# uses the worktree directory (not the original repo) as its project root.
+# run_agent_once() does cd "$workspace" before calling this, so PWD is correct.
 runtime_backend_invoke() {
+    local _project_dir="${CLAUDE_PROJECT_DIR:-$PWD}"
     if [ -n "${_WIGGUM_AUTH_TOKEN:-}" ]; then
-        ANTHROPIC_AUTH_TOKEN="$_WIGGUM_AUTH_TOKEN" "$CLAUDE" "$@"
+        ANTHROPIC_AUTH_TOKEN="$_WIGGUM_AUTH_TOKEN" CLAUDE_PROJECT_DIR="$_project_dir" "$CLAUDE" "$@"
     else
-        "$CLAUDE" "$@"
+        CLAUDE_PROJECT_DIR="$_project_dir" "$CLAUDE" "$@"
     fi
 }
 
