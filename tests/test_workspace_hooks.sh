@@ -654,12 +654,16 @@ test_worktree_still_blocks_unrelated_paths() {
 }
 
 test_non_worktree_blocks_external_repo_path() {
-    # Regular workspace (not a worktree) should NOT allow external repo paths
+    # Regular workspace (not a worktree) should NOT allow external repo paths.
+    # Use a nested workspace structure matching real layout so the inferred
+    # worker_dir_abs is specific (not /tmp which would match everything).
     local external_repo
     external_repo=$(mktemp -d)
 
+    local nested_ws="$TEST_WORKSPACE/ralph/workers/worker-TEST/workspace"
+    mkdir -p "$nested_ws"
     local resolved_ws
-    resolved_ws=$(realpath "$TEST_WORKSPACE")
+    resolved_ws=$(realpath "$nested_ws")
 
     local json
     json=$(tool_json "Read" "$external_repo/file.txt")
