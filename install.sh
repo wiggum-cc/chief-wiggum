@@ -14,7 +14,7 @@ check_dependencies() {
     local core_bins=(jq git gh curl claude)
 
     # Standard POSIX utilities
-    local posix_bins=(grep cat date sed rm head find awk basename sort mkdir kill cut ls tail sleep mv xargs tr wc tee ps dirname tac stat)
+    local posix_bins=(grep cat date sed rm head find awk basename sort mkdir kill cut ls tail sleep mv xargs tr wc tee ps dirname tac stat rsync)
 
     # UUID generation
     local uuid_bins=(uuidgen)
@@ -78,13 +78,18 @@ ensure_uv() {
     echo "uv installed successfully"
 }
 
-# Run uv sync in tui directory
-setup_tui() {
-    local tui_dir="$1/tui"
-    if [[ -d "$tui_dir" ]] && [[ -f "$tui_dir/pyproject.toml" ]]; then
-        echo "Setting up TUI Python environment..."
-        (cd "$tui_dir" && uv sync)
-        echo "TUI environment ready"
+# Run uv sync in a Python project directory
+#
+# Args:
+#   dir  - Path to directory containing pyproject.toml
+#   name - Display name for log messages
+setup_python_env() {
+    local dir="$1"
+    local name="$2"
+    if [[ -d "$dir" ]] && [[ -f "$dir/pyproject.toml" ]]; then
+        echo "Setting up $name Python environment..."
+        (cd "$dir" && uv sync)
+        echo "$name environment ready"
     fi
 }
 
@@ -97,21 +102,28 @@ ensure_uv
 # Create target directory
 mkdir -p "$TARGET"
 
-# Copy files
+# Copy files (excluding generated artifacts that are not portable)
 echo "Copying files..."
-cp -r "$SCRIPT_DIR/bin" "$TARGET/"
-cp -r "$SCRIPT_DIR/lib" "$TARGET/"
-cp -r "$SCRIPT_DIR/hooks" "$TARGET/"
-cp -r "$SCRIPT_DIR/skills" "$TARGET/"
-cp -r "$SCRIPT_DIR/config" "$TARGET/"
-cp -r "$SCRIPT_DIR/tui" "$TARGET/"
+rsync -a \
+    --exclude '.venv' \
+    --exclude '__pycache__' \
+    --exclude '*.egg-info' \
+    --exclude '.pytest_cache' \
+    "$SCRIPT_DIR/bin" \
+    "$SCRIPT_DIR/lib" \
+    "$SCRIPT_DIR/hooks" \
+    "$SCRIPT_DIR/skills" \
+    "$SCRIPT_DIR/config" \
+    "$SCRIPT_DIR/tui" \
+    "$TARGET/"
 
 # Make scripts executable
 chmod +x "$TARGET/bin/"*
 chmod +x "$TARGET/hooks/callbacks/"*
 
-# Setup TUI Python environment
-setup_tui "$TARGET"
+# Setup Python environments
+setup_python_env "$TARGET/tui" "TUI"
+setup_python_env "$TARGET/lib/orchestrator-py" "Orchestrator"
 
 echo ""
 echo "✓ Installed to $TARGET"
