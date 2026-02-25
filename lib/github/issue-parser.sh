@@ -208,13 +208,13 @@ github_issue_parse_body_json() {
     local description="" priority="" complexity="" dependencies=""
     local scope="" out_of_scope="" acceptance_criteria=""
 
-    [ -f "$tmp_dir/description" ] && description=$(sed '/./,$!d' "$tmp_dir/description" | sed -e :a -e '/^[[:space:]]*$/{ $d; N; ba; }')
+    [ -f "$tmp_dir/description" ] && description=$(sed '/./,$!d' "$tmp_dir/description" | sed -e ':a' -e '/^[[:space:]]*$/{' -e '$d' -e 'N' -e 'ba' -e '}')
     [ -f "$tmp_dir/priority" ] && priority=$(cat "$tmp_dir/priority")
     [ -f "$tmp_dir/complexity" ] && complexity=$(cat "$tmp_dir/complexity")
     [ -f "$tmp_dir/dependencies" ] && dependencies=$(cat "$tmp_dir/dependencies")
-    [ -f "$tmp_dir/scope" ] && scope=$(sed '/./,$!d' "$tmp_dir/scope" | sed -e :a -e '/^[[:space:]]*$/{ $d; N; ba; }')
-    [ -f "$tmp_dir/out_of_scope" ] && out_of_scope=$(sed '/./,$!d' "$tmp_dir/out_of_scope" | sed -e :a -e '/^[[:space:]]*$/{ $d; N; ba; }')
-    [ -f "$tmp_dir/acceptance_criteria" ] && acceptance_criteria=$(sed '/./,$!d' "$tmp_dir/acceptance_criteria" | sed -e :a -e '/^[[:space:]]*$/{ $d; N; ba; }')
+    [ -f "$tmp_dir/scope" ] && scope=$(sed '/./,$!d' "$tmp_dir/scope" | sed -e ':a' -e '/^[[:space:]]*$/{' -e '$d' -e 'N' -e 'ba' -e '}')
+    [ -f "$tmp_dir/out_of_scope" ] && out_of_scope=$(sed '/./,$!d' "$tmp_dir/out_of_scope" | sed -e ':a' -e '/^[[:space:]]*$/{' -e '$d' -e 'N' -e 'ba' -e '}')
+    [ -f "$tmp_dir/acceptance_criteria" ] && acceptance_criteria=$(sed '/./,$!d' "$tmp_dir/acceptance_criteria" | sed -e ':a' -e '/^[[:space:]]*$/{' -e '$d' -e 'N' -e 'ba' -e '}')
 
     safe_path "$tmp_dir" "tmp_dir" || return 1
     rm -rf "$tmp_dir"
