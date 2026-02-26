@@ -947,13 +947,21 @@ orch_github_issue_sync() {
         return 1
     fi
 
+    source "$WIGGUM_HOME/lib/github/gh-api.sh"
     source "$WIGGUM_HOME/lib/github/issue-sync.sh"
+
+    # Preflight: check GitHub API rate limit before running sync
+    gh_rate_limit_guard || log_debug "GitHub issue sync: resumed after rate limit wait"
 
     local sync_exit=0
     github_issue_sync "$ralph_dir" "false" || sync_exit=$?
 
     if [ "$sync_exit" -ne 0 ]; then
-        # Network errors: skip cycle gracefully (return 0 so service continues)
+        # Rate limit or network errors: skip cycle gracefully (return 0 so service continues)
+        if [ "${GH_LAST_WAS_RATE_LIMIT:-false}" = true ]; then
+            log_debug "GitHub issue sync: skipping cycle due to rate limit"
+            return 0
+        fi
         if [ "${GH_LAST_WAS_NETWORK_ERROR:-false}" = true ]; then
             log_debug "GitHub issue sync: skipping cycle due to network error"
             return 0
@@ -989,12 +997,20 @@ orch_github_plan_sync() {
         return 1
     fi
 
+    source "$WIGGUM_HOME/lib/github/gh-api.sh"
     source "$WIGGUM_HOME/lib/github/plan-sync.sh"
+
+    # Preflight: check GitHub API rate limit before running sync
+    gh_rate_limit_guard || log_debug "GitHub plan sync: resumed after rate limit wait"
 
     local sync_exit=0
     github_plan_sync "$ralph_dir" "" "false" "" || sync_exit=$?
 
     if [ "$sync_exit" -ne 0 ]; then
+        # Rate limit or network errors: skip cycle gracefully
+        if [ "${GH_LAST_WAS_RATE_LIMIT:-false}" = true ]; then
+            return 0
+        fi
         # Network errors are already logged with "will retry later" message
         # Don't log additional warnings for them
         if [ "${GH_LAST_WAS_NETWORK_ERROR:-false}" != true ]; then

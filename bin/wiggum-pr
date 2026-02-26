@@ -290,6 +290,10 @@ cmd_global_sync() {
     # Clear tasks needing fix list
     : > "$tasks_needing_fix"
 
+    # Preflight: check GitHub API rate limit before running sync
+    source "$WIGGUM_HOME/lib/github/gh-api.sh"
+    gh_rate_limit_guard || log_debug "PR sync: resumed after rate limit wait"
+
     # Get all task/* PRs (both open and merged)
     log "Syncing PRs..."
     local all_prs gh_exit=0 gh_output

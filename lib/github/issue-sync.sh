@@ -41,6 +41,7 @@ _github_fetch_open_issues() {
     local label_filter="$1"
 
     GH_LAST_WAS_NETWORK_ERROR=false
+    GH_LAST_WAS_RATE_LIMIT=false
     local result exit_code=0
     result=$(timeout "${WIGGUM_GH_TIMEOUT:-30}" gh issue list \
         --label "$label_filter" \
@@ -50,7 +51,11 @@ _github_fetch_open_issues() {
         2>&1) || exit_code=$?
 
     if [ "$exit_code" -ne 0 ]; then
-        if gh_is_network_error "$exit_code" "$result"; then
+        if gh_is_rate_limit_error "$exit_code" "$result"; then
+            GH_LAST_WAS_RATE_LIMIT=true
+            GH_LAST_WAS_NETWORK_ERROR=true
+            log_error "$(gh_format_error "$exit_code" "$result" "fetching open issues")"
+        elif gh_is_network_error "$exit_code" "$result"; then
             GH_LAST_WAS_NETWORK_ERROR=true
             log_error "$(gh_format_error "$exit_code" "$result" "fetching open issues")"
         elif [ "$exit_code" -eq 124 ]; then
@@ -77,6 +82,7 @@ _github_fetch_closed_issues() {
     local label_filter="$1"
 
     GH_LAST_WAS_NETWORK_ERROR=false
+    GH_LAST_WAS_RATE_LIMIT=false
     local result exit_code=0
     result=$(timeout "${WIGGUM_GH_TIMEOUT:-30}" gh issue list \
         --label "$label_filter" \
@@ -86,7 +92,11 @@ _github_fetch_closed_issues() {
         2>&1) || exit_code=$?
 
     if [ "$exit_code" -ne 0 ]; then
-        if gh_is_network_error "$exit_code" "$result"; then
+        if gh_is_rate_limit_error "$exit_code" "$result"; then
+            GH_LAST_WAS_RATE_LIMIT=true
+            GH_LAST_WAS_NETWORK_ERROR=true
+            log_error "$(gh_format_error "$exit_code" "$result" "fetching closed issues")"
+        elif gh_is_network_error "$exit_code" "$result"; then
             GH_LAST_WAS_NETWORK_ERROR=true
             log_error "$(gh_format_error "$exit_code" "$result" "fetching closed issues")"
         elif [ "$exit_code" -eq 124 ]; then

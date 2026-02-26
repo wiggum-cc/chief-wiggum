@@ -154,8 +154,8 @@
       "order": 5,
       "schedule": {
         "type": "interval",
-        "interval": 120,
-        "jitter": 15,
+        "interval": 300,
+        "jitter": 30,
         "run_on_startup": true
       },
       "execution": {
@@ -179,8 +179,8 @@
       "order": 6,
       "schedule": {
         "type": "interval",
-        "interval": 120,
-        "jitter": 15,
+        "interval": 300,
+        "jitter": 30,
         "run_on_startup": true
       },
       "execution": {
@@ -204,7 +204,8 @@
       "order": 10,
       "schedule": {
         "type": "interval",
-        "interval": 120,
+        "interval": 300,
+        "jitter": 30,
         "run_on_startup": true
       },
       "execution": {

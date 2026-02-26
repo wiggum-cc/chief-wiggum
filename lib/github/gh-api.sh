@@ -18,6 +18,96 @@ source "$WIGGUM_HOME/lib/core/gh-error.sh"
 WIGGUM_GH_TIMEOUT="${WIGGUM_GH_TIMEOUT:-30}"
 WIGGUM_GH_RETRIES="${WIGGUM_GH_RETRIES:-2}"
 WIGGUM_GH_RETRY_DELAY="${WIGGUM_GH_RETRY_DELAY:-2}"
+# Rate limit minimum: env var > config.json > default
+if [ -z "${WIGGUM_GH_RATE_LIMIT_MIN:-}" ]; then
+    WIGGUM_GH_RATE_LIMIT_MIN=$(jq -r '.github.rate_limit.min_remaining // empty' "${WIGGUM_HOME}/config/config.json" 2>/dev/null) || true
+fi
+WIGGUM_GH_RATE_LIMIT_MIN="${WIGGUM_GH_RATE_LIMIT_MIN:-100}"
+
+# Check GitHub API rate limit and wait if remaining is below threshold
+#
+# Queries the GitHub rate_limit API and pauses execution if remaining
+# requests are below the configured minimum. Waits until the reset time.
+#
+# Args:
+#   min_remaining - Override minimum remaining threshold (optional)
+#
+# Returns:
+#   0 if OK to proceed (rate limit sufficient or check failed gracefully)
+#   1 if rate limited and waited for reset
+gh_rate_limit_guard() {
+    local min_remaining="${1:-$WIGGUM_GH_RATE_LIMIT_MIN}"
+
+    local rate_json exit_code=0
+    rate_json=$(timeout 10 gh api rate_limit 2>/dev/null) || exit_code=$?
+
+    if [ "$exit_code" -ne 0 ]; then
+        log_debug "gh_rate_limit_guard: Could not check rate limit (exit $exit_code)"
+        return 0  # Proceed if we can't check
+    fi
+
+    local remaining reset_at
+    remaining=$(echo "$rate_json" | jq '.resources.core.remaining // -1' 2>/dev/null)
+    remaining="${remaining:--1}"
+    reset_at=$(echo "$rate_json" | jq '.resources.core.reset // 0' 2>/dev/null)
+    reset_at="${reset_at:-0}"
+
+    if [ "$remaining" -ge 0 ] && [ "$remaining" -lt "$min_remaining" ]; then
+        local now wait_seconds
+        now=$(date +%s)
+        wait_seconds=$(( reset_at - now + 5 ))  # +5s buffer
+
+        if [ "$wait_seconds" -gt 0 ] && [ "$wait_seconds" -lt 3700 ]; then
+            log_warn "GitHub API rate limit low ($remaining remaining, min=$min_remaining). Waiting ${wait_seconds}s for reset."
+            sleep "$wait_seconds"
+        elif [ "$wait_seconds" -le 0 ]; then
+            log_debug "gh_rate_limit_guard: Rate limit low but reset imminent"
+        else
+            log_warn "GitHub API rate limit low ($remaining remaining) but reset too far away (${wait_seconds}s). Proceeding anyway."
+            return 0
+        fi
+        return 1
+    fi
+
+    log_debug "gh_rate_limit_guard: OK ($remaining remaining)"
+    return 0
+}
+
+# Get rate limit wait time from an API error response
+#
+# Extracts Retry-After or calculates wait from X-RateLimit-Reset if present.
+# Falls back to a default wait time.
+#
+# Args:
+#   output - Error output from gh command
+#
+# Returns: Wait seconds on stdout
+_gh_rate_limit_wait_seconds() {
+    local output="${1:-}"
+
+    # Try to extract reset time from gh api rate_limit
+    local rate_json exit_code=0
+    rate_json=$(timeout 10 gh api rate_limit 2>/dev/null) || exit_code=$?
+
+    if [ "$exit_code" -eq 0 ]; then
+        local reset_at
+        reset_at=$(echo "$rate_json" | jq '.resources.core.reset // 0' 2>/dev/null)
+        reset_at="${reset_at:-0}"
+
+        if [ "$reset_at" -gt 0 ]; then
+            local now wait
+            now=$(date +%s)
+            wait=$(( reset_at - now + 5 ))
+            if [ "$wait" -gt 0 ] && [ "$wait" -lt 3700 ]; then
+                echo "$wait"
+                return
+            fi
+        fi
+    fi
+
+    # Default: wait 60 seconds
+    echo "60"
+}
 
 # Execute gh api with timeout, retry, and error handling
 #
@@ -48,7 +138,23 @@ gh_api() {
             return 0
         fi
 
-        # Check if retryable
+        # Rate limit: wait for reset then retry once
+        if gh_is_rate_limit_error "$exit_code" "$result"; then
+            local wait_secs
+            wait_secs=$(_gh_rate_limit_wait_seconds "$result")
+            log_warn "gh_api: Rate limited on $endpoint, waiting ${wait_secs}s for reset"
+            sleep "$wait_secs"
+            # Single retry after rate limit wait
+            exit_code=0
+            result=$(timeout "$timeout" gh api "$endpoint" -X "$method" --jq "$jq_filter" 2>&1) || exit_code=$?
+            if [ "$exit_code" -eq 0 ]; then
+                echo "$result"
+                return 0
+            fi
+            break
+        fi
+
+        # Check if retryable (network errors)
         if gh_is_network_error "$exit_code" "$result"; then
             ((++attempt))
             if [ "$attempt" -le "$max_retries" ]; then
@@ -66,6 +172,8 @@ gh_api() {
     # Log failure
     if [ "$exit_code" -eq 124 ]; then
         log_error "gh_api: Timeout after ${timeout}s: $endpoint"
+    elif gh_is_rate_limit_error "$exit_code" "${result:-}"; then
+        log_error "gh_api: Rate limited: $endpoint (waited but still throttled)"
     else
         log_error "gh_api: Failed (exit $exit_code): $endpoint"
         [ -n "${result:-}" ] && log_debug "gh_api: Response: $result"
@@ -156,6 +264,22 @@ gh_pr_list() {
             return 0
         fi
 
+        # Rate limit: wait for reset then retry once
+        if gh_is_rate_limit_error "$exit_code" "$result"; then
+            local wait_secs
+            wait_secs=$(_gh_rate_limit_wait_seconds "$result")
+            log_warn "gh_pr_list: Rate limited, waiting ${wait_secs}s for reset"
+            sleep "$wait_secs"
+            exit_code=0
+            # shellcheck disable=SC2086
+            result=$(timeout "$timeout" gh pr list --search "$search_query" --json "$json_fields" --state "$state" $extra_args 2>&1) || exit_code=$?
+            if [ "$exit_code" -eq 0 ]; then
+                echo "$result"
+                return 0
+            fi
+            break
+        fi
+
         if gh_is_network_error "$exit_code" "$result"; then
             ((++attempt))
             if [ "$attempt" -le "$max_retries" ]; then
@@ -170,6 +294,8 @@ gh_pr_list() {
 
     if [ "$exit_code" -eq 124 ]; then
         log_error "gh_pr_list: Timeout after ${timeout}s: $search_query"
+    elif gh_is_rate_limit_error "$exit_code" "${result:-}"; then
+        log_error "gh_pr_list: Rate limited: $search_query (waited but still throttled)"
     else
         log_error "gh_pr_list: Failed (exit $exit_code): $search_query"
         [ -n "${result:-}" ] && log_debug "gh_pr_list: Response: $result"
@@ -216,6 +342,25 @@ gh_graphql() {
             return 0
         fi
 
+        # Rate limit: wait for reset then retry once
+        if gh_is_rate_limit_error "$exit_code" "$result"; then
+            local wait_secs
+            wait_secs=$(_gh_rate_limit_wait_seconds "$result")
+            log_warn "gh_graphql: Rate limited, waiting ${wait_secs}s for reset"
+            sleep "$wait_secs"
+            exit_code=0
+            if [ ${#var_args[@]} -gt 0 ]; then
+                result=$(timeout "$timeout" gh api graphql -f query="$query" "${var_args[@]}" 2>&1) || exit_code=$?
+            else
+                result=$(timeout "$timeout" gh api graphql -f query="$query" 2>&1) || exit_code=$?
+            fi
+            if [ "$exit_code" -eq 0 ]; then
+                echo "$result"
+                return 0
+            fi
+            break
+        fi
+
         if gh_is_network_error "$exit_code" "$result"; then
             ((++attempt))
             if [ "$attempt" -le "$max_retries" ]; then
@@ -226,7 +371,11 @@ gh_graphql() {
         break
     done
 
-    log_error "gh_graphql: Failed (exit $exit_code)"
+    if gh_is_rate_limit_error "$exit_code" "${result:-}"; then
+        log_error "gh_graphql: Rate limited (waited but still throttled)"
+    else
+        log_error "gh_graphql: Failed (exit $exit_code)"
+    fi
     [ -n "${result:-}" ] && log_debug "gh_graphql: Response: $result"
 
     echo "{}"
