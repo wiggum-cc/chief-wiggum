@@ -36,7 +36,8 @@ source "$WIGGUM_HOME/lib/utils/activity-log.sh"
 #   label_filter - Required label name
 #
 # Returns: JSON array on stdout, "[]" on failure
-# Sets: GH_LAST_WAS_NETWORK_ERROR if network error detected
+# Sets: GH_LAST_WAS_NETWORK_ERROR, GH_LAST_WAS_RATE_LIMIT
+# shellcheck disable=SC2034  # GH_LAST_WAS_RATE_LIMIT used by callers
 _github_fetch_open_issues() {
     local label_filter="$1"
 
@@ -77,7 +78,8 @@ _github_fetch_open_issues() {
 #   label_filter - Required label name
 #
 # Returns: JSON array on stdout, "[]" on failure
-# Sets: GH_LAST_WAS_NETWORK_ERROR if network error detected
+# Sets: GH_LAST_WAS_NETWORK_ERROR, GH_LAST_WAS_RATE_LIMIT
+# shellcheck disable=SC2034  # GH_LAST_WAS_RATE_LIMIT used by callers
 _github_fetch_closed_issues() {
     local label_filter="$1"
 
