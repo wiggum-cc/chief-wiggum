@@ -216,17 +216,27 @@ _resume_decide_for_worker() {
                 fi
             fi
 
-            # Mark task [P] via lifecycle engine
+            # Re-read pr_url after creation attempt
+            [ -f "$worker_dir/pr_url.txt" ] && pr_url=$(cat "$worker_dir/pr_url.txt" 2>/dev/null)
+
+            # Only mark [P] if PR exists or workspace is available; otherwise mark failed
             lifecycle_is_loaded || lifecycle_load
-            if ! emit_event "$worker_dir" "task.pending_approval" "orch-resume-decide.COMPLETE"; then
-                # Fallback for backward compatibility (lifecycle engine handles sync_github effect)
-                update_kanban_pending_approval "$RALPH_DIR/kanban.md" "$task_id" || true
+            if [ -n "$pr_url" ] || [ -d "$worker_dir/workspace" ]; then
+                if ! emit_event "$worker_dir" "task.pending_approval" "orch-resume-decide.COMPLETE"; then
+                    update_kanban_pending_approval "$RALPH_DIR/kanban.md" "$task_id" || true
+                fi
+                resume_state_set_terminal "$worker_dir" "Work complete, task marked [P]"
+                log "Task $task_id finalized as COMPLETE by resume-decide"
+            else
+                emit_event "$worker_dir" "worker.failure" "orch-resume-decide.COMPLETE.no_pr" || {
+                    update_kanban_failed "$RALPH_DIR/kanban.md" "$task_id" || true
+                }
+                resume_state_set_terminal "$worker_dir" "COMPLETE but no PR and no workspace — marked [*]"
+                log_error "Task $task_id COMPLETE decision but no PR or workspace — marking failed"
             fi
-            resume_state_set_terminal "$worker_dir" "Work complete, task marked [P]"
 
             # Remove decision file so it doesn't enter unified queue
             rm -f "$worker_dir/resume-decision.json"
-            log "Task $task_id finalized as COMPLETE by resume-decide"
             activity_log "worker.resume_complete" "$worker_id" "$task_id"
             scheduler_mark_event
             ;;

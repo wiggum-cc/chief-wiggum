@@ -7,6 +7,13 @@
  * chains collapse into a single transition. merge_conflict is modeled
  * as a real state since it persists until a conflict.* event fires.
  *
+ * PR EXISTENCE MODELING:
+ * Models PR creation as a nondeterministic action to catch bugs where
+ * kanban is marked [P] (pending approval) without a PR existing.
+ * The TaskPendingApproval and WorkerCompletion actions require prExists=TRUE.
+ * PR creation failure leaves the worker in needs_merge (no PR, can retry)
+ * or transitions to failed via WorkerFailure.
+ *
  * EFFECT-STATE MODELING (Quick Win #1):
  * Models side effects as explicit state variables to catch partial-effect
  * and crash-recovery bugs:
@@ -61,10 +68,13 @@ VARIABLES
     \* @type: Bool;
     hasConflict,           \* TRUE if merge would conflict (rebase cannot succeed)
     \* @type: Bool;
-    hasComments            \* TRUE if PR has new unaddressed comments
+    hasComments,           \* TRUE if PR has new unaddressed comments
+    \* === PR STATE ===
+    \* @type: Bool;
+    prExists               \* TRUE if a GitHub PR has been successfully created
 
-\* @type: <<Str, Int, Int, Str, Bool, Str, Str, Bool, Bool, Bool, Bool>>;
-vars == <<state, mergeAttempts, recoveryAttempts, kanban, inConflictQueue, worktreeState, lastError, githubSynced, baseMoved, hasConflict, hasComments>>
+\* @type: <<Str, Int, Int, Str, Bool, Str, Str, Bool, Bool, Bool, Bool, Bool>>;
+vars == <<state, mergeAttempts, recoveryAttempts, kanban, inConflictQueue, worktreeState, lastError, githubSynced, baseMoved, hasConflict, hasComments, prExists>>
 
 \* =========================================================================
 \* Type and state definitions
@@ -102,6 +112,7 @@ Init ==
     /\ baseMoved = FALSE
     /\ hasConflict = FALSE
     /\ hasComments = FALSE
+    /\ prExists = FALSE
 
 \* Apalache constant initialization (replaces .cfg)
 CInit ==
@@ -109,7 +120,7 @@ CInit ==
     /\ MAX_RECOVERY_ATTEMPTS = 2
 
 \* Helper: unchanged environment variables
-EnvVarsUnchanged == UNCHANGED <<baseMoved, hasConflict, hasComments>>
+EnvVarsUnchanged == UNCHANGED <<baseMoved, hasConflict, hasComments, prExists>>
 
 \* Helper: unchanged effect-state variables
 EffectVarsUnchanged == UNCHANGED <<inConflictQueue, worktreeState, lastError, githubSynced>>
@@ -318,7 +329,7 @@ MergeOutOfDateRebaseOk ==
     /\ hasConflict = FALSE
     /\ state' = "needs_merge"
     /\ baseMoved' = FALSE  \* rebase brings us up to date
-    /\ UNCHANGED <<mergeAttempts, recoveryAttempts, kanban, hasConflict, hasComments>>
+    /\ UNCHANGED <<mergeAttempts, recoveryAttempts, kanban, hasConflict, hasComments, prExists>>
     /\ EffectVarsUnchanged
 
 \* merge.out_of_date: merging -> failed (fallback: rebase failed due to conflict)
@@ -1012,12 +1023,39 @@ TaskReclaim ==
 
 \* task.pending_approval: * -> null, kanban "P"
 \* Effect: sync_github. Marks task as awaiting approval.
+\* Guard: prExists — only mark pending approval when a PR actually exists.
+\* Without this guard, PR creation failure would leave kanban="P" with no PR,
+\* an unrecoverable state (the bug fixed by this model extension).
 TaskPendingApproval ==
     /\ state \notin {"none", "merged"}
+    /\ prExists = TRUE
     /\ kanban' = "P"
     /\ githubSynced' = TRUE
     /\ UNCHANGED <<state, mergeAttempts, recoveryAttempts, inConflictQueue,
                    worktreeState, lastError>>
+    /\ EnvVarsUnchanged
+
+\* worker.completion: * -> null, kanban "P" (same as task.pending_approval)
+\* Models task-worker.sh COMPLETE path which guards on pr_url existence.
+\* Effect: sync_github.
+WorkerCompletion ==
+    /\ state \notin {"none", "merged"}
+    /\ prExists = TRUE
+    /\ kanban' = "P"
+    /\ githubSynced' = TRUE
+    /\ UNCHANGED <<state, mergeAttempts, recoveryAttempts, inConflictQueue,
+                   worktreeState, lastError>>
+    /\ EnvVarsUnchanged
+
+\* worker.failure: * -> failed, kanban "*"
+\* Models PR creation failure or other unrecoverable worker errors.
+\* Effects: sync_github, check_permanent.
+WorkerFailure ==
+    /\ state \notin {"merged"}
+    /\ state' = "failed"
+    /\ kanban' = KanbanAfterCheckPermanent(kanban)
+    /\ githubSynced' = TRUE
+    /\ UNCHANGED <<mergeAttempts, recoveryAttempts, inConflictQueue, worktreeState, lastError>>
     /\ EnvVarsUnchanged
 
 \* =========================================================================
@@ -1110,35 +1148,52 @@ EnvBaseMoved ==
     /\ baseMoved = FALSE
     /\ baseMoved' = TRUE
     /\ UNCHANGED <<state, mergeAttempts, recoveryAttempts, kanban, inConflictQueue,
-                   worktreeState, lastError, githubSynced, hasConflict, hasComments>>
+                   worktreeState, lastError, githubSynced, hasConflict, hasComments, prExists>>
 
 \* A conflict appears (e.g., concurrent changes to same files)
 EnvConflictAppears ==
     /\ hasConflict = FALSE
     /\ hasConflict' = TRUE
     /\ UNCHANGED <<state, mergeAttempts, recoveryAttempts, kanban, inConflictQueue,
-                   worktreeState, lastError, githubSynced, baseMoved, hasComments>>
+                   worktreeState, lastError, githubSynced, baseMoved, hasComments, prExists>>
 
 \* Conflict is resolved externally (e.g., blocking PR merged, files no longer overlap)
 EnvConflictResolved ==
     /\ hasConflict = TRUE
     /\ hasConflict' = FALSE
     /\ UNCHANGED <<state, mergeAttempts, recoveryAttempts, kanban, inConflictQueue,
-                   worktreeState, lastError, githubSynced, baseMoved, hasComments>>
+                   worktreeState, lastError, githubSynced, baseMoved, hasComments, prExists>>
 
 \* New comments appear on the PR (e.g., reviewer leaves feedback)
 EnvCommentsAppear ==
     /\ hasComments = FALSE
     /\ hasComments' = TRUE
     /\ UNCHANGED <<state, mergeAttempts, recoveryAttempts, kanban, inConflictQueue,
-                   worktreeState, lastError, githubSynced, baseMoved, hasConflict>>
+                   worktreeState, lastError, githubSynced, baseMoved, hasConflict, prExists>>
 
 \* Comments are addressed (e.g., fix agent resolves feedback)
 EnvCommentsResolved ==
     /\ hasComments = TRUE
     /\ hasComments' = FALSE
     /\ UNCHANGED <<state, mergeAttempts, recoveryAttempts, kanban, inConflictQueue,
-                   worktreeState, lastError, githubSynced, baseMoved, hasConflict>>
+                   worktreeState, lastError, githubSynced, baseMoved, hasConflict, prExists>>
+
+\* =========================================================================
+\* Actions - PR Creation (nondeterministic success/failure)
+\* Models git_create_pr in cmd-resume.sh / orch-resume-decide.sh / task-worker.sh.
+\* PR creation is attempted after pipeline completion in needs_merge state.
+\* Success sets prExists=TRUE; failure leaves prExists=FALSE.
+\* The code then either marks [P] (requiring prExists) or marks [*] (failed).
+\* =========================================================================
+
+\* PR created successfully (gh CLI succeeds)
+\* Can happen from needs_merge (the normal post-pipeline state).
+PrCreated ==
+    /\ state = "needs_merge"
+    /\ prExists = FALSE
+    /\ prExists' = TRUE
+    /\ UNCHANGED <<state, mergeAttempts, recoveryAttempts, kanban, inConflictQueue,
+                   worktreeState, lastError, githubSynced, baseMoved, hasConflict, hasComments>>
 
 \* =========================================================================
 \* Actions - Worktree Cleanup Completion
@@ -1252,6 +1307,9 @@ Next ==
     \/ ResumeRetry
     \/ TaskReclaim
     \/ TaskPendingApproval
+    \/ WorkerCompletion
+    \* Worker failure (PR creation failed, etc.)
+    \/ WorkerFailure
     \* Planner completed
     \/ PlannerCompleted
     \* Manual start merge
@@ -1265,6 +1323,8 @@ Next ==
     \/ ManualStartFixFromFailedFallback
     \* Worktree cleanup
     \/ CleanupCompleted
+    \* PR creation
+    \/ PrCreated
     \* Environment changes (Medium Term #1: Structured Nondeterminism)
     \/ EnvBaseMoved
     \/ EnvConflictAppears
@@ -1294,6 +1354,7 @@ Fairness ==
     /\ WF_vars(ManualStartMergeFromFailedGuarded \/ ManualStartMergeFromFailedFallback)
     /\ WF_vars(ManualStartFixFromFailedGuarded \/ ManualStartFixFromFailedFallback)
     /\ WF_vars(EnvCommentsResolved)
+    /\ WF_vars(PrCreated)
 
 Spec == Init /\ [][Next]_vars /\ Fairness
 
@@ -1314,6 +1375,7 @@ TypeInvariant ==
     /\ baseMoved \in BOOLEAN
     /\ hasConflict \in BOOLEAN
     /\ hasComments \in BOOLEAN
+    /\ prExists \in BOOLEAN
 
 \* BoundedCounters: counters never exceed their maximums by more than 1
 \* (they can reach max and then a transition fires before the guard blocks)
@@ -1345,6 +1407,13 @@ KanbanMergedConsistency ==
 \* KanbanFailedConsistency: if permanently failed (kanban "*"), state is failed
 KanbanFailedConsistency ==
     kanban = "*" => state = "failed"
+
+\* KanbanPendingApprovalConsistency: kanban "P" requires a PR to exist.
+\* This is the invariant that catches the bug where cmd-resume.sh / orch-resume-decide.sh
+\* unconditionally marked kanban="P" even when PR creation failed. With the prExists
+\* guard on TaskPendingApproval and WorkerCompletion, this invariant holds.
+KanbanPendingApprovalConsistency ==
+    kanban = "P" => prExists = TRUE
 
 \* CommentConflictExclusion: the optimizer never routes to conflict resolution
 \* via PR events when comments are present. Comments take priority because the

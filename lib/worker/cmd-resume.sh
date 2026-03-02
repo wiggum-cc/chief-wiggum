@@ -559,8 +559,8 @@ _handle_complete() {
                     echo "$pr_url" > "$worker_dir/pr_url.txt"
                     _msg "PR created: $pr_url"
                 else
-                    log_warn "Failed to create PR for $task_id (exit: $pr_exit)"
-                    _msg "Warning: Could not create PR, but marking task as complete"
+                    log_error "Failed to create PR for $task_id (exit: $pr_exit)"
+                    _msg "Error: Could not create PR (gh CLI failed)"
                 fi
             else
                 log_warn "No branch found in workspace for $task_id"
@@ -570,14 +570,24 @@ _handle_complete() {
         _msg "PR exists: $pr_url"
     fi
 
-    # Mark task as [P] pending approval
-    update_kanban_pending_approval "$RALPH_DIR/kanban.md" "$task_id" || true
-
-    # Set git-state to needs_merge so merge flow picks it up
-    echo "needs_merge" > "$worker_dir/git-state" 2>/dev/null || true
-
-    # Mark resume state as terminal
-    resume_state_set_terminal "$worker_dir" "Work complete, task marked [P]"
+    # Only mark [P] if a PR actually exists; otherwise mark failed
+    lifecycle_is_loaded || lifecycle_load
+    if [ -n "$pr_url" ]; then
+        if ! emit_event "$worker_dir" "task.pending_approval" "cmd-resume._handle_complete"; then
+            update_kanban_pending_approval "$RALPH_DIR/kanban.md" "$task_id" || true
+        fi
+        # Set git-state to needs_merge so merge flow picks it up
+        echo "needs_merge" > "$worker_dir/git-state" 2>/dev/null || true
+        resume_state_set_terminal "$worker_dir" "Work complete, task marked [P]"
+        log "Task $task_id finalized as COMPLETE"
+    else
+        log_error "Task $task_id COMPLETE but no PR — marking failed"
+        _msg "Error: No PR exists — marking task as failed"
+        emit_event "$worker_dir" "worker.failure" "cmd-resume._handle_complete.no_pr" || {
+            update_kanban_failed "$RALPH_DIR/kanban.md" "$task_id" || true
+        }
+        resume_state_set_terminal "$worker_dir" "COMPLETE but PR creation failed — marked [*]"
+    fi
 
     # Show report if available
     local report
@@ -588,7 +598,6 @@ _handle_complete() {
         cat "$report"
     fi
 
-    log "Task $task_id finalized as COMPLETE"
     activity_log "resume.complete" "$worker_id" "$task_id" "pr_url=${pr_url:-none}"
     _msg ""
 
