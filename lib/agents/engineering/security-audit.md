@@ -44,6 +44,15 @@ If PRD contains security requirements:
 2. Flag gaps between required and implemented controls
 3. Consider whether implementation matches security intent
 
+## Audit Against Intent Specifications
+
+If `intent/` or `formal/` directories exist, check `.intent` and `.tla` files for security-relevant constraints:
+- **`distilled constraint`** entries about module isolation, dependency layering, or trust boundaries
+  define security invariants. Verify the implementation doesn't violate them (e.g., storage module
+  bypassing auth layer, user-facing code directly accessing internal secrets).
+- **`rationale`** entries may document why certain security patterns were chosen — verify the
+  implementation still adheres to those decisions.
+
 ## Actionable Findings Only
 
 Each finding must include:

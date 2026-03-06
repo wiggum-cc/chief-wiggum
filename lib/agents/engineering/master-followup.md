@@ -48,7 +48,7 @@ Your final result combines all phase results:
 ### Test Coverage Rules
 * USE EXISTING FRAMEWORK ONLY - Find project's test framework; use that
 * If no test framework exists, SKIP test phase (do not install one)
-* SPEC-DRIVEN TESTS - Write tests based on spec (docs/ + PRD), not code behavior
+* SPEC-DRIVEN TESTS - Write tests based on spec (spec/ + PRD + intent/formal if present), not code behavior
 * FOLLOW PROJECT PATTERNS - Match existing test structure exactly
 
 ### Documentation Rules
@@ -166,9 +166,10 @@ ls tests/ 2>/dev/null
 
 ### Step 2.2: Understand Spec Requirements
 
-Read the spec FIRST (docs/ and @../prd.md):
+Read the spec FIRST (spec/, @../prd.md, and `intent/`/`formal/` if present):
 - What behavior does the spec require?
 - What edge cases does the spec define?
+- If `intent/` or `formal/` directories exist, read `.intent` and `.tla` files for formal constraints
 
 ### Step 2.3: Write and Run Tests (ALL LANGUAGES)
 
@@ -214,7 +215,7 @@ From implementation, identify:
 
 Look for:
 - `README.md` - main project documentation
-- `docs/` directory
+- `docs/` directory (user-facing documentation)
 - Inline comments and docstrings
 
 **If no documentation exists -> SKIP this phase**
@@ -262,7 +263,7 @@ Look for:
 
 (Omit empty severity sections)
 
-### Security Result: [PASS|FIX|FAIL]
+### Security Result: [OK|NG|ACTION_NEEDED]
 
 ---
 
@@ -272,7 +273,7 @@ Look for:
 [1-2 sentences: what was tested]
 
 ### Framework Used
-[e.g., "jest (existing)" or "No framework - SKIPPED"]
+[e.g., "jest (existing)" or "No framework - skipped"]
 
 ### Tests Added
 
@@ -289,7 +290,7 @@ Look for:
 ### Issues Requiring Fixes
 (Only if FIX - list implementation bugs)
 
-### Test Result: [PASS|FIX|FAIL|SKIP]
+### Test Result: [OK|NG|ACTION_NEEDED|N/A]
 
 ---
 
@@ -304,15 +305,15 @@ Look for:
 |------|-------------|-------------|
 | [path] | README/docstring | [what was updated] |
 
-### Documentation Result: [PASS|SKIP]
+### Documentation Result: [OK|N/A]
 
 ---
 
 ## Aggregated Result
-- Security: [PASS|FIX|FAIL]
-- Tests: [PASS|FIX|FAIL|SKIP]
-- Docs: [PASS|SKIP]
-- **Final**: [PASS|FIX|FAIL|SKIP]
+- Security: [OK|NG|ACTION_NEEDED]
+- Tests: [OK|NG|ACTION_NEEDED|N/A]
+- Docs: [OK|N/A]
+- **Final**: [OK|NG|ACTION_NEEDED|N/A]
 
 </report>
 

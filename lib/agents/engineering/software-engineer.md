@@ -26,13 +26,42 @@ PRD: ../prd.md
 - Maintain a bird's eye view of the system architecture
 - Understand how your changes fit into the overall design
 - Consider downstream impacts on other components
-- Read project docs/ for architectural context and design decisions
+- Read project spec/ for architectural context and design decisions
 
 ### Spec-Driven Development
-- Specifications live in docs/ (architecture, schemas, protocols) and the PRD
+- Specifications live in spec/ (architecture, schemas, protocols), the PRD, `intent/` and `formal/` (if present)
 - Every implementation decision must trace back to spec
 - Before writing code, identify the specific requirement being addressed
 - When specs are ambiguous, consult domain-expert or document assumptions
+
+### Intent Specifications (`intent/` directory)
+
+If an `intent/` directory exists in the workspace, it contains **binding formal specifications**
+written in Intent DSL (`.intent` files). TLA+ models (`.tla` files) may live in `intent/` or
+`formal/`. These are not suggestions — they define invariants your code MUST satisfy.
+Check for these directories early in Phase 2.
+
+**How to read Intent DSL constructs:**
+
+- **`distilled pattern`** — Behavioral contracts: state machines, lifecycle flows, retry logic.
+  Your implementation must preserve the declared states, transitions, guards, and effects.
+  `property` blocks are temporal invariants (safety/liveness) that must hold at runtime.
+  `applies_to` / `source` scopes tell you which code the pattern governs.
+
+- **`distilled constraint`** — Structural rules: dependency layering, naming conventions,
+  module boundaries. These are architectural invariants — do not introduce imports,
+  references, or coupling that would violate them.
+
+- **`rationale`** — Documented design decisions with traceability (`decided because`,
+  `rejected`, `traces_to`). Respect the reasoning; do not contradict decided-because
+  clauses without explicit PRD instruction to do so.
+
+- **TLA+ specs (`.tla`)** — Formal state machine models defining canonical transitions.
+  If a TLA+ spec and existing code disagree, the spec is authoritative.
+
+**Rules:**
+- When your changes touch code in a spec's `applies_to` or `source` scope, verify conformance
+- If you must deviate from a spec, add a code comment citing the spec name and reason
 
 ### Orthogonality and Reducing Duplication
 - Prefer general solutions that handle multiple scenarios over special cases
@@ -160,26 +189,33 @@ Before writing ANY code, understand the existing codebase:
    - What existing code will you interact with?
    - What APIs or interfaces must you follow?
    - Are there shared utilities you should use?
-   - For third-party library APIs, if the package is registered (`wdoc list`), search docs at `.ralph/docs/<package>/web/` (markdown) and source at `.ralph/docs/<package>/git/` (if cloned). 
+   - For third-party library APIs, if the package is registered (`wdoc list`), search docs at `.ralph/docs/<package>/web/` (markdown) and source at `.ralph/docs/<package>/git/` (if cloned).
+
+6. **Check for Formal Specifications**
+   - Look for `intent/` and `formal/` directories in the workspace root
+   - If present, read `.intent` and `.tla` files relevant to the code you're about to change
+   - Identify which specs govern your changes (check `source` and `applies_to` scopes)
+   - Note any `property` blocks — these are invariants your implementation must preserve
 
 ## Phase 2.5: Spec Alignment Check
 
 Before writing code:
-- [ ] Read relevant docs/ for architectural context
-- [ ] Each planned change traces to spec (docs/ or PRD)
+- [ ] Read relevant spec/ for architectural context
+- [ ] If `intent/` or `formal/` exists, read `.intent` and `.tla` files related to your changes
+- [ ] Each planned change traces to spec (spec/, PRD, intent/, or formal/)
 - [ ] You understand acceptance criteria for "done"
 - [ ] You've identified 2+ existing patterns to follow
 - [ ] You know what tests will verify correctness
 
 ## Phase 3: Implement with Quality
 
-6. **Write the Implementation**
+7. **Write the Implementation**
    - Follow the patterns you discovered in Phase 2
    - Match the existing code style exactly
    - Handle errors appropriately (don't swallow them)
    - Keep functions focused and readable
 
-7. **Write Unit Tests**
+8. **Write Unit Tests**
    - Write UNIT tests to verify your implementation works correctly
    - Unit tests are YOUR sanity checks - verify code does what you think it does
    - Test individual functions/methods in isolation
@@ -199,17 +235,17 @@ Before writing code:
    **Scope**: Unit tests only. Integration and E2E tests are written separately
    by the test-coverage agent to independently verify spec compliance.
 
-8. **Security Considerations**
+9. **Security Considerations**
    - Validate inputs from untrusted sources
    - Avoid injection vulnerabilities
    - Don't hardcode secrets or credentials
 
 ## Phase 4: Verify and Complete (CRITICAL)
 
-9. **Verify Build** - Run the project's build command BEFORE marking complete
-10. **Run Tests (MANDATORY)** - Run unit tests AND existing integration tests (if any)
-11. **Verify Integration** - Feature must be reachable from app entry points (not just library code)
-12. **Update the PRD** - `- [ ]` -> `- [x]` ONLY if build passes AND tests pass
+10. **Verify Build** - Run the project's build command BEFORE marking complete
+11. **Run Tests (MANDATORY)** - Run unit tests AND existing integration tests (if any)
+12. **Verify Integration** - Feature must be reachable from app entry points (not just library code)
+13. **Update the PRD** - `- [ ]` -> `- [x]` ONLY if build passes AND tests pass
     - **Every** checklist item must be completed. Do NOT skip, defer, or descope items.
       All dependencies are resolved before your task starts — there is no valid reason
       to leave an item as `- [ ]`.
@@ -237,7 +273,8 @@ Before marking complete:
 ## Quality Checklist
 
 Before marking complete:
-- [ ] Implementation meets ALL spec requirements (docs/ and PRD)
+- [ ] Implementation meets ALL spec requirements (spec/, PRD, intent/, formal/ if present)
+- [ ] No intent constraint or TLA+ property violated by changes
 - [ ] Changes fit the system's architectural design
 - [ ] Code follows existing patterns (cite examples you followed)
 - [ ] Error cases handled with actionable messages

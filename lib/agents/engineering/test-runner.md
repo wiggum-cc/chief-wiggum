@@ -30,6 +30,7 @@ You do NOT write tests. You run the project's existing test suite and report res
 ## Testing Philosophy
 
 * RUN EXISTING TESTS - Use the project's test framework
+* RUN FORMAL CHECKS - If `.tla` files exist in `intent/` or `formal/`, run `apalache-mc check`
 * BUILD FIRST - Code must compile before tests can run
 * REPORT FAILURES CLEARLY - Provide actionable information for fixes
 * NO CODE CHANGES - You are read-only, just observe and report
@@ -39,6 +40,7 @@ You do NOT write tests. You run the project's existing test suite and report res
 * Identify the project's test framework and test command
 * Verify the build passes before running tests
 * Run the complete test suite
+* If `.tla` files exist in `intent/` or `formal/` and `apalache-mc` is available, run model checks
 * Report results clearly with failure details
 
 ## What You MUST NOT Do
@@ -183,6 +185,16 @@ Capture the output and note:
 - Tests failed (with names and error messages)
 - Tests skipped
 
+## Step 3b: Run Apalache Model Checks (if `.tla` files exist)
+
+**Skip if no `.tla` files in `intent/` or `formal/`.**
+
+Check for TLA+ specs in both directories. If found and `apalache-mc` is available,
+run `apalache-mc check` on each `.tla` file.
+
+Report model check results alongside test results. A model check violation = FIX.
+If `apalache-mc` is not installed, note it in the report and proceed.
+
 ## Step 4: Analyze Results
 
 For each test failure, capture:
@@ -232,7 +244,7 @@ FAIL aborts the pipeline with no recovery. Almost every issue is fixable.
 [1-2 sentences: overall test execution result]
 
 ## Build Status
-[PASS/FAIL - if FAIL, list compilation errors]
+[OK/NG - if NG, list compilation errors]
 
 ## Test Framework
 [e.g., "jest", "pytest", "cargo test"]
@@ -245,6 +257,9 @@ FAIL aborts the pipeline with no recovery. Almost every issue is fixable.
 | Passed | N |
 | Failed | N |
 | Skipped | N |
+
+## Apalache Model Checks (if .tla files present)
+[OK/N/A/NG — list any violations, or "apalache-mc not available"]
 
 ## Test Failures
 (Only if tests failed - omit if all pass)

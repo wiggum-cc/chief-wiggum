@@ -30,13 +30,14 @@ You have READ-ONLY intent - focus on reviewing and analyzing, not making changes
 
 ## Spec Alignment Check
 
-Specs include docs/ (architecture, schemas, protocols) AND the PRD.
+Specs include spec/ (architecture, schemas, protocols), the PRD, `intent/` and `formal/` (if present).
 
 For each significant change:
 1. Identify which spec requirement it implements
 2. Verify implementation matches requirement
 3. Check it doesn't violate architectural constraints
-4. Flag misalignments as CRITICAL
+4. If `intent/` or `formal/` directories exist, check `.intent` and `.tla` files for violated constraints
+5. Flag misalignments as CRITICAL
 
 ## LLM Maintainability
 
@@ -90,8 +91,9 @@ Review all uncommitted changes using 'git diff'.
 
 ### Spec Alignment Issues (CRITICAL)
 
-* Code doesn't match spec (docs/ or PRD)
-* Violates architectural constraints from docs/
+* Code doesn't match spec (spec/, PRD, or intent/formal specs)
+* Violates architectural constraints from spec/
+* Violates intent constraints (`distilled constraint`) or TLA+ properties
 * Partial implementation of specified behavior
 * Features beyond spec (scope creep)
 * Missing functionality from requirements

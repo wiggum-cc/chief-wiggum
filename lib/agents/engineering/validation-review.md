@@ -73,7 +73,7 @@ Watch for these red flags:
 
 ## Spec Verification Protocol
 
-Specifications include docs/ (architecture, schemas, protocols) AND the PRD.
+Specifications include spec/ (architecture, schemas, protocols), the PRD, `intent/`, AND `formal/` (if present).
 
 For EACH requirement:
 1. Find the code implementing it (cite file:line)
@@ -85,7 +85,32 @@ A requirement is NOT complete if:
 - Code exists but doesn't match spec behavior
 - Code exists but isn't connected to application
 - Edge cases from spec are unhandled
-- Implementation violates architectural constraints in docs/
+- Implementation violates architectural constraints in spec/
+
+### Intent Specification Verification (`intent/` directory)
+
+If `intent/` or `formal/` directories exist in the workspace, they contain **formal specifications**
+that constrain the implementation. Check for them early and verify conformance.
+
+- `intent/` contains Intent DSL files (`.intent`); TLA+ models (`.tla`) may live in `intent/` or `formal/`
+
+- **`distilled pattern`** — Verify the implementation preserves the declared state machine:
+  states exist, transitions fire on the correct events, guards are enforced, effects are applied.
+  Check that `property` invariants (safety/liveness) are not violated by the changes.
+  Use `applies_to` / `source` scopes to identify which code must conform.
+
+- **`distilled constraint`** — Verify structural rules hold: no forbidden dependencies introduced,
+  naming conventions followed, module boundaries respected. Check the actual imports and references
+  in changed files against constraint predicates.
+
+- **`rationale`** — Verify `traces_to` targets still conform to the design decision.
+  Flag if changes contradict `decided because` reasoning without PRD justification.
+
+- **TLA+ specs (`.tla`)** — If present in `intent/` or `formal/`, verify the implementation's
+  state transitions match the canonical model. If `apalache-mc` is available, run it on each spec.
+
+**Intent violations are FAIL-grade findings** — they indicate the implementation breaks a formal
+contract, not just a style preference.
 
 ## Completeness Verification
 
@@ -104,7 +129,7 @@ Verify the right TYPES of tests exist:
 
 **Integration/E2E Tests** (from test-coverage agent):
 - Test components working together
-- Verify implementation conforms to SPECS in docs/
+- Verify implementation conforms to SPECS in spec/
 - Exercise actual entry points (APIs, commands, exports)
 
 **Check for test scope issues:**
@@ -198,7 +223,25 @@ Look for code that exists but doesn't work:
 - API routes with placeholder/empty handlers
 - Features that exist in isolation but aren't integrated
 
-## Step 5: Verify Integration
+## Step 5: Verify Intent Spec Conformance (if `intent/` exists)
+
+Check for `intent/` and `formal/` directories in the workspace root. If present:
+
+1. **Read `.intent` and `.tla` files** whose scope overlaps the changed code
+2. **For each `distilled pattern`** whose `source`/`applies_to` scope overlaps changed files:
+   - Verify states and transitions in the implementation match the spec
+   - Verify guards are enforced (invalid transitions rejected)
+   - Verify `property` invariants hold (e.g., `always(X => eventually(Y))`)
+3. **For each `distilled constraint`** whose scope overlaps changed files:
+   - Verify the constraint predicate holds (e.g., no forbidden dependencies)
+   - Check actual imports/references in changed files
+4. **For each `rationale`** with `traces_to` pointing to changed files:
+   - Verify the change doesn't contradict the `decided because` reasoning
+5. **If `.tla` files exist and `apalache-mc` is available:**
+   - Run `apalache-mc check` on each `.tla` spec to verify the model
+6. **Report any violations as FIX findings** with the spec name, violated clause, and code location
+
+## Step 6: Verify Integration
 
 For each new feature, trace the path:
 - Entry point exists? (route, command, UI element)
@@ -206,7 +249,7 @@ For each new feature, trace the path:
 - New code is properly imported?
 - Dependencies are satisfied?
 
-## Step 6: Run Tests (ALL Languages)
+## Step 7: Run Tests (ALL Languages)
 
 **CRITICAL: Run ALL applicable test commands for polyglot projects.**
 
@@ -222,12 +265,12 @@ For each new feature, trace the path:
 - Run BOTH `cargo test` AND `npm test`
 - **ANY test failure → FIX.** Report ALL failing tests clearly.
 
-## Step 7: Verify Test Scope
+## Step 8: Verify Test Scope
 
 Check that the right types of tests exist:
 
 1. **Identify spec-defined integration points**
-   - Read docs/ to find defined APIs, commands, data flows
+   - Read spec/ to find defined APIs, commands, data flows
    - These require integration tests, not just unit tests
 
 2. **Check for integration/E2E tests**
@@ -269,6 +312,7 @@ When tests fail, determine whether this PR caused the failures:
 | PRD requirement has no matching code changes (nothing implemented) | FAIL |
 | Security vulnerability in new code | FAIL |
 | Fundamental design incompatible with requirements | FAIL |
+| Intent constraint or TLA+ property violated by changes | FAIL |
 
 ## PASS Criteria
 
@@ -284,7 +328,7 @@ All of the following must be true:
 <review>
 
 ## Build Status
-[PASS/FAIL - run build command and report result. If FAIL, list errors.]
+[OK/NG - run build command and report result. If NG, list errors.]
 
 ## Evidence Check
 
@@ -292,6 +336,13 @@ All of the following must be true:
 |-----------------|----------------|---------------|-------------|-------------------|
 | [requirement 1] | YES/NO | [files] | YES/NO | YES/NO/N/A |
 | [requirement 2] | YES/NO | [files] | YES/NO | YES/NO/N/A |
+
+## Intent Spec Conformance (if intent/ present)
+
+| Spec Type | Spec Name | Scope Overlap? | Conforms? | Issue |
+|-----------|-----------|----------------|-----------|-------|
+| pattern | [name] | YES/NO | YES/NO | [violation or N/A] |
+| constraint | [name] | YES/NO | YES/NO | [violation or N/A] |
 
 ## Verification Details
 [For each requirement, explain what you checked and what you found]
