@@ -75,6 +75,7 @@ WIGGUM_NO_RESUME=false     # --no-resume: disable resume-workers, resume-poll
 WIGGUM_NO_FIX=false        # --no-fix: disable fix-workers, multi-pr-planner
 WIGGUM_NO_MERGE=false      # --no-merge: disable resolve-workers
 WIGGUM_NO_SYNC=false       # --no-sync: disable github-issue-sync, github-plan-sync, pr-sync
+WIGGUM_SKIP_REVIEW=false     # --skip-review: don't require copilot review before merging PRs
 WIGGUM_USE_PYTHON=true     # default: Python scheduler (--no-python for Bash)
 WIGGUM_SMART_MODE="${WIGGUM_SMART_MODE:-true}"  # default: smart routing (--no-smart to disable)
 WIGGUM_TASK_SOURCE_MODE="${WIGGUM_TASK_SOURCE_MODE:-}"  # Set by load_task_source_config
@@ -123,6 +124,7 @@ Modifier Flags (combinable with each other and with modes):
   --no-fix             Don't spawn fix workers or plan multi-PR fixes
   --no-merge           Don't resolve/merge PRs
   --no-sync            Don't sync with GitHub (issues, plans, PRs)
+  --skip-review        Don't require copilot review before merging PRs
 
 Examples:
   wiggum run                              # Smart + Python + hybrid (defaults)
@@ -288,6 +290,10 @@ main() {
         log "--no-sync: disabled github-issue-sync, github-plan-sync, pr-sync services"
         _no_flags_applied=true
     fi
+    if [[ "$WIGGUM_SKIP_REVIEW" == "true" ]]; then
+        log "--skip-review: copilot review gate bypassed for PR merging"
+        _no_flags_applied=true
+    fi
 
     # Invalidate service config cache after run-mode or --no-* modifications to _SERVICE_JSON
     if [[ "$WIGGUM_RUN_MODE" != "default" || "$_no_flags_applied" == "true" ]]; then
@@ -298,7 +304,7 @@ main() {
     export WIGGUM_HOME PROJECT_DIR RALPH_DIR
     export MAX_WORKERS MAX_ITERATIONS MAX_TURNS AGENT_TYPE
     export WIGGUM_RUN_MODE
-    export WIGGUM_NO_RESUME WIGGUM_NO_FIX WIGGUM_NO_MERGE WIGGUM_NO_SYNC
+    export WIGGUM_NO_RESUME WIGGUM_NO_FIX WIGGUM_NO_MERGE WIGGUM_NO_SYNC WIGGUM_SKIP_REVIEW
     export WIGGUM_SMART_MODE WIGGUM_TASK_SOURCE_MODE WIGGUM_SERVER_ID
     export FIX_WORKER_LIMIT FIX_WORKER_TIMEOUT RESOLVE_WORKER_TIMEOUT
     export AGING_FACTOR SIBLING_WIP_PENALTY PLAN_BONUS DEP_BONUS_PER_TASK
@@ -314,6 +320,7 @@ main() {
         [[ "$WIGGUM_NO_FIX" == "true" ]] && py_args+=("--no-fix")
         [[ "$WIGGUM_NO_MERGE" == "true" ]] && py_args+=("--no-merge")
         [[ "$WIGGUM_NO_SYNC" == "true" ]] && py_args+=("--no-sync")
+        [[ "$WIGGUM_SKIP_REVIEW" == "true" ]] && py_args+=("--skip-review")
         log "Handing off to Python orchestrator"
         exec "$WIGGUM_HOME/bin/wiggum-run-py" "${py_args[@]}"
     fi

@@ -18,7 +18,7 @@ _ORCHESTRATOR_ARG_PARSER_LOADED=1
 #   MAX_WORKERS, MAX_ITERATIONS, MAX_TURNS, WIGGUM_RUN_MODE,
 #   WIGGUM_PLAN_MODE, WIGGUM_SMART_MODE (default: true), WIGGUM_PIPELINE,
 #   FIX_WORKER_LIMIT, FORCE_LOCK, WIGGUM_USE_PYTHON (default: true),
-#   WIGGUM_NO_RESUME, WIGGUM_NO_FIX, WIGGUM_NO_MERGE, WIGGUM_NO_SYNC,
+#   WIGGUM_NO_RESUME, WIGGUM_NO_FIX, WIGGUM_NO_MERGE, WIGGUM_NO_SYNC, WIGGUM_SKIP_REVIEW,
 #   WIGGUM_TASK_SOURCE_MODE (default: hybrid), WIGGUM_SERVER_ID
 #
 # Args:
@@ -132,6 +132,11 @@ _parse_run_args() {
             --no-sync)
                 # shellcheck disable=SC2034
                 WIGGUM_NO_SYNC=true
+                shift
+                ;;
+            --skip-review)
+                # shellcheck disable=SC2034
+                WIGGUM_SKIP_REVIEW=true
                 shift
                 ;;
             --python)

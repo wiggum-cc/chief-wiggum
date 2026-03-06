@@ -700,6 +700,35 @@ test_ready_to_merge_blocks_changes_requested() {
     assert_not_equals "0" "$exit_code" "PR with changes requested should not be ready to merge"
 }
 
+test_skip_review_flag_forces_copilot_reviewed_true() {
+    pr_merge_init "$RALPH_DIR"
+    local state_file="$RALPH_DIR/orchestrator/pr-merge-state.json"
+
+    # PR with no review from approved user
+    jq '.prs = {
+        "TASK-001": {
+            "pr_number": 1,
+            "has_new_comments": false,
+            "copilot_reviewed": false,
+            "mergeable_to_main": true
+        }
+    }' "$state_file" > "$state_file.tmp"
+    mv "$state_file.tmp" "$state_file"
+
+    # Without --skip-review: should block
+    local exit_code=0
+    _is_pr_ready_to_merge "$state_file" "TASK-001" 2>/dev/null || exit_code=$?
+    assert_not_equals "0" "$exit_code" "Without --skip-review, unreviewed PR should be blocked"
+
+    # Simulate what --skip-review does at gather time: copilot_reviewed=true
+    jq '.prs["TASK-001"].copilot_reviewed = true' "$state_file" > "$state_file.tmp"
+    mv "$state_file.tmp" "$state_file"
+
+    exit_code=0
+    _is_pr_ready_to_merge "$state_file" "TASK-001" 2>/dev/null || exit_code=$?
+    assert_equals "0" "$exit_code" "With copilot_reviewed=true (set by --skip-review), PR should be ready"
+}
+
 # Verify user_id filtering uses exact numeric match, not substring.
 # Approved ID 12345 must NOT match a reviewer with ID 123456.
 test_review_filter_rejects_substring_user_id() {
@@ -751,6 +780,7 @@ run_test test_gather_includes_worker_with_no_git_state
 run_test test_ready_to_merge_blocks_without_reviews
 run_test test_ready_to_merge_allows_approved_review
 run_test test_ready_to_merge_blocks_changes_requested
+run_test test_skip_review_flag_forces_copilot_reviewed_true
 run_test test_review_filter_rejects_substring_user_id
 
 print_test_summary

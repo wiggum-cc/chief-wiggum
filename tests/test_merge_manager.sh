@@ -345,6 +345,62 @@ test_pipeline_gate_allows_all_pass() {
 }
 
 # =============================================================================
+# --skip-review bypass Tests
+# =============================================================================
+
+test_skip_review_bypasses_review_gate() {
+    # Remove pr-reviews.json so _check_merge_approved would normally block
+    rm -f "$WORKER_DIR/pr-reviews.json"
+    unset WIGGUM_APPROVED_USER_IDS
+
+    # Set --skip-review flag
+    export WIGGUM_SKIP_REVIEW=true
+
+    # Mock gh: pr view returns MERGEABLE, pr merge succeeds
+    cat > "$MOCK_BIN/gh" << 'GHEOF'
+#!/usr/bin/env bash
+if [[ "$*" == *"pr view"* ]]; then
+    echo "MERGEABLE"
+elif [[ "$*" == *"pr merge"* ]]; then
+    echo "merged"
+    exit 0
+fi
+GHEOF
+    chmod +x "$MOCK_BIN/gh"
+
+    # Stub git for _cleanup_merged_pr_worktree
+    cat > "$MOCK_BIN/git" << 'GHEOF'
+#!/usr/bin/env bash
+echo ""
+exit 0
+GHEOF
+    chmod +x "$MOCK_BIN/git"
+
+    local result=0
+    attempt_pr_merge "$WORKER_DIR" "TASK-001" "$RALPH_DIR" || result=$?
+
+    assert_equals "0" "$result" "Should merge successfully with --skip-review"
+
+    # Clean up
+    unset WIGGUM_SKIP_REVIEW
+}
+
+test_review_gate_blocks_without_skip_review() {
+    # Remove pr-reviews.json so _check_merge_approved blocks
+    rm -f "$WORKER_DIR/pr-reviews.json"
+    export WIGGUM_APPROVED_USER_IDS="12345"
+    export WIGGUM_SKIP_REVIEW=false
+
+    local result=0
+    attempt_pr_merge "$WORKER_DIR" "TASK-001" "$RALPH_DIR" 2>/dev/null || result=$?
+
+    assert_equals "1" "$result" "Should block merge without --skip-review"
+
+    # Clean up
+    unset WIGGUM_SKIP_REVIEW
+}
+
+# =============================================================================
 # Run All Tests
 # =============================================================================
 
@@ -368,6 +424,10 @@ run_test test_pipeline_gate_blocks_test_fail
 run_test test_pipeline_gate_blocks_validation_fail
 run_test test_pipeline_gate_allows_test_unknown
 run_test test_pipeline_gate_allows_all_pass
+
+# --skip-review bypass tests
+run_test test_skip_review_bypasses_review_gate
+run_test test_review_gate_blocks_without_skip_review
 
 print_test_summary
 exit_with_test_result

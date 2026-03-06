@@ -377,10 +377,12 @@ _gather_pr_data() {
     local _approved_ids="${WIGGUM_APPROVED_USER_IDS:-}"
     local copilot_reviewed="false"
 
+    if [[ "${WIGGUM_SKIP_REVIEW:-false}" == "true" ]]; then
+        copilot_reviewed="true"
     # No approved user IDs configured → require review gate.
     # Leaving copilot_reviewed="false" blocks auto-merge until
     # WIGGUM_APPROVED_USER_IDS is set (secure by default).
-    if [ -n "$_approved_ids" ] && [ -d "$workspace" ]; then
+    elif [ -n "$_approved_ids" ] && [ -d "$workspace" ]; then
         local _remote_url _repo _reviews_json
         _remote_url=$(git -C "$workspace" remote get-url origin 2>/dev/null || echo "")
         _repo=""

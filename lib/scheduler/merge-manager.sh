@@ -337,9 +337,11 @@ attempt_pr_merge() {
     lifecycle_is_loaded || lifecycle_load
 
     # Gate: require approved review before attempting merge
-    if ! _check_merge_approved "$worker_dir" "$task_id"; then
-        log_debug "PR merge blocked for $task_id - no approved review"
-        return 1
+    if [[ "${WIGGUM_SKIP_REVIEW:-false}" != "true" ]]; then
+        if ! _check_merge_approved "$worker_dir" "$task_id"; then
+            log_debug "PR merge blocked for $task_id - no approved review"
+            return 1
+        fi
     fi
 
     # Gate: require passing pipeline results before attempting merge

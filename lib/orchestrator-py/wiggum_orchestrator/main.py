@@ -118,6 +118,10 @@ def _parse_args() -> argparse.Namespace:
         default=os.environ.get("WIGGUM_NO_SYNC", "false") == "true",
     )
     parser.add_argument(
+        "--skip-review", action="store_true",
+        default=os.environ.get("WIGGUM_SKIP_REVIEW", "false") == "true",
+    )
+    parser.add_argument(
         "--tick-interval",
         type=float,
         default=5.0,
@@ -234,6 +238,7 @@ def run(args: argparse.Namespace) -> int:
         "no_fix": args.no_fix,
         "no_merge": args.no_merge,
         "no_sync": args.no_sync,
+        "skip_review": args.skip_review,
     }
     services = apply_run_mode_filters(services, args.run_mode, no_flags)
 
@@ -261,6 +266,8 @@ def run(args: argparse.Namespace) -> int:
         os.environ["WIGGUM_PLAN_MODE"] = "true"
     if args.smart:
         os.environ["WIGGUM_SMART_MODE"] = "true"
+    if args.skip_review:
+        os.environ["WIGGUM_SKIP_REVIEW"] = "true"
 
     # Build env overrides for bridge
     env_overrides: dict[str, str] = {}
@@ -275,7 +282,7 @@ def run(args: argparse.Namespace) -> int:
         "PID_WAIT_TIMEOUT", "LOG_FILE",
         "RESUME_MAX_DECIDE_CONCURRENT",
         "WIGGUM_PIPELINE", "WIGGUM_PLAN_MODE", "WIGGUM_SMART_MODE",
-        "WIGGUM_TASK_SOURCE_MODE", "WIGGUM_SERVER_ID",
+        "WIGGUM_TASK_SOURCE_MODE", "WIGGUM_SERVER_ID", "WIGGUM_SKIP_REVIEW",
     ):
         val = os.environ.get(key)
         if val is not None:
