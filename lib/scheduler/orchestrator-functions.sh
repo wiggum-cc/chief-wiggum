@@ -1564,11 +1564,15 @@ spawn_worker() {
 # Returns 0 if safe to proceed, 1 if conflicts detected
 pre_worker_checks() {
     # Git pull time guard: skip if pulled recently (WIGGUM_GIT_PULL_INTERVAL=0 restores old behavior)
+    # Uses file-based timestamp so it survives across bridge subprocess invocations.
     local pull_interval="${WIGGUM_GIT_PULL_INTERVAL:-20}"
-    if [ "$pull_interval" -gt 0 ] && [ "${_SCHED_LAST_GIT_PULL:-0}" -gt 0 ]; then
-        local _now
+    local _pull_ts_file="${_SCHED_RALPH_DIR:-$RALPH_DIR}/orchestrator/last_git_pull"
+    if [ "$pull_interval" -gt 0 ] && [ -f "$_pull_ts_file" ]; then
+        local _last_pull _now
+        _last_pull=$(cat "$_pull_ts_file" 2>/dev/null)
+        _last_pull="${_last_pull:-0}"
         _now=$(epoch_now)
-        if (( _now - _SCHED_LAST_GIT_PULL < pull_interval )); then
+        if (( _now - _last_pull < pull_interval )); then
             log_debug "Skipping git pull (interval ${pull_interval}s not elapsed)"
             return 0
         fi
@@ -1626,8 +1630,10 @@ pre_worker_checks() {
         sleep "$delay"
     done
 
-    # Update git pull timestamp on success
+    # Update git pull timestamp on success (both in-memory and file-based)
     _SCHED_LAST_GIT_PULL=$(epoch_now)
+    mkdir -p "$(dirname "$_pull_ts_file")"
+    echo "$_SCHED_LAST_GIT_PULL" > "$_pull_ts_file"
 
     # Check for conflicts with active worktrees (use cached dirs if available)
     local _worker_dirs="${_SCHED_WORKER_DIRS:-}"
