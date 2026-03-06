@@ -409,8 +409,13 @@ svc_orch_scheduler_tick() {
     fi
 }
 
+# Track deferred tasks to suppress repeated identical log messages
+declare -gA _SPAWNER_LAST_DEFERRED=()
+
 # Spawn workers for ready tasks and resume candidates from unified queue
 svc_orch_task_spawner() {
+    # Reset deferred tracking for this tick — rebuilt below
+    local -A _current_deferred=()
     # Early exit: nothing to spawn if unified queue is empty
     # (populated by scheduler_tick in post phase order 30, before this at order 45)
     [[ -n "${SCHED_UNIFIED_QUEUE:-}" ]] || return 0
@@ -485,7 +490,13 @@ svc_orch_task_spawner() {
                         pool_foreach "main" _build_workers
                         local conflicts
                         conflicts=$(get_conflicting_files "$RALPH_DIR" "$task_id" _temp_workers | tr '\n' ',' | sed 's/,$//')
-                        log "Deferring $task_id - file conflict: $conflicts"
+                        local _defer_key="file_conflict:$conflicts"
+                        _current_deferred[$task_id]="$_defer_key"
+                        if [[ "${_SPAWNER_LAST_DEFERRED[$task_id]:-}" != "$_defer_key" ]]; then
+                            log "Deferring $task_id - file conflict: $conflicts"
+                        else
+                            log_debug "Deferring $task_id - file conflict: $conflicts"
+                        fi
                         ;;
                     *) ;;
                 esac
@@ -609,6 +620,13 @@ svc_orch_task_spawner() {
             fi
         fi
     done <<< "$SCHED_UNIFIED_QUEUE"
+
+    # Update deferred tracking for next tick
+    _SPAWNER_LAST_DEFERRED=()
+    local _dk
+    for _dk in "${!_current_deferred[@]}"; do
+        _SPAWNER_LAST_DEFERRED[$_dk]="${_current_deferred[$_dk]}"
+    done
 }
 
 # Detect orphan workers (interval-scheduled, every 60s)

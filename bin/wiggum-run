@@ -331,6 +331,7 @@ main() {
 
     _ORCH_ITERATION=0
     _ORCH_TICK_EPOCH=0
+    _ORCH_IDLE_SLEEP=5
     log "Starting service-based scheduler"
 
     # Main loop: service-driven orchestration
@@ -351,7 +352,14 @@ main() {
         #             skip decay, orphan detection, aging, status display, state save
         service_scheduler_run_phase "post"
 
-        sleep 5
+        # Idle backoff: increase sleep when no events occurred, reset when work resumes
+        if [[ "${SCHED_SCHEDULING_EVENT:-false}" == "true" ]] \
+            || [[ "${POOL_CLEANUP_EVENT:-false}" == "true" ]]; then
+            _ORCH_IDLE_SLEEP=5
+        elif (( _ORCH_IDLE_SLEEP < 30 )); then
+            ((_ORCH_IDLE_SLEEP += 5))
+        fi
+        sleep "$_ORCH_IDLE_SLEEP"
     done
 
     # Shutdown phase (reverse order: state save, terminal cleanup, lock cleanup)

@@ -96,6 +96,42 @@ Other tools give you autocomplete or one-shot code generation. Chief Wiggum give
 - **GitHub CLI** (`gh` installed and authenticated)
 - **jq** (JSON processor)
 - **setsid** (worker process isolation; macOS users: `brew install util-linux`)
+- **uv** (Python package manager, for TUI)
+
+<details>
+<summary>Full list of required binaries</summary>
+
+Run `wiggum doctor` to verify your environment. The following are checked:
+
+**Shell & Required Tools**
+
+| Binary | Purpose |
+|--------|---------|
+| `bash` (4.0+) | Script execution |
+| `git` (2.20+) | Version control, worktrees |
+| `jq` | JSON processing |
+| `bc` | Arithmetic (priority calculations) |
+| `curl` | HTTP requests |
+| `uuidgen` | Unique ID generation |
+| `setsid` | Worker process isolation |
+| `flock` | File locking (concurrency) |
+| `timeout` | Command timeout enforcement |
+| `sha256sum` / `shasum` | Checksum verification |
+| `nproc` | CPU count detection |
+| `gh` | GitHub CLI |
+| `claude` | Claude Code CLI |
+
+**POSIX Utilities (25)**
+
+`awk` `basename` `cat` `cut` `date` `dirname` `find` `grep` `head` `kill` `ls` `mkdir` `mv` `ps` `rm` `sed` `sleep` `sort` `stat` `tac` `tail` `tee` `tr` `wc` `xargs`
+
+**Python (TUI only)**
+
+| Binary | Purpose |
+|--------|---------|
+| `uv` | Python package manager |
+
+</details>
 
 ## Installation
 
