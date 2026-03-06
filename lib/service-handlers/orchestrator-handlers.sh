@@ -186,6 +186,11 @@ svc_orch_preflight_git() {
         log_error "Git pull failed. Please resolve any issues before running."
         return 1
     fi
+
+    # Record pull timestamp so pre_worker_checks skips redundant pulls
+    local _pull_ts_file="${_SCHED_RALPH_DIR:-$RALPH_DIR}/orchestrator/last_git_pull"
+    mkdir -p "$(dirname "$_pull_ts_file")"
+    epoch_now > "$_pull_ts_file"
 }
 
 # Pre-flight: test SSH connection
@@ -366,15 +371,23 @@ svc_orch_ingest_cleanup_event() {
 # Check if all tasks are complete, write exit signal (throttled)
 _ORCH_COMPLETION_INTERVAL=10
 _ORCH_COMPLETION_LAST=0
+_ORCH_COMPLETION_LAST_FILE="${_SCHED_RALPH_DIR:-$RALPH_DIR}/orchestrator/last_completion_tick"
 
 svc_orch_check_completion() {
     local tick="${_ORCH_ITERATION:-0}"
+    # Load last tick from file (survives bridge subprocess restarts)
+    if [[ -f "$_ORCH_COMPLETION_LAST_FILE" ]]; then
+        _ORCH_COMPLETION_LAST=$(cat "$_ORCH_COMPLETION_LAST_FILE" 2>/dev/null)
+        _ORCH_COMPLETION_LAST="${_ORCH_COMPLETION_LAST:-0}"
+    fi
     if [[ "${POOL_CLEANUP_EVENT:-false}" != "true" ]] \
         && [[ "${SCHED_SCHEDULING_EVENT:-false}" != "true" ]] \
         && (( tick - _ORCH_COMPLETION_LAST < _ORCH_COMPLETION_INTERVAL )); then
         return 0
     fi
     _ORCH_COMPLETION_LAST=$tick
+    mkdir -p "$(dirname "$_ORCH_COMPLETION_LAST_FILE")"
+    echo "$tick" > "$_ORCH_COMPLETION_LAST_FILE"
     if scheduler_is_complete; then
         touch "$RALPH_DIR/orchestrator/should-exit"
     fi
@@ -409,13 +422,36 @@ svc_orch_scheduler_tick() {
     fi
 }
 
-# Track deferred tasks to suppress repeated identical log messages
+# Track deferred tasks to suppress repeated identical log messages.
+# File-based so it survives across bridge subprocess invocations.
 declare -gA _SPAWNER_LAST_DEFERRED=()
+_SPAWNER_DEFERRED_FILE="${_SCHED_RALPH_DIR:-$RALPH_DIR}/orchestrator/last_deferred"
+
+# Load deferred state from file into associative array
+_spawner_load_deferred() {
+    _SPAWNER_LAST_DEFERRED=()
+    [[ -f "$_SPAWNER_DEFERRED_FILE" ]] || return 0
+    local line
+    while IFS='=' read -r _dk _dv; do
+        [[ -n "$_dk" ]] && _SPAWNER_LAST_DEFERRED[$_dk]="$_dv"
+    done < "$_SPAWNER_DEFERRED_FILE"
+}
+
+# Save deferred state from associative array to file
+_spawner_save_deferred() {
+    mkdir -p "$(dirname "$_SPAWNER_DEFERRED_FILE")"
+    local _dk
+    : > "$_SPAWNER_DEFERRED_FILE"
+    for _dk in "${!_current_deferred[@]}"; do
+        echo "${_dk}=${_current_deferred[$_dk]}" >> "$_SPAWNER_DEFERRED_FILE"
+    done
+}
 
 # Spawn workers for ready tasks and resume candidates from unified queue
 svc_orch_task_spawner() {
     # Reset deferred tracking for this tick — rebuilt below
     local -A _current_deferred=()
+    _spawner_load_deferred
     # Early exit: nothing to spawn if unified queue is empty
     # (populated by scheduler_tick in post phase order 30, before this at order 45)
     [[ -n "${SCHED_UNIFIED_QUEUE:-}" ]] || return 0
@@ -621,12 +657,8 @@ svc_orch_task_spawner() {
         fi
     done <<< "$SCHED_UNIFIED_QUEUE"
 
-    # Update deferred tracking for next tick
-    _SPAWNER_LAST_DEFERRED=()
-    local _dk
-    for _dk in "${!_current_deferred[@]}"; do
-        _SPAWNER_LAST_DEFERRED[$_dk]="${_current_deferred[$_dk]}"
-    done
+    # Persist deferred tracking for next tick (survives bridge restarts)
+    _spawner_save_deferred
 }
 
 # Detect orphan workers (interval-scheduled, every 60s)
