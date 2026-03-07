@@ -188,8 +188,8 @@ convert_log() {
                             " 2>/dev/null)
 
                             # If content is an array (multi-part result), extract text
-                            if echo "$result_content" | jq -e 'type == "array"' >/dev/null 2>&1; then
-                                result_content=$(echo "$result_content" | jq -r '.[] | select(.type == "text") | .text' 2>/dev/null)
+                            if jq -e 'type == "array"' <<< "$result_content" >/dev/null 2>&1; then
+                                result_content=$(jq -r '.[] | select(.type == "text") | .text' <<< "$result_content" 2>/dev/null)
                             fi
 
                             # Find matching tool name
