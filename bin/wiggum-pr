@@ -66,9 +66,9 @@ Task Pattern Examples:
 Examples:
   wiggum pr list                        # List all worker PRs
   wiggum pr sync                        # Sync all PRs
-  wiggum pr view 42                     # View PR #42
-  wiggum pr merge 42                    # Merge PR #42
-  wiggum pr merge 42 --squash           # Squash-merge PR #42
+  wiggum pr view TASK-030                # View PR for task
+  wiggum pr merge TASK-030              # Merge PR for task
+  wiggum pr merge TASK-030 --squash     # Squash-merge PR for task
   wiggum pr merge-all                   # Merge all worker PRs
   wiggum pr merge-all --auto-merge      # Auto-merge all without asking
   wiggum pr cleanup                     # Delete merged branches
@@ -105,32 +105,70 @@ list_worker_prs() {
     gh pr list --search "task/ in:head" --state open
 }
 
-review_pr() {
-    local pr_number="$1"
+# Resolve a task ID to its worker branch name
+#
+# Args:
+#   task_id - Task identifier (e.g., TASK-030)
+#
+# Returns: branch name on stdout, or error on stderr
+_resolve_task_branch() {
+    local task_id="$1"
+    local worker_dir
+    worker_dir=$(find_worker_by_task_id "$RALPH_DIR" "$task_id")
 
-    if [ -z "$pr_number" ]; then
-        log_error "PR number required"
+    if [ -z "$worker_dir" ] || [ ! -d "$worker_dir" ]; then
+        log_error "No worker directory found for task: $task_id"
         return 1
     fi
 
-    log "Reviewing PR #$pr_number..."
+    local workspace="$worker_dir/workspace"
+    if [ ! -d "$workspace" ]; then
+        log_error "Workspace not found: $workspace"
+        return 1
+    fi
+
+    local branch
+    branch=$(git -C "$workspace" rev-parse --abbrev-ref HEAD 2>/dev/null)
+    if [ -z "$branch" ] || [ "$branch" = "HEAD" ]; then
+        log_error "Could not determine branch for task $task_id"
+        return 1
+    fi
+
+    echo "$branch"
+}
+
+review_pr() {
+    local task_id="$1"
+
+    if [ -z "$task_id" ]; then
+        log_error "Task ID required"
+        return 1
+    fi
+
+    local branch
+    branch=$(_resolve_task_branch "$task_id") || return 1
+
+    log "Viewing PR for $task_id (branch: $branch)..."
     echo ""
-    gh pr view "$pr_number"
+    gh pr view "$branch"
     echo ""
     echo "=== DIFF ==="
-    gh pr diff "$pr_number"
+    gh pr diff "$branch"
 }
 
 merge_pr() {
-    local pr_number="$1"
+    local task_id="$1"
     local merge_method="${2:-merge}"  # merge, squash, or rebase
 
-    if [ -z "$pr_number" ]; then
-        log_error "PR number required"
+    if [ -z "$task_id" ]; then
+        log_error "Task ID required"
         return 1
     fi
 
-    log "Merging PR #$pr_number using $merge_method..."
+    local branch
+    branch=$(_resolve_task_branch "$task_id") || return 1
+
+    log "Merging PR for $task_id (branch: $branch) using $merge_method..."
 
     local merge_flag=""
     case "$merge_method" in
@@ -147,11 +185,11 @@ merge_pr() {
 
     # Don't use --delete-branch: worktrees conflict with local branch deletion
     # Use 'wiggum pr cleanup' to delete merged branches
-    if gh pr merge "$pr_number" $merge_flag; then
-        log "✓ Merged PR #$pr_number"
+    if gh pr merge "$branch" $merge_flag; then
+        log "Merged PR for $task_id"
         return 0
     else
-        log_error "Failed to merge PR #$pr_number"
+        log_error "Failed to merge PR for $task_id"
         return 1
     fi
 }
@@ -162,17 +200,17 @@ merge_all_prs() {
 
     log "Finding all worker PRs..."
 
-    # Get list of PR numbers
-    local pr_numbers
-    pr_numbers=$(gh pr list --search "task/ in:head" --state open --json number -q '.[].number')
+    # Get list of branches with open PRs
+    local pr_branches
+    pr_branches=$(gh pr list --search "task/ in:head" --state open --json headRefName -q '.[].headRefName')
 
-    if [ -z "$pr_numbers" ]; then
+    if [ -z "$pr_branches" ]; then
         log "No worker PRs found to merge"
         return 0
     fi
 
     local pr_count
-    pr_count=$(echo "$pr_numbers" | wc -l)
+    pr_count=$(echo "$pr_branches" | wc -l)
     log "Found $pr_count worker PR(s) to merge"
 
     echo ""
@@ -191,8 +229,16 @@ merge_all_prs() {
     local merged=0
     local failed=0
 
-    for pr in $pr_numbers; do
-        if merge_pr "$pr" "$merge_method"; then
+    for branch in $pr_branches; do
+        # Extract task ID from branch name (task/TASK-001-description -> TASK-001)
+        local task_id
+        task_id=$(echo "$branch" | sed -E 's|^task/([A-Za-z]{2,10}-[0-9]{1,4}).*|\1|')
+        if [ -z "$task_id" ] || [ "$task_id" = "$branch" ]; then
+            log_warn "Could not extract task ID from branch: $branch — skipping"
+            ((++failed))
+            continue
+        fi
+        if merge_pr "$task_id" "$merge_method"; then
             ((++merged))
         else
             ((++failed))
@@ -1081,22 +1127,22 @@ case "$COMMAND" in
         cmd_global_sync
         ;;
     view)
-        PR_NUMBER="${ARGS[0]:-}"
-        if [ -z "$PR_NUMBER" ]; then
-            log_error "PR number required"
-            echo "Usage: wiggum pr view <PR#>"
+        TASK_PATTERN="${ARGS[0]:-}"
+        if [ -z "$TASK_PATTERN" ]; then
+            log_error "Task ID required"
+            echo "Usage: wiggum pr view <ID>"
             exit $EXIT_USAGE
         fi
-        review_pr "$PR_NUMBER"
+        review_pr "$TASK_PATTERN"
         ;;
     merge)
-        PR_NUMBER="${ARGS[0]:-}"
-        if [ -z "$PR_NUMBER" ]; then
-            log_error "PR number required"
-            echo "Usage: wiggum pr merge <PR#> [--squash|--rebase]"
+        TASK_PATTERN="${ARGS[0]:-}"
+        if [ -z "$TASK_PATTERN" ]; then
+            log_error "Task ID required"
+            echo "Usage: wiggum pr merge <ID> [--squash|--rebase]"
             exit $EXIT_USAGE
         fi
-        merge_pr "$PR_NUMBER" "$MERGE_METHOD"
+        merge_pr "$TASK_PATTERN" "$MERGE_METHOD"
         ;;
     merge-all)
         merge_all_prs "$AUTO_MERGE" "$MERGE_METHOD"

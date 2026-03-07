@@ -128,11 +128,16 @@ run_agent_once() {
     # Exit handler for detecting unexpected exits
     # shellcheck disable=SC2329
     _run_once_exit_handler() {
+        trap - EXIT
         local exit_code=$?
         if [ "$_run_once_completed_normally" != true ]; then
-            log_error "Unexpected exit from run_agent_once (exit_code=$exit_code, workspace=$workspace)"
+            # 143=SIGTERM, 137=SIGKILL — expected during timeout/shutdown, not unexpected
+            if [ "$exit_code" -eq 143 ] || [ "$exit_code" -eq 137 ]; then
+                log_debug "run_agent_once terminated by signal (exit_code=$exit_code, workspace=$workspace)"
+            else
+                log_error "Unexpected exit from run_agent_once (exit_code=$exit_code, workspace=$workspace)"
+            fi
         fi
-        trap - EXIT
     }
     trap _run_once_exit_handler EXIT
 

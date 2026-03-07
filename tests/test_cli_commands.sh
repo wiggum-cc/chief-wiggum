@@ -416,7 +416,7 @@ test_pr_view_no_number_fails() {
 
     assert_equals "$EXIT_USAGE" "$exit_code" \
         "wiggum-pr view without number should exit with EXIT_USAGE ($EXIT_USAGE)"
-    assert_output_contains "$output" "PR number required" "Should report PR number required"
+    assert_output_contains "$output" "Task ID required" "Should report Task ID required"
 }
 
 test_pr_comments_no_pattern_fails() {

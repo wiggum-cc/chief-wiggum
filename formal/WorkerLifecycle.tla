@@ -458,6 +458,13 @@ ResolveStartedFromNeedsMulti ==
     /\ UNCHANGED <<mergeAttempts, recoveryAttempts, kanban>>
     /\ AllAuxUnchanged
 
+\* resolve.started: needs_merge -> resolving (manual resolve from needs_merge)
+ResolveStartedFromNeedsMerge ==
+    /\ state = "needs_merge"
+    /\ state' = "resolving"
+    /\ UNCHANGED <<mergeAttempts, recoveryAttempts, kanban>>
+    /\ AllAuxUnchanged
+
 \* resolve.started: resolving -> null (idempotent re-entry, no state change)
 ResolveStartedFromResolving ==
     /\ state = "resolving"
@@ -1251,6 +1258,7 @@ Next ==
     \/ ResolveStartupResetFromNone
     \/ ResolveStartedFromNeedsResolve
     \/ ResolveStartedFromNeedsMulti
+    \/ ResolveStartedFromNeedsMerge
     \/ ResolveSucceeded
     \/ ResolveFailFromResolving
     \/ ResolveFailFromNeedsResolve
@@ -1344,7 +1352,7 @@ Fairness ==
                \/ MergeOutOfDateRebaseOk \/ MergeOutOfDateRebaseFail)
     /\ WF_vars(ConflictNeedsResolveGuarded \/ ConflictNeedsResolveFallback
                \/ ConflictNeedsMulti)
-    /\ WF_vars(ResolveStartedFromNeedsResolve \/ ResolveStartedFromNeedsMulti)
+    /\ WF_vars(ResolveStartedFromNeedsResolve \/ ResolveStartedFromNeedsMulti \/ ResolveStartedFromNeedsMerge)
     /\ WF_vars(ResolveSucceeded \/ ResolveFailFromResolving)
     /\ WF_vars(FixPassGuarded \/ FixPassFallback \/ FixFail \/ FixSkip \/ FixPartial \/ FixTimeout)
     /\ WF_vars(StartupReconcileMerged)

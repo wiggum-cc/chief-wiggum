@@ -36,23 +36,52 @@ _get_pid_ops_lock() {
 }
 
 # Find the newest worker directory for a task
-# Args: <ralph_dir> <task_id>
+# Supports exact task IDs (TASK-014) and bare numeric patterns (014)
+#
+# Args: <ralph_dir> <task_id_or_pattern>
 # Returns: worker directory path on stdout, or empty if not found
 find_worker_by_task_id() {
     local ralph_dir="$1"
     local task_id="$2"
 
-    find_newest "$ralph_dir/workers" -maxdepth 1 -type d -name "worker-$task_id-*"
+    # Try exact match first
+    local result
+    result=$(find_newest "$ralph_dir/workers" -maxdepth 1 -type d -name "worker-$task_id-*")
+    if [ -n "$result" ]; then
+        echo "$result"
+        return 0
+    fi
+
+    # Bare numeric pattern (e.g., "014" matches "worker-SIG-014-*")
+    if [[ "$task_id" =~ ^[0-9]+$ ]]; then
+        result=$(find_newest "$ralph_dir/workers" -maxdepth 1 -type d -name "worker-*-$task_id-*")
+        if [ -n "$result" ]; then
+            echo "$result"
+            return 0
+        fi
+    fi
 }
 
 # Find any worker directory matching a task ID (for checking if one exists)
-# Args: <ralph_dir> <task_id>
+# Supports exact task IDs (TASK-014) and bare numeric patterns (014)
+#
+# Args: <ralph_dir> <task_id_or_pattern>
 # Returns: first matching worker directory path on stdout, or empty if not found
 find_any_worker_by_task_id() {
     local ralph_dir="$1"
     local task_id="$2"
 
-    find "$ralph_dir/workers" -maxdepth 1 -type d -name "worker-$task_id-*" 2>/dev/null | head -1
+    local result
+    result=$(find "$ralph_dir/workers" -maxdepth 1 -type d -name "worker-$task_id-*" 2>/dev/null | head -1)
+    if [ -n "$result" ]; then
+        echo "$result"
+        return 0
+    fi
+
+    # Bare numeric pattern fallback
+    if [[ "$task_id" =~ ^[0-9]+$ ]]; then
+        find "$ralph_dir/workers" -maxdepth 1 -type d -name "worker-*-$task_id-*" 2>/dev/null | head -1
+    fi
 }
 
 # Resolve a partial worker ID to full worker directory path

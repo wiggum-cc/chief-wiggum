@@ -934,6 +934,7 @@ _pipeline_run_step() {
         # run_sub_agent is a shell function not available in the new bash process.
         local _agent_exit=0
         (
+            trap 'exit 143' TERM
             run_sub_agent "$step_agent" "$worker_dir" "$project_dir"
         ) &
         local _agent_pid=$!
@@ -959,7 +960,14 @@ _pipeline_run_step() {
         if [ "$_agent_exit" -eq 143 ] || [ "$_agent_exit" -eq 137 ]; then
             _step_timed_out=true
             log_error "Step '$step_id' timed out after ${step_timeout}s"
-            agent_write_result "$worker_dir" "FAIL"
+            # Try backup extraction before defaulting to FAIL — the agent may have
+            # written a valid result before the timeout killed it
+            local _timeout_result="FAIL"
+            _timeout_result=$(_pipeline_backup_result_extraction "$worker_dir" "$step_id" "$step_agent") || true
+            if [ "$_timeout_result" = "UNKNOWN" ] || [ -z "$_timeout_result" ]; then
+                _timeout_result="FAIL"
+            fi
+            agent_write_result "$worker_dir" "$_timeout_result"
         fi
 
         unset WIGGUM_STEP_TIMEOUT

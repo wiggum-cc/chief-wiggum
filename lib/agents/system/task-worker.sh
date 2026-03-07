@@ -181,6 +181,9 @@ agent_run() {
         return "$EXIT_USAGE"
     fi
 
+    # Export task ID for downstream consumers (pipeline-runner, activity logging)
+    export WIGGUM_TASK_ID="$task_id"
+
     # Setup logging
     export LOG_FILE="$worker_dir/worker.log"
 

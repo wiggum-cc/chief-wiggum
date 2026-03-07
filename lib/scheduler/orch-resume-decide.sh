@@ -593,6 +593,13 @@ _launch_resume_worker() {
     SPAWNED_WORKER_PID=""
     SPAWNED_WORKER_ID=""
 
+    # Guard: skip if worker became terminal between decide and launch (race window)
+    source "$WIGGUM_HOME/lib/core/resume-state.sh"
+    if resume_state_is_terminal "$worker_dir"; then
+        log_warn "Worker for $task_id is terminal — skipping resume launch"
+        return 1
+    fi
+
     # Read decision
     if [ ! -f "$worker_dir/resume-decision.json" ]; then
         log_error "No resume-decision.json for $task_id"

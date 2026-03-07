@@ -76,6 +76,7 @@
 
     { "event": "resolve.started",       "from": "needs_resolve",      "to": "resolving" },
     { "event": "resolve.started",       "from": "needs_multi_resolve","to": "resolving" },
+    { "event": "resolve.started",       "from": "needs_merge",        "to": "resolving" },
     { "event": "resolve.started",       "from": "resolving",          "to": null },
     { "event": "resolve.succeeded",     "from": "resolving",  "to": "needs_merge",  "chain": "resolved", "effects": ["rm_conflict_queue", "clear_error"] },
     { "event": "resolve.fail",          "from": "resolving",          "to": "failed",       "effects": ["check_permanent"] },

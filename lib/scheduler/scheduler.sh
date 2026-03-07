@@ -1107,7 +1107,24 @@ get_workers_needing_decide() {
             fi
             continue
         fi
-        [ -f "$worker_dir/prd.md" ] || continue
+        if [ ! -f "$worker_dir/prd.md" ]; then
+            # Worker never bootstrapped — check if resume-decide errored out
+            if [ -f "$worker_dir/resume-state.json" ] && ! resume_state_is_terminal "$worker_dir"; then
+                local _last_decision
+                _last_decision=$(jq -r '(.history // [])[-1].decision // ""' "$worker_dir/resume-state.json" 2>/dev/null)
+                if [ "$_last_decision" = "ERROR" ]; then
+                    local _noprd_tid
+                    _noprd_tid=$(get_task_id_from_worker "$(basename "$worker_dir")")
+                    resume_state_set_terminal "$worker_dir" "Resume-decide failed before bootstrap (no prd.md)"
+                    lifecycle_is_loaded || lifecycle_load
+                    emit_event "$worker_dir" "resume.abort" "scheduler.get_workers_needing_decide.no_prd_error" || true
+                    log_error "Worker $(basename "$worker_dir") has ERROR with no prd.md — marked terminal"
+                    activity_log "worker.resume_failed" "$(basename "$worker_dir")" "$_noprd_tid" "reason=no_prd_after_error"
+                    scheduler_mark_event
+                fi
+            fi
+            continue
+        fi
 
         # Skip if still running
         is_worker_running "$worker_dir" && continue

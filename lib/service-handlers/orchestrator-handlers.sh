@@ -431,7 +431,6 @@ _SPAWNER_DEFERRED_FILE="${_SCHED_RALPH_DIR:-$RALPH_DIR}/orchestrator/last_deferr
 _spawner_load_deferred() {
     _SPAWNER_LAST_DEFERRED=()
     [[ -f "$_SPAWNER_DEFERRED_FILE" ]] || return 0
-    local line
     while IFS='=' read -r _dk _dv; do
         [[ -n "$_dk" ]] && _SPAWNER_LAST_DEFERRED[$_dk]="$_dv"
     done < "$_SPAWNER_DEFERRED_FILE"

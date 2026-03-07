@@ -41,8 +41,8 @@ Worker Management:
 Pull Requests:
   pr list             List open worker PRs
   pr sync             Sync PR status and comments
-  pr view <PR#>       View a PR with diff
-  pr merge <PR#>      Merge a specific PR
+  pr view <ID>        View a PR with diff
+  pr merge <ID>       Merge a specific PR
   pr create <ID>      Create PR for worker branch
   pr resolve <ID>     Resolve merge conflicts
 
