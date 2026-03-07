@@ -44,6 +44,24 @@ source "$WIGGUM_HOME/lib/scheduler/orch-resume-decide.sh"
 # These functions depend on scheduler module components
 # They should be sourced after the scheduler modules are loaded
 
+# Bound per-task PID waits so one bad spawn cannot stall the whole scheduler loop.
+_spawn_pid_wait_timeout() {
+    local max_wait="${PID_WAIT_TIMEOUT:-300}"
+    local grace_wait="${SPAWN_PID_GRACE_TIMEOUT:-8}"
+
+    # Non-positive grace means "use full legacy timeout".
+    if [ "$grace_wait" -le 0 ]; then
+        echo "$max_wait"
+        return 0
+    fi
+
+    if [ "$max_wait" -lt "$grace_wait" ]; then
+        echo "$max_wait"
+    else
+        echo "$grace_wait"
+    fi
+}
+
 # Run periodic sync to update PR statuses and detect new comments
 #
 # This is a standalone version of the sync logic that can be called
@@ -1550,8 +1568,12 @@ spawn_worker() {
 
     SPAWNED_WORKER_ID=$(basename "$worker_dir")
 
-    # Wait for agent.pid to appear (using shared library)
-    if ! wait_for_worker_pid "$worker_dir" "$PID_WAIT_TIMEOUT"; then
+    # wiggum-worker start already waits briefly for agent.pid; use a short,
+    # bounded follow-up wait so a transient spawn failure doesn't block this
+    # scheduler tick for minutes per queued task.
+    local pid_wait_timeout
+    pid_wait_timeout=$(_spawn_pid_wait_timeout)
+    if ! wait_for_worker_pid "$worker_dir" "$pid_wait_timeout"; then
         log_error "Agent PID file not created for $task_id"
         return 1
     fi
@@ -1815,4 +1837,3 @@ _handle_resolve_worker_timeout() {
     local task_id="$2"
     handle_resolve_worker_timeout "$worker_dir" "$task_id" "$RESOLVE_WORKER_TIMEOUT"
 }
-

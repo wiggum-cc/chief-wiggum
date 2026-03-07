@@ -702,8 +702,13 @@ _launch_resume_worker() {
           _WORKER_MAX_ITERATIONS _WORKER_MAX_TURNS _WORKER_RESUME_STEP \
           _WORKER_RESUME_INSTRUCTIONS
 
-    # Wait for agent.pid (with timeout)
-    local wait_timeout="${PID_WAIT_TIMEOUT:-300}"
+    # Use bounded wait when available to avoid stalling scheduler ticks.
+    local wait_timeout
+    if declare -F _spawn_pid_wait_timeout >/dev/null 2>&1; then
+        wait_timeout=$(_spawn_pid_wait_timeout)
+    else
+        wait_timeout="${PID_WAIT_TIMEOUT:-300}"
+    fi
     if ! wait_for_worker_pid "$worker_dir" "$wait_timeout"; then
         log_error "Agent PID file not created for $task_id after resume launch"
         return 1

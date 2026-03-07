@@ -387,6 +387,37 @@ SCRIPT
     WIGGUM_HOME="$(cd "$SCRIPT_DIR/.." && pwd)"
 }
 
+test_spawn_worker_caps_pid_wait_timeout() {
+    local task_id="TST-003"
+
+    # Mock wiggum-worker start success (creates worker dir + agent.pid)
+    WIGGUM_HOME="$TEST_DIR/mock-wiggum"
+    mkdir -p "$WIGGUM_HOME/bin"
+    cat > "$WIGGUM_HOME/bin/wiggum-worker" <<'SCRIPT'
+#!/usr/bin/env bash
+exit 0
+SCRIPT
+    chmod +x "$WIGGUM_HOME/bin/wiggum-worker"
+
+    local worker_dir="$RALPH_DIR/workers/worker-$task_id-12345"
+    mkdir -p "$worker_dir"
+    echo "12345" > "$worker_dir/agent.pid"
+
+    export PID_WAIT_TIMEOUT=300
+    export SPAWN_PID_GRACE_TIMEOUT=2
+
+    local capped
+    capped=$(_spawn_pid_wait_timeout)
+    assert_equals "2" "$capped" "_spawn_pid_wait_timeout should cap to SPAWN_PID_GRACE_TIMEOUT"
+
+    local rc=0
+    spawn_worker "$task_id" 2>/dev/null || rc=$?
+    assert_equals "0" "$rc" "spawn_worker should succeed"
+
+    unset SPAWN_PID_GRACE_TIMEOUT
+    WIGGUM_HOME="$(cd "$SCRIPT_DIR/.." && pwd)"
+}
+
 # =============================================================================
 # Resume-pending file format tests
 # =============================================================================
@@ -537,6 +568,7 @@ echo ""
 echo "=== spawn_worker return code tests ==="
 run_test test_spawn_worker_returns_2_for_resumable
 run_test test_spawn_worker_returns_1_for_running_worker
+run_test test_spawn_worker_caps_pid_wait_timeout
 
 echo ""
 echo "=== File format tests ==="
