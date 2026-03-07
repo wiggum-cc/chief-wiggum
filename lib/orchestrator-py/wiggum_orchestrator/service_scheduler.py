@@ -146,7 +146,7 @@ class ServiceScheduler:
     def _run_startup_services(self, now: float) -> None:
         """Run periodic services with run_on_startup on first tick.
 
-        Services with timeout > 60s run in background to avoid blocking
+        All startup periodic services run in background to avoid blocking
         the scheduler. Their results are checked on subsequent ticks.
         """
         for svc in self._registry.get_periodic_services():
@@ -155,13 +155,8 @@ class ServiceScheduler:
             if svc.schedule_type not in ("interval", "cron"):
                 continue
 
-            # Long-timeout services run in background to avoid blocking
-            if svc.timeout > 60:
-                log.log_debug(f"Startup run (background): {svc.id}")
-                self._run_single_service_background(svc)
-            else:
-                log.log_debug(f"Startup run: {svc.id}")
-                self._run_single_service(svc)
+            log.log_debug(f"Startup run (background): {svc.id}")
+            self._run_single_service_background(svc)
 
     def _should_run_periodic(self, svc: ServiceConfig, now: float) -> bool:
         """Check if a periodic service should run this tick."""

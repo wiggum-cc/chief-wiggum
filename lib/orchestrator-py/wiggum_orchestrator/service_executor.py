@@ -88,6 +88,7 @@ class ServiceExecutor:
 
         proc = subprocess.Popen(
             cmd,
+            stdin=subprocess.DEVNULL,
             env=self._env,
             cwd=self._env.get("PROJECT_DIR"),
         )
@@ -137,6 +138,7 @@ class ServiceExecutor:
         timeout = svc.timeout or 600
         proc = subprocess.Popen(
             cmd,
+            stdin=subprocess.DEVNULL,
             env=self._env,
             cwd=self._env.get("PROJECT_DIR"),
         )
@@ -172,6 +174,7 @@ class ServiceExecutor:
         timeout = svc.timeout or 600
         proc = subprocess.Popen(
             ["bash", "-c", cmd_str],
+            stdin=subprocess.DEVNULL,
             env=self._env,
             cwd=self._env.get("PROJECT_DIR"),
         )
@@ -205,6 +208,7 @@ class ServiceExecutor:
         timeout = svc.timeout or 600
         proc = subprocess.Popen(
             cmd,
+            stdin=subprocess.DEVNULL,
             env=self._env,
             cwd=self._env.get("PROJECT_DIR"),
         )
@@ -240,6 +244,7 @@ class ServiceExecutor:
         log.log_debug(f"Bridge background: {func}")
         proc = subprocess.Popen(
             cmd,
+            stdin=subprocess.DEVNULL,
             env=self._env,
             cwd=self._env.get("PROJECT_DIR"),
             stdout=subprocess.DEVNULL,
@@ -257,6 +262,7 @@ class ServiceExecutor:
         log.log_debug(f"Command background: {cmd_str}")
         proc = subprocess.Popen(
             ["bash", "-c", cmd_str],
+            stdin=subprocess.DEVNULL,
             env=self._env,
             cwd=self._env.get("PROJECT_DIR"),
             stdout=subprocess.DEVNULL,
