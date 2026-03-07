@@ -81,7 +81,7 @@ class ServiceScheduler:
         for svc in func_svc_map:
             self._state.mark_started(svc.id)
 
-        success = self._executor.run_phase(phase, functions)
+        success, exit_code = self._executor.run_phase(phase, functions)
 
         # Mark all as completed/failed based on bridge exit
         for svc in func_svc_map:
@@ -92,6 +92,21 @@ class ServiceScheduler:
 
         # Startup phase: failure in required service is fatal
         if phase == "startup" and not success:
+            # Signal kills (negative exit code) are interrupts, not service
+            # failures — report them distinctly so the user isn't misled
+            # into thinking validate-kanban failed when SIGINT hit a later
+            # service.
+            if exit_code < 0:
+                import signal as _sig
+                try:
+                    sig_name = _sig.Signals(-exit_code).name
+                except (ValueError, AttributeError):
+                    sig_name = str(-exit_code)
+                log.log_error(
+                    f"Startup phase interrupted by {sig_name}",
+                )
+                return False
+
             for svc in func_svc_map:
                 if svc.required:
                     log.log_error(

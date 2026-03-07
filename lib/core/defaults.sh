@@ -59,15 +59,16 @@ if [ -n "${WIGGUM_LOG_LEVEL:-}" ]; then
 fi
 
 # Worker configuration defaults
-MAX_WORKERS="${WIGGUM_MAX_WORKERS:-4}"
+# Priority: WIGGUM_MAX_WORKERS env > inherited MAX_WORKERS env > default 4
+MAX_WORKERS="${WIGGUM_MAX_WORKERS:-${MAX_WORKERS:-4}}"
 export MAX_WORKERS
 
 # Resolve worker timeout (seconds) - max runtime for conflict resolver workers
-RESOLVE_WORKER_TIMEOUT="${WIGGUM_RESOLVE_TIMEOUT:-1800}"
+RESOLVE_WORKER_TIMEOUT="${WIGGUM_RESOLVE_TIMEOUT:-${RESOLVE_WORKER_TIMEOUT:-1800}}"
 export RESOLVE_WORKER_TIMEOUT
 
 # Maximum merge attempts before giving up
-MAX_MERGE_ATTEMPTS="${WIGGUM_MAX_MERGE_ATTEMPTS:-3}"
+MAX_MERGE_ATTEMPTS="${WIGGUM_MAX_MERGE_ATTEMPTS:-${MAX_MERGE_ATTEMPTS:-3}}"
 export MAX_MERGE_ATTEMPTS
 
 # GitHub CLI timeout (seconds)

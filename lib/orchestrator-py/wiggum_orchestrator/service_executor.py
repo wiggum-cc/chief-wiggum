@@ -66,7 +66,9 @@ class ServiceExecutor:
             except ProcessLookupError:
                 pass
 
-    def run_phase(self, phase: str, functions: list[str]) -> bool:
+    def run_phase(
+        self, phase: str, functions: list[str],
+    ) -> tuple[bool, int]:
         """Run all phase functions in a single bash process.
 
         Args:
@@ -74,10 +76,12 @@ class ServiceExecutor:
             functions: List of svc_* function names to call in order.
 
         Returns:
-            True if all succeeded, False on any failure or timeout.
+            (success, exit_code) tuple.  exit_code is 0 on success,
+            negative for signal kills (e.g. -2 = SIGINT), positive for
+            errors, or 124 for timeout.
         """
         if not functions:
-            return True
+            return True, 0
 
         cmd = ["bash", self._bridge, "phase", phase] + functions
         log.log_debug(f"Bridge phase {phase}: {' '.join(functions)}")
@@ -95,7 +99,7 @@ class ServiceExecutor:
             proc.kill()
             proc.wait()
             log.log_error(f"Bridge phase {phase} timed out after 600s")
-            return False
+            return False, 124
         finally:
             with self._proc_lock:
                 self._current_proc = None
@@ -103,8 +107,8 @@ class ServiceExecutor:
             log.log_error(
                 f"Bridge phase {phase} failed (exit {proc.returncode})",
             )
-            return False
-        return True
+            return False, proc.returncode
+        return True, 0
 
     def run_function(
         self,

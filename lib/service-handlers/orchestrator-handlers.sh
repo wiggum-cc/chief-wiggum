@@ -279,14 +279,10 @@ svc_orch_init_terminal() {
     echo "=========================================="
     echo ""
 
-    # Run initial scheduler tick and status display so the terminal shows
-    # real data immediately. Use svc_orch_scheduler_tick (not bare scheduler_tick)
-    # so hybrid/distributed modes go through scheduler_tick_distributed and see
-    # the same task source as the post-phase — avoiding a stale local-only count
-    # followed by a different distributed count.
-    svc_orch_scheduler_tick
-    SCHED_SCHEDULING_EVENT=true
-    svc_orch_status_display
+    # Initial scheduler tick + status display moved to post-phase (runs on first
+    # main loop iteration). Running them here blocked the startup bridge — in
+    # distributed mode, scheduler_tick_distributed makes GitHub API calls that
+    # can take minutes, preventing the main loop from ever starting.
 }
 
 # =============================================================================

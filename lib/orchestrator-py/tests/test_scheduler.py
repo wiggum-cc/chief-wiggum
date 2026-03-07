@@ -25,7 +25,7 @@ def cb(state):
 @pytest.fixture()
 def mock_executor():
     executor = MagicMock(spec=ServiceExecutor)
-    executor.run_phase.return_value = True
+    executor.run_phase.return_value = (True, 0)
     executor.run_function.return_value = 0
     executor.run_command.return_value = 0
     return executor
@@ -65,7 +65,7 @@ def test_startup_phase_calls_bridge(state, mock_executor, cb):
 
 def test_startup_failure_returns_false(state, mock_executor, cb):
     """Startup failure with required service should return False."""
-    mock_executor.run_phase.return_value = False
+    mock_executor.run_phase.return_value = (False, 1)
     services = [
         ServiceConfig(
             id="critical",

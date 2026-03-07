@@ -183,10 +183,17 @@ case "$mode" in
         # shellcheck disable=SC2034  # phase consumed for validation
         phase="${1:?Missing phase name}"
         shift
+        _phase_rc=0
         for func in "$@"; do
             _validate_func "$func" || exit 1
-            "$func" || true
+            _func_rc=0
+            "$func" || _func_rc=$?
+            if [ "$_func_rc" -ne 0 ] && [ "$_phase_rc" -eq 0 ]; then
+                _phase_rc="$_func_rc"
+                log_warn "Phase $phase: $func failed (rc=$_func_rc), continuing"
+            fi
         done
+        exit "$_phase_rc"
         ;;
     function)
         func="${1:?Missing function name}"
