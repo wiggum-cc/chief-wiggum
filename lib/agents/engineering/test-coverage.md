@@ -355,6 +355,68 @@ In both cases:
 - Never change test expectations to match code behavior - code must match spec
 - If a test fails after multiple attempts, reason about the SPEC behavior — the implementation is likely wrong, not the test. Do NOT weaken assertions to make tests pass.
 
+## Step 8: Clean Up Test Artifacts
+
+After running tests, remove build and test artifacts generated during Steps 5-7. These pollute the workspace and will be flagged by the validation-review agent if left behind.
+
+**IMPORTANT: Do NOT remove test files you wrote in Step 5 -- those are your deliverable.**
+
+### 8a. Identify artifacts to clean
+
+```bash
+# List all untracked files/directories
+git status --porcelain | grep '^?'
+```
+
+### 8b. Remove by category
+
+Use `rm -rf` for directories and `rm -f` for files. Do NOT use `git clean` (forbidden).
+
+| Category | Patterns to Remove |
+|----------|-------------------|
+| Rust build artifacts | `target/debug/`, `target/release/`, `target/.rustc_info.json` |
+| JS/TS build artifacts | `dist/`, `build/`, `.next/`, `.nuxt/`, `.turbo/` |
+| Python bytecode/cache | `__pycache__/`, `*.pyc`, `*.pyo`, `.pytest_cache/` |
+| Go build artifacts | Binary files in project root with no extension |
+| Java build artifacts | `target/classes/`, `target/test-classes/`, `*.class` |
+| Coverage output | `coverage/`, `htmlcov/`, `.nyc_output/`, `.coverage`, `*.gcda`, `*.gcno`, `lcov.info` |
+| Test result reports | `test-results/`, `junit.xml`, `test-report.xml`, `test-report.json` |
+| Cache dirs | `.cache/`, `node_modules/.cache/`, `.jest-cache/` |
+| Temp files | `*.tmp`, `*.swp`, `*.bak`, `*temp*`, `*tmp*` |
+| Other | Any other generated/ephemeral files not part of source code |
+
+**Example cleanup commands:**
+```bash
+# Python
+rm -rf __pycache__ .pytest_cache htmlcov .coverage 2>/dev/null
+
+# Rust
+rm -rf target/debug target/release 2>/dev/null
+
+# JavaScript/TypeScript
+rm -rf dist build coverage .nyc_output .jest-cache 2>/dev/null
+
+# General
+rm -f *.gcda *.gcno lcov.info junit.xml 2>/dev/null
+```
+
+### 8c. Verify cleanup
+
+```bash
+# Confirm only your test source files remain as untracked
+git status --porcelain | grep '^?'
+```
+
+Remaining untracked files should be ONLY:
+- Test files you wrote in Step 5
+- Test fixtures/data files your tests need
+- NOT: build output, coverage reports, cache directories, compiled binaries
+
+**Do NOT remove:**
+- Test files you wrote (your deliverable)
+- Files that existed before you started (tracked modifications visible in `git diff --name-only`)
+- Project source files or configuration files
+
 ## Result Criteria
 
 **Default to FIX, not FAIL.** FIX sends the problem to a fix agent that can address it.

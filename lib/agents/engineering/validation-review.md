@@ -283,6 +283,39 @@ Check that the right types of tests exist:
    - Tests don't exercise spec-defined entry points → wrong scope
    - Tests verify code runs but not that it conforms to spec → insufficient
 
+## Step 9: Workspace Hygiene Check
+
+Scan for files that should NOT be committed to version control. These are typically generated during agent execution (builds, test runs, editors) and pollute the repository.
+
+**How to check:**
+```bash
+# Files changed or added in this PR
+git diff --name-only
+
+# Untracked files that might get committed
+git status --porcelain | grep '^?'
+```
+
+**Flag files matching these patterns:**
+
+| Category | Patterns |
+|----------|----------|
+| Compiled binaries | `*.o`, `*.so`, `*.dll`, `*.exe`, `*.dylib`, `*.class`, `*.pyc`, `*.pyo`, `*.wasm` |
+| Build artifact dirs | `target/`, `dist/`, `build/`, `out/`, `node_modules/`, `__pycache__/`, `.cache/` |
+| Coverage/profiling | `coverage/`, `.nyc_output/`, `htmlcov/`, `.coverage`, `*.gcda`, `*.gcno`, `*.profraw`, `lcov.info` |
+| Test result artifacts | `test-results/`, `junit.xml`, `test-report.xml`, `.pytest_cache/`, `.jest-cache/` |
+| Temp/editor files | `*.tmp`, `*.swp`, `*.swo`, `*.bak`, `*~`, `*temp*`, `*tmp*`, `.DS_Store`, `Thumbs.db`, `desktop.ini` |
+| IDE config | `.idea/`, `.vscode/settings.json`, `.vscode/launch.json`, `*.iml`, `*.suo` |
+| Log files | `*.log` (unless project intentionally tracks logs) |
+| Other | Any other files deemed to be of similar nature (generated, ephemeral, not source code) |
+
+**Judgment rules:**
+- If the project's `.gitignore` already excludes these patterns, no finding needed
+- If a file matches the patterns above AND appears in the diff or is untracked, report as **FIX**
+- Do NOT flag files intentionally tracked by the project (e.g., `dist/` in libraries that ship pre-built files, vendored `node_modules/`)
+- Focus on files likely generated during agent execution, not pre-existing tracked files
+- When reporting, include the specific file path and suggest adding the pattern to `.gitignore`
+
 ## FIX Criteria (fixable issues)
 
 | Finding | Verdict |
@@ -293,6 +326,7 @@ Check that the right types of tests exist:
 | Critical bug prevents functionality | FIX |
 | Missing integration tests | FIX |
 | Tests fail due to changes in this PR | FIX |
+| Undesirable files in workspace (build artifacts, binaries, temp files, cache dirs) | FIX |
 
 **Test Failure Attribution**
 
@@ -346,6 +380,13 @@ All of the following must be true:
 
 ## Verification Details
 [For each requirement, explain what you checked and what you found]
+
+## Workspace Hygiene
+(Only if issues found - omit section if clean)
+
+| File/Pattern | Category | Action Needed |
+|-------------|----------|---------------|
+| [path or glob] | [Build artifact/Binary/Temp/IDE/Coverage/etc.] | Remove from git and add pattern to .gitignore |
 
 ## Critical Issues
 (Only if blocking - omit section if none)
