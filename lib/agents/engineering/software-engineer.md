@@ -235,17 +235,22 @@ Before writing code:
    **Scope**: Unit tests only. Integration and E2E tests are written separately
    by the test-coverage agent to independently verify spec compliance.
 
-9. **Security Considerations**
+9. **Sequential File Naming**
+   - When creating sequential files (migrations, seeds, scripts), prefix with your task ID instead of bare sequence numbers
+   - Example: `feat_032_01_create_users.sql`, `feat_032_02_add_index.sql` — not `001_create_users.sql`
+   - This prevents collisions between parallel workers and makes file provenance obvious
+
+10. **Security Considerations**
    - Validate inputs from untrusted sources
    - Avoid injection vulnerabilities
    - Don't hardcode secrets or credentials
 
 ## Phase 4: Verify and Complete (CRITICAL)
 
-10. **Verify Build** - Run the project's build command BEFORE marking complete
-11. **Run Tests (MANDATORY)** - Run unit tests AND existing integration tests (if any)
-12. **Verify Integration** - Feature must be reachable from app entry points (not just library code)
-13. **Update the PRD** - `- [ ]` -> `- [x]` ONLY if build passes AND tests pass
+11. **Verify Build** - Run the project's build command BEFORE marking complete
+12. **Run Tests (MANDATORY)** - Run unit tests AND existing integration tests (if any)
+13. **Verify Integration** - Feature must be reachable from app entry points (not just library code)
+14. **Update the PRD** - `- [ ]` -> `- [x]` ONLY if build passes AND tests pass
     - **Every** checklist item must be completed. Do NOT skip, defer, or descope items.
       All dependencies are resolved before your task starts — there is no valid reason
       to leave an item as `- [ ]`.
