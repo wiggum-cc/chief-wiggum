@@ -93,9 +93,16 @@ do_start() {
         local existing
         existing=$(find_any_worker_by_task_id "$RALPH_DIR" "$task_id" | grep -v -- '-plan-' || true)
         if [ -n "$existing" ]; then
-            echo "Warning: Worker already exists for $task_id: $(basename "$existing")"
-            echo "Use 'wiggum worker resume $task_id' to resume it, or 'wiggum clean $task_id' first."
-            exit $EXIT_WORKER_ALREADY_EXISTS
+            # If the workspace was already cleaned, remove the dead worker dir and proceed
+            if [ ! -d "$existing/workspace" ]; then
+                log_info "Removing cleaned worker $(basename "$existing") (no workspace)"
+                safe_path "$existing" "existing_worker" || exit $EXIT_ERROR
+                rm -rf "$existing"
+            else
+                echo "Warning: Worker already exists for $task_id: $(basename "$existing")"
+                echo "Use 'wiggum worker resume $task_id' to resume it, or 'wiggum clean $task_id' first."
+                exit $EXIT_WORKER_ALREADY_EXISTS
+            fi
         fi
 
         # Create worker directory with unique timestamp
