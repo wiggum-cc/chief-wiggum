@@ -77,11 +77,11 @@ agent_run() {
     current_branch=$(git -C "$workspace" rev-parse --abbrev-ref HEAD 2>/dev/null)
 
     local push_exit=0
-    git -C "$workspace" push 2>&1 || push_exit=$?
+    git -C "$workspace" push -u origin "$current_branch" 2>&1 || push_exit=$?
     if [[ "$push_exit" -ne 0 ]]; then
         # Retry with force-with-lease (safe for single-owner task branches)
         push_exit=0
-        git -C "$workspace" push --force-with-lease 2>&1 || push_exit=$?
+        git -C "$workspace" push --force-with-lease -u origin "$current_branch" 2>&1 || push_exit=$?
     fi
     if [[ "$push_exit" -ne 0 ]]; then
         log_warn "Push failed (exit=$push_exit)"
