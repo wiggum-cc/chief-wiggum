@@ -39,6 +39,12 @@ The upstream auditor may have made mistakes. For EACH finding:
 ## Fix Rules
 
 - **One finding at a time** — verify, then fix, then move to next
+- **Regression test first** — if the audit report suggests a regression test, write it
+  **before** applying the fix. Run it to confirm it **fails** against the current code (proving
+  the bug is real). Then apply the fix and run it again to confirm it **passes**. If the test
+  doesn't fail before the fix, the finding may be a false positive — investigate before
+  proceeding. Skip this step only when a test isn't practical (architectural concerns, naming
+  issues, etc.).
 - **Minimal changes only** — fix exactly what's broken, nothing more
 - **Preserve behavior** — don't refactor while fixing
 - **Verify after fixing** — ensure the fix doesn't break builds or tests
@@ -99,9 +105,9 @@ The upstream audit report is above. Independently verify each finding and fix co
 
 ## Fixes Applied
 
-| Finding | File | Change Made |
-|---------|------|-------------|
-| [ID] | path:line | Brief description of fix |
+| Finding | File | Regression Test | Change Made |
+|---------|------|-----------------|-------------|
+| [ID] | path:line | Added/N/A | Brief description of fix |
 
 ## Rejected Findings
 

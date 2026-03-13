@@ -112,6 +112,7 @@ report under "Selection method".
 60. Cache invalidation bugs (memoization over mutable state, stale cache after mutation)
 61. Spec drift (code diverges from spec/, intent/, or TLA+ specifications — missing invariants, extra params, different defaults, renamed concepts)
 62. Over-engineering or under-engineering for stated scope (premature abstractions, gold-plating, or missing safeguards relative to the project's phase, scale, and performance targets — but never below production quality standards)
+63. Trivial or fake tests (tests that assert nothing meaningful, always pass, test mock wiring instead of behavior, or exist only to inflate coverage)
 
 **Generic Concerns** (broad, holistic):
 1. Overall code readability and clarity
@@ -150,7 +151,7 @@ report under "Selection method".
 34. Incomplete migrations (old and new patterns coexisting — e.g. two HTTP clients, two config systems)
 35. AI-generated code debt (restating comments, defensive overengineering, boilerplate copy-paste)
 36. Directory/package organization (flat dirs with too many files, structure not matching change boundaries)
-37. Test quality (fragile tests coupled to implementation details, snapshot overuse, timing-dependent tests)
+37. Test quality (fragile tests, snapshot overuse, timing-dependent tests, trivial/fake tests that assert nothing meaningful or always pass)
 38. Initialization and boot-order coupling (import-time side effects, load-order dependencies, global singletons)
 39. Cross-module boundary integrity (shared code importing from tools, backward coupling, misplaced modules)
 40. Complexity hotspots (files or functions with disproportionately high cyclomatic complexity)
@@ -162,6 +163,10 @@ With your randomly selected scope and concern, perform a thorough, evidence-base
 - Read the actual code in your selected scope
 - Look specifically for issues related to your selected concern
 - Every finding must have: file path, line number, code snippet, explanation
+- For each finding, suggest a **regression test** when feasible: describe a test that would
+  **fail against the current buggy code** and pass after the fix. The fix agent will write and
+  verify it — your job is to specify what to test and why. If a regression test isn't practical
+  (e.g. architectural concern, naming issue), say so briefly.
 - Provide a concrete fix suggestion for each finding
 - Rate severity honestly: CRITICAL / HIGH / MEDIUM / LOW / INFO
 
@@ -207,6 +212,7 @@ Perform a randomly-scoped, randomly-concerned code audit of the workspace.
 - **Location**: file:line
 - **Code**: `relevant snippet`
 - **Issue**: What's wrong and why it matters
+- **Regression test**: Test that fails on current code and passes after fix (or "N/A — [reason]")
 - **Fix**: Concrete remediation steps
 
 (Repeat for each finding. Omit severity sections with no findings.)
