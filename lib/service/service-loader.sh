@@ -63,8 +63,10 @@ _service_populate_cache() {
     # shellcheck disable=SC2034
     local -A phase_lists=()
 
-    # Single jq call: extract all cacheable fields for all enabled services
-    while IFS=$'\x1e' read -r id exec_type exec_func exec_cmd sched_type \
+    # Single jq call: extract all cacheable fields for ALL services (including disabled)
+    # Disabled services are cached but excluded from _SVC_CACHE_ENABLED so the
+    # scheduler ignores them while `service run <id>` can still trigger them manually.
+    while IFS=$'\x1e' read -r id svc_enabled exec_type exec_func exec_cmd sched_type \
             sched_interval sched_jitter run_on_startup phase order timeout \
             cb_enabled cb_cooldown cb_half_open cb_threshold depends_on conc_max \
             conc_if_running conc_priority conc_queue_max cond_file_exists \
@@ -72,8 +74,10 @@ _service_populate_cache() {
             sched_triggers exec_workspace exec_git_worktree exec_pull_before; do
         [ -n "$id" ] || continue
 
-        _SVC_CACHE_ENABLED+="${_SVC_CACHE_ENABLED:+ }${id}"
-        phase_lists[$phase]+="${phase_lists[$phase]:+ }${id}"
+        if [ "$svc_enabled" = "true" ]; then
+            _SVC_CACHE_ENABLED+="${_SVC_CACHE_ENABLED:+ }${id}"
+            phase_lists[$phase]+="${phase_lists[$phase]:+ }${id}"
+        fi
 
         _SVC_CACHE["exec_type:${id}"]="$exec_type"
         _SVC_CACHE["exec_func:${id}"]="$exec_func"
@@ -116,15 +120,19 @@ _service_populate_cache() {
         (.defaults.circuit_breaker.enabled // false) as $default_cb |
         (.defaults.timeout // 300) as $default_timeout |
         [.services[] |
-            select(.enabled != false) |
-            select(
-                (.groups // []) as $svc_groups |
-                ($svc_groups | length == 0) or
-                ($svc_groups | map(. as $g | $groups[$g].enabled // true) | all)
-            )
-        ] | sort_by(.phase // "periodic", .order // 50) | .[] |
+            # Compute effective enabled: service enabled AND all its groups enabled
+            # Note: (.enabled // true) does not work because jq // treats false as absent
+            ((if .enabled == null then true else .enabled end) and (
+                ((.groups // []) | length == 0) or
+                ((.groups // []) | map(. as $g | $groups[$g].enabled // true) | all)
+            )) as $eff_enabled |
+            # Include all services (disabled cached too for manual triggering)
+            {s: ., e: $eff_enabled}
+        ] | sort_by(.s.phase // "periodic", .s.order // 50) | .[] |
+        .e as $eff_enabled | .s |
         [
             .id,
+            ($eff_enabled | tostring),
             (.execution.type // "function"),
             (.execution.function // ""),
             (.execution.command // ""),

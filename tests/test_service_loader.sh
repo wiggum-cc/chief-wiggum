@@ -358,6 +358,32 @@ JSON
     assert_output_not_contains "$enabled" "disabled-1" "Should not include disabled-1"
 }
 
+test_disabled_service_cached_for_manual_run() {
+    cat > "$TEST_DIR/services.json" << 'JSON'
+{
+    "version": "1.0",
+    "services": [
+        { "id": "active-svc", "enabled": true, "schedule": { "type": "interval", "interval": 60 }, "execution": { "type": "command", "command": "echo active" } },
+        { "id": "inactive-svc", "enabled": false, "schedule": { "type": "interval", "interval": 120 }, "execution": { "type": "pipeline", "pipeline": "autofix" } }
+    ]
+}
+JSON
+
+    service_load "$TEST_DIR/services.json"
+
+    # Disabled service should NOT appear in enabled list
+    local enabled
+    enabled=$(service_get_enabled)
+    assert_output_not_contains "$enabled" "inactive-svc" "Disabled service should not be in enabled list"
+
+    # But its execution config SHOULD be cached for manual triggering
+    local exec_type="${_SVC_CACHE["exec_type:inactive-svc"]:-}"
+    assert_equals "pipeline" "$exec_type" "Disabled service exec_type should be cached"
+
+    local exec_type_active="${_SVC_CACHE["exec_type:active-svc"]:-}"
+    assert_equals "command" "$exec_type_active" "Enabled service exec_type should also be cached"
+}
+
 test_get_concurrency_config() {
     cat > "$TEST_DIR/services.json" << 'JSON'
 {
@@ -689,6 +715,7 @@ run_test test_get_interval
 run_test test_runs_on_startup_true
 run_test test_runs_on_startup_false
 run_test test_get_enabled_services
+run_test test_disabled_service_cached_for_manual_run
 run_test test_get_concurrency_config
 run_test test_get_default_concurrency
 run_test test_get_timeout_with_default
