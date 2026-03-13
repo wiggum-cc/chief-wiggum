@@ -28,9 +28,11 @@ agent_run() {
     local md_exit=0
     _md_quality_gate_run "$@" || md_exit=$?
 
-    # Read the gate result
+    # Read the gate result from the CURRENT run's result file.
+    # agent_find_latest_result searches by agent type ("autofix.quality-gate") but
+    # result files are named by step ID ("quality-gate"), so it finds nothing.
     local result_file
-    result_file=$(agent_find_latest_result "$worker_dir" "autofix.quality-gate")
+    result_file=$(agent_get_result_path "$worker_dir")
     local gate_result="FAIL"
     if [[ -n "$result_file" ]] && [[ -f "$result_file" ]]; then
         gate_result=$(jq -r '.outputs.gate_result // "FAIL"' "$result_file" 2>/dev/null)
