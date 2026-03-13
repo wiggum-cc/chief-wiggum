@@ -356,6 +356,34 @@
         "FIX":  { "status": "partial", "exit_code": 0, "default_jump": "next" }
       }
     },
+    "autofix.random-audit": {
+      "max_iterations": 1,
+      "max_turns": 120,
+      "timeout_seconds": 1800,
+      "result_mappings": {
+        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
+        "FAIL": { "status": "failure", "exit_code": 0, "default_jump": "next" }
+      }
+    },
+    "autofix.verify-fix": {
+      "max_iterations": 8,
+      "max_turns": 60,
+      "timeout_seconds": 3600,
+      "result_mappings": {
+        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
+        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" },
+        "SKIP": { "status": "success", "exit_code": 0, "default_jump": "next" }
+      }
+    },
+    "autofix.quality-gate": {
+      "max_iterations": 1,
+      "max_turns": 120,
+      "timeout_seconds": 3600,
+      "result_mappings": {
+        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
+        "FAIL": { "status": "failure", "exit_code": 0, "default_jump": "next" }
+      }
+    },
     "redteam.remediate": {
       "max_iterations": 10,
       "max_turns": 100,
