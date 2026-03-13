@@ -25,15 +25,7 @@
       "agent": "autofix.quality-gate",
       "max": 10,
       "on_result": {
-        "PASS": {
-          "id": "commit-good-fix",
-          "agent": "workflow.git-commit-push",
-          "commit_after": true,
-          "on_result": {
-            "PASS": { "jump": "random-audit" },
-            "FAIL": { "jump": "random-audit" }
-          }
-        },
+        "PASS": { "jump": "random-audit" },
         "FAIL": { "jump": "random-audit" }
       }
     }

@@ -80,7 +80,7 @@ git clean -fd
 ```
 This resets the workspace so the next audit cycle starts clean.
 
-**If PASS**: Leave changes in place. The pipeline will commit and push them.
+**If PASS**: Leave changes in place. Commit, push, and PR creation are handled automatically.
 </WIGGUM_SYSTEM_PROMPT>
 
 <WIGGUM_USER_PROMPT>
