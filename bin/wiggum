@@ -46,6 +46,9 @@ Pull Requests:
   pr create <ID>      Create PR for worker branch
   pr resolve <ID>     Resolve merge conflicts
 
+Project Pipelines:
+  autofix             Run autofix pipeline (alias for service run autofix)
+
 Cleanup & Debug:
   clean <target>      Clean workspaces/logs/tasks
   inspect <target>    Debug workers, pipelines, agents
@@ -161,6 +164,10 @@ main() {
                 exec "$WIGGUM_HOME/bin/wiggum-inspect" log "$@"
             fi
             exec "$WIGGUM_HOME/bin/wiggum-inspect" "$@"
+            ;;
+
+        autofix)
+            exec "$WIGGUM_HOME/bin/wiggum-service" run autofix "$@"
             ;;
 
         -h|--help|help)

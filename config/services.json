@@ -744,6 +744,35 @@
         "type": "function",
         "function": "svc_orch_lock_cleanup"
       }
+    },
+
+    {
+      "id": "autofix",
+      "description": "Autonomous code improvement: randomly audit, verify, fix, and quality-gate",
+      "enabled": false,
+      "phase": "periodic",
+      "groups": ["autofix"],
+      "schedule": {
+        "type": "cron",
+        "cron": "0 */6 * * *"
+      },
+      "execution": {
+        "type": "pipeline",
+        "pipeline": "autofix",
+        "workspace": true,
+        "git_worktree": true,
+        "pull_before": true
+      },
+      "timeout": 7200,
+      "concurrency": {
+        "max_instances": 1,
+        "if_running": "skip"
+      },
+      "circuit_breaker": {
+        "enabled": true,
+        "threshold": 3,
+        "cooldown": 1800
+      }
     }
   ]
 }

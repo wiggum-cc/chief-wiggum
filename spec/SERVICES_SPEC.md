@@ -355,13 +355,18 @@ Execute a named pipeline using `pipeline_load` + `pipeline_run_all`.
 | `type` | const | Yes | - | Must be `"pipeline"` |
 | `pipeline` | string | Yes | - | Pipeline name to execute |
 | `workspace` | boolean | No | `false` | Create isolated worker directory per run |
+| `git_worktree` | boolean | No | `false` | Create a git worktree (requires `workspace: true`). Provides real git isolation and a working `_commit_subagent_changes` so pipeline steps can commit between phases. |
+| `pull_before` | boolean | No | `false` | Pull latest main (fast-forward) before creating the workspace. Ensures the pipeline operates on the most recent codebase state. |
 | `env` | object | No | - | Environment variables to pass to pipeline subprocess |
 
 Pipeline config is resolved from (first match):
 1. `.ralph/pipelines/{name}.json`
 2. `config/pipelines/{name}.json`
 
-The pipeline runner provides no-op stubs for task-worker functions (`_phase_start`, `_phase_end`, `_commit_subagent_changes`) that the pipeline runner calls but are normally provided by task-worker.sh.
+**Workspace modes for pipelines:**
+- `workspace: false` (default): Pipeline runs against the project directory directly. Read-only or analysis pipelines.
+- `workspace: true, git_worktree: false`: Isolated worker directory with plain `workspace/` subdirectory. Per-run artifacts without git isolation.
+- `workspace: true, git_worktree: true`: Full git worktree with task branch. For pipelines that modify code, create commits, and push PRs. The pipeline gets a real `_commit_subagent_changes` implementation (not a no-op).
 
 ### Agent Execution
 
@@ -511,7 +516,7 @@ Services can operate in two workspace modes, controlled by the `execution.worksp
 
 ```
 .ralph/workers/service-{id}-{timestamp}/
-├── workspace/      (pipeline workspace or git worktree)
+├── workspace/      (plain directory or git worktree)
 ├── logs/
 ├── results/
 └── output/
@@ -519,7 +524,22 @@ Services can operate in two workspace modes, controlled by the `execution.worksp
 
 - New directory per run (epoch-named to prevent collisions)
 - Same pattern as task worker directories
-- For services that modify code, need git isolation, or produce per-run artifacts
+- For services that produce per-run artifacts or need isolation
+
+### Git Worktree Mode (`workspace: true, git_worktree: true`)
+
+```
+.ralph/workers/service-{id}-{timestamp}/
+├── workspace/      (git worktree on task/service-{id}-{epoch} branch)
+├── logs/
+├── results/
+└── output/
+```
+
+- Full git worktree with dedicated branch (avoids branch contention)
+- Real `_commit_subagent_changes` — pipeline steps can commit between phases
+- Combined with `pull_before: true` to ensure workspace starts from latest main
+- For pipelines that modify code, create commits, and push PRs (e.g., autofix)
 
 ### Configuration
 
@@ -527,8 +547,10 @@ Services can operate in two workspace modes, controlled by the `execution.worksp
 {
   "execution": {
     "type": "pipeline",
-    "pipeline": "security-scan",
-    "workspace": true
+    "pipeline": "autofix",
+    "workspace": true,
+    "git_worktree": true,
+    "pull_before": true
   }
 }
 ```

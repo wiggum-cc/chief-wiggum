@@ -437,6 +437,16 @@
           "default": false,
           "description": "If true, creates an isolated worker directory per run (.ralph/workers/service-{id}-{ts}/). If false (default), uses lightweight persistent directory (.ralph/services/{id}/)."
         },
+        "git_worktree": {
+          "type": "boolean",
+          "default": false,
+          "description": "If true (requires workspace: true), creates a git worktree instead of a plain directory. Provides real git isolation and commit support between pipeline steps."
+        },
+        "pull_before": {
+          "type": "boolean",
+          "default": false,
+          "description": "If true, pulls latest main (fast-forward) before creating the workspace. Ensures the pipeline operates on the most recent codebase state."
+        },
         "env": {
           "type": "object",
           "additionalProperties": { "type": "string" },
