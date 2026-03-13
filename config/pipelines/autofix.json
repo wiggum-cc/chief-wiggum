@@ -5,10 +5,12 @@
     {
       "id": "random-audit",
       "agent": "autofix.random-audit",
-      "max": 10,
+      "max": 30,
       "readonly": true,
       "on_result": {
-        "PASS": { "jump": "random-audit" }
+        "PASS": {
+          "jump": "random-audit"
+        }
       }
     },
     {
@@ -17,7 +19,9 @@
       "max": 10,
       "commit_after": false,
       "on_result": {
-        "SKIP": { "jump": "random-audit" }
+        "SKIP": {
+          "jump": "random-audit"
+        }
       }
     },
     {
@@ -25,8 +29,12 @@
       "agent": "autofix.quality-gate",
       "max": 10,
       "on_result": {
-        "PASS": { "jump": "random-audit" },
-        "FAIL": { "jump": "random-audit" }
+        "PASS": {
+          "jump": "random-audit"
+        },
+        "FAIL": {
+          "jump": "random-audit"
+        }
       }
     }
   ]

@@ -43,37 +43,85 @@ First, coin flip (`shuf -i 0-1 -n 1`):
 
 Then enumerate the items in the chosen list and pick one randomly (`shuf`).
 
+**Applicability rule**: After picking a concern, skim the code in your selected scope. If the
+concern does not apply to the languages, frameworks, or patterns actually present (e.g. you
+picked a shell-specific concern but the scope is pure Python), **repick** — run `shuf` again
+on the same list until you land on a concern that is relevant. Record all repicks in your
+report under "Selection method".
+
 **Specific Concerns** (narrow, targeted):
 1. Off-by-one errors and boundary conditions
-2. Resource leaks (file handles, connections, memory)
+2. Resource leaks (file handles, connections, memory, subprocesses)
 3. Race conditions and concurrency bugs
-4. Null/undefined reference handling
-5. Error swallowing (catch blocks that silently discard errors)
+4. Null/undefined/nil/None reference handling
+5. Error swallowing (catch/except/rescue blocks that silently discard errors)
 6. Hardcoded magic numbers or strings
-7. SQL injection or command injection vectors
+7. Injection vectors (SQL, command, template, header, LDAP)
 8. Unreachable or dead code paths
-9. Inconsistent naming conventions
+9. Inconsistent naming conventions within a module or directory
 10. Missing input validation at trust boundaries
-11. Incorrect operator precedence
-12. Stale or misleading comments
-13. Duplicated logic that should be extracted
-14. Incorrect error messages (wrong variable, wrong context)
-15. Missing or incorrect type annotations
-16. Unhandled edge cases in switch/match statements
+11. Incorrect operator precedence or associativity
+12. Stale or misleading comments (comments that contradict the code)
+13. Near-duplicate functions that should be unified (same logic, slightly different signatures)
+14. Incorrect error messages (wrong variable, wrong context, wrong severity)
+15. Missing or incorrect type annotations / type hints
+16. Unhandled edge cases in switch/match/case statements
 17. Fragile string parsing that should use structured formats
-18. Circular dependencies between modules
-19. Functions with too many responsibilities
+18. Circular or tangled dependencies between modules
+19. God objects/modules (too many public methods, mixed domain concerns, high fan-in)
 20. Missing cleanup in error/exception paths
+21. TOCTOU (time-of-check-time-of-use) races on files, locks, or shared state
+22. Unsafe string interpolation or concatenation (word splitting, glob expansion, format strings)
+23. Symlink following in shared or world-writable directories
+24. Predictable or hardcoded temp file paths instead of safe-temp APIs
+25. Variable scope leaks (closures capturing mutables, subshell isolation, thread locals)
+26. Missing or incorrect exit/return code propagation
+27. Unchecked return values from system calls or library functions
+28. Stdout/stderr contamination in functions that return values
+29. Delimiter or separator handling errors (empty fields collapsing, off-by-one splits)
+30. File descriptor or socket leaks (opened handles never closed, especially in loops)
+31. Missing locking on shared resources (files, databases, caches)
+32. Stale locks or leases from crashed processes with no expiry/cleanup
+33. Format string injection (user input as format argument to printf, logging, etc.)
+34. Unsafe eval, exec, or dynamic code execution on unsanitized input
+35. Missing path validation before destructive filesystem operations
+36. Locale-dependent behavior (collation, case conversion, number formatting, date parsing)
+37. Integer overflow, underflow, or division by zero
+38. Process/thread lifecycle mismanagement (orphans, zombies, leaked goroutines, dangling futures)
+39. Signal/interrupt handlers not covering all exit paths
+40. Non-atomic file writes (partial writes on crash instead of write-tmp-then-rename)
+41. Incorrect escaping or quoting in generated code, queries, or shell commands
+42. Collection/container iteration bugs (mutating while iterating, wrong index type)
+43. Incorrect default value semantics (null vs empty vs missing vs zero)
+44. Regex injection or catastrophic backtracking (ReDoS via nested quantifiers)
+45. Missing pipeline/chain error detection (suppressed intermediate failures)
+46. Inherited state leaking across call boundaries (env vars, FDs, thread context, globals)
+47. Config/data file parsing without schema or syntax validation
+48. Unchecked external tool output used in comparisons or arithmetic
+49. Incorrect ordering of operations with side effects (redirections, middleware, hooks)
+50. Silent arithmetic edge cases (post-increment evaluating to falsy, float truncation, NaN propagation)
+51. Passthrough/forwarding functions that add no logic (just forward args to another function)
+52. Signature variance (same function name across files with inconsistent parameter lists or return types)
+53. Import-time or load-time side effects (DB connections, network calls, file I/O at module scope)
+54. Insecure randomness (Math.random, rand(), random module used where crypto-secure RNG needed)
+55. Sensitive data in log output (passwords, tokens, PII passed to loggers or print statements)
+56. Weak or deprecated cryptographic algorithms (MD5, SHA1, DES, RC4, TLS < 1.2)
+57. Orphaned files with zero importers/callers (not entry points, dead weight in the repo)
+58. Single-use abstractions (files/classes imported by exactly one consumer — inlining candidates)
+59. Subprocess or external command calls without timeout
+60. Cache invalidation bugs (memoization over mutable state, stale cache after mutation)
+61. Spec drift (code diverges from spec/, intent/, or TLA+ specifications — missing invariants, extra params, different defaults, renamed concepts)
+62. Over-engineering or under-engineering for stated scope (premature abstractions, gold-plating, or missing safeguards relative to the project's phase, scale, and performance targets — but never below production quality standards)
 
 **Generic Concerns** (broad, holistic):
 1. Overall code readability and clarity
-2. Test coverage gaps
+2. Test coverage gaps (critical paths untested, missing edge-case tests)
 3. API design consistency
 4. Documentation accuracy
 5. Performance bottlenecks
 6. Security posture
-7. Error handling strategy
-8. Dependency hygiene (outdated, unused, vulnerable)
+7. Error handling strategy (mixed paradigms — exceptions vs error returns vs Result types)
+8. Dependency hygiene (outdated, unused, vulnerable, duplicate deps for same purpose)
 9. Configuration management
 10. Logging and observability
 11. Code modularity and separation of concerns
@@ -81,6 +129,31 @@ Then enumerate the items in the chosen list and pick one randomly (`shuf`).
 13. Platform/environment portability
 14. Build and CI/CD robustness
 15. Data integrity and validation patterns
+16. Graceful degradation and fault tolerance
+17. Idempotency of operations (safe to re-run after partial failure)
+18. Credential and secret hygiene (no tokens/keys in code, logs, or version control)
+19. Timeout and retry strategy (unbounded waits, retry storms, missing backoff)
+20. Process/thread lifecycle management (cleanup, signal handling, orphan prevention)
+21. Concurrency safety (lock ordering, deadlock potential, stale locks)
+22. Resource exhaustion resilience (disk, memory, file descriptors, connection pools)
+23. Version control hygiene (stale branches, orphan artifacts, ignored file patterns)
+24. Spec compliance (code matches documented specifications and schemas)
+25. Correlation and traceability (can a single operation be traced end-to-end through logs)
+26. Input/output contract clarity (function signatures, return conventions, side effects)
+27. Defensive coding against external tool/service failures (unexpected output, timeouts, partial responses)
+28. Rate limiting and API politeness (respecting backoff signals, circuit breaking)
+29. Cleanup completeness on all exit paths (normal, error, signal, crash)
+30. State machine correctness (valid transitions, guard coverage, terminal state reachability)
+31. Abstraction fitness (do abstractions pay for themselves, or are they pass-through wrappers and single-impl interfaces)
+32. Naming quality (vague names like process, handle, do, run, data, result, tmp that hide intent)
+33. Dead code and orphaned modules (files, functions, exports, routes nobody references)
+34. Incomplete migrations (old and new patterns coexisting — e.g. two HTTP clients, two config systems)
+35. AI-generated code debt (restating comments, defensive overengineering, boilerplate copy-paste)
+36. Directory/package organization (flat dirs with too many files, structure not matching change boundaries)
+37. Test quality (fragile tests coupled to implementation details, snapshot overuse, timing-dependent tests)
+38. Initialization and boot-order coupling (import-time side effects, load-order dependencies, global singletons)
+39. Cross-module boundary integrity (shared code importing from tools, backward coupling, misplaced modules)
+40. Complexity hotspots (files or functions with disproportionately high cyclomatic complexity)
 
 ### Step 3: Perform the Audit
 
