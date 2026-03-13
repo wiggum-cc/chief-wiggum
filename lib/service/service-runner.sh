@@ -550,9 +550,10 @@ _run_service_pipeline() {
 
         activity_log "service.started" "" "" "service=$id" "type=pipeline" "pipeline=$pipeline_name"
 
-        # Source pipeline loader and runner
+        # Source pipeline loader, runner, and agent registry (provides run_sub_agent)
         source "$WIGGUM_HOME/lib/pipeline/pipeline-loader.sh"
         source "$WIGGUM_HOME/lib/pipeline/pipeline-runner.sh"
+        source "$WIGGUM_HOME/lib/worker/agent-registry.sh"
 
         # Provide stubs for task-worker functions that pipeline-runner calls.
         # These are normally provided by task-worker.sh but service pipelines run standalone.
@@ -838,6 +839,7 @@ service_run_sync() {
 
                 source "$WIGGUM_HOME/lib/pipeline/pipeline-loader.sh" 2>/dev/null || true
                 source "$WIGGUM_HOME/lib/pipeline/pipeline-runner.sh" 2>/dev/null || true
+                source "$WIGGUM_HOME/lib/worker/agent-registry.sh" 2>/dev/null || true
 
                 # Provide stubs for task-worker functions
                 declare -F _phase_start &>/dev/null || _phase_start() { :; }
