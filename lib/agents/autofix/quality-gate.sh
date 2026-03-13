@@ -37,7 +37,9 @@ agent_run() {
     fi
 
     if [[ "$gate_result" != "PASS" ]]; then
-        log_debug "Quality gate FAIL — skipping commit/PR"
+        log "Quality gate FAIL — discarding uncommitted changes"
+        git -C "$workspace" checkout -- . 2>/dev/null || true
+        git -C "$workspace" clean -fd 2>/dev/null || true
         return "$md_exit"
     fi
 
