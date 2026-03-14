@@ -24,14 +24,23 @@ WORKSPACE: {{workspace}}
 
 You must randomly choose ONE scope to audit. Use this process:
 
-1. List all top-level directories and standalone files in the workspace
-2. Assign each a number starting from 1
-3. Pick a random number to select your target (use `shuf -i 1-N -n 1` or `$RANDOM % N + 1`)
-4. Coin flip (`shuf -i 0-1 -n 1`):
+1. List all top-level directories and standalone files in the workspace, **excluding**:
+   - Examples and sample code (`examples/`, `example/`, `samples/`, `demo/`, `demos/`)
+   - Vendored / third-party code (`vendor/`, `third_party/`, `node_modules/`, `_vendor/`, `.bundle/`, `ref/`, `reference/`, `references/`)
+   - Temporary directories (`tmp/`, `temp/`)
+   - Documentation sites and generated docs (`docs/site/`, `site/`, `_site/`, `public/`, `dist/`, `build/`, `.docusaurus/`, `.next/`, `out/`)
+   - Auto-generated files (`generated/`, `gen/`, `*.generated.*`, `*.g.*`)
+   - Lock files and package caches (`.yarn/`, `.pnp.*`, `__pycache__/`)
+   - Hidden directories (`.git/`, `.github/`, `.vscode/`, `.idea/`)
+   - If unsure whether a directory is vendored or generated, check for a license file from a different project or a "DO NOT EDIT" header — if found, exclude it
+2. For each remaining entry, count its size (number of non-binary files recursively, e.g. `find <dir> -type f | wc -l`, or 1 for standalone files)
+3. Compute a weight for each entry: `weight = floor(sqrt(size))`, minimum 1
+4. Build a weighted pool: repeat each entry's number by its weight, then pick one randomly with `shuf -n 1`
+   - Example: if `lib/` has 100 files (weight=10) and `README.md` has 1 file (weight=1), the pool has 10 entries for `lib/` and 1 for `README.md`
+   - This gives larger scopes more audit opportunity, but sublinearly — a 100-file directory is only 10x more likely than a 1-file entry, not 100x
+5. Coin flip (`shuf -i 0-1 -n 1`):
    - 0 = **Global scope**: audit the entire codebase for the chosen concern
    - 1 = **Focused scope**: drill into the randomly selected directory/file only
-
-This ensures big modules and small files get equal audit opportunity.
 
 ### Step 2: Random Concern Selection
 
