@@ -761,7 +761,8 @@
         "pipeline": "autofix",
         "workspace": true,
         "git_worktree": true,
-        "pull_before": true
+        "pull_before": true,
+        "max_workers": 4
       },
       "timeout": 7200,
       "concurrency": {

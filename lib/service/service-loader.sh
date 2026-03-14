@@ -71,7 +71,8 @@ _service_populate_cache() {
             cb_enabled cb_cooldown cb_half_open cb_threshold depends_on conc_max \
             conc_if_running conc_priority conc_queue_max cond_file_exists \
             cond_file_not_exists cond_env_set cond_command has_condition \
-            sched_triggers exec_workspace exec_git_worktree exec_pull_before; do
+            sched_triggers exec_workspace exec_git_worktree exec_pull_before \
+            exec_max_workers; do
         [ -n "$id" ] || continue
 
         if [ "$svc_enabled" = "true" ]; then
@@ -115,6 +116,7 @@ _service_populate_cache() {
         _SVC_CACHE["exec_workspace:${id}"]="$exec_workspace"
         _SVC_CACHE["exec_git_worktree:${id}"]="$exec_git_worktree"
         _SVC_CACHE["exec_pull_before:${id}"]="$exec_pull_before"
+        _SVC_CACHE["exec_max_workers:${id}"]="$exec_max_workers"
     done < <(_service_jq -r '
         .groups as $groups |
         (.defaults.circuit_breaker.enabled // false) as $default_cb |
@@ -162,7 +164,8 @@ _service_populate_cache() {
              else "" end),
             (.execution.workspace // false | tostring),
             (.execution.git_worktree // false | tostring),
-            (.execution.pull_before // false | tostring)
+            (.execution.pull_before // false | tostring),
+            (.execution.max_workers // 1 | tostring)
         ] | join("\u001e")
     ')
 

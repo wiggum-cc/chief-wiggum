@@ -26,12 +26,14 @@ Usage: wiggum service <command> [options]
 Commands:
   list                    List all configured services
   status [<id>]           Show service status (all or specific)
-  run <id>                Manually trigger a service
+  run <id> [options]      Manually trigger a service
   stop <id>               Stop a running service
   config [<id>]           Show service configuration
 
 Options:
   --json                  Output in JSON format
+  --max-workers N         Override max parallel workers for pipeline services (default from config)
+  --sync                  Run service synchronously (blocking)
   -v, --verbose           Verbose output
   -h, --help              Show this help message
 
@@ -40,6 +42,8 @@ Examples:
   wiggum service status                  # Show status of all services
   wiggum service status pr-sync          # Show status of pr-sync service
   wiggum service run pr-sync             # Manually run pr-sync
+  wiggum service run autofix             # Run autofix with default 4 workers
+  wiggum service run autofix --max-workers 2  # Run autofix with 2 workers
   wiggum service config task-spawner     # Show task-spawner config
 
 Service Types:
@@ -253,10 +257,15 @@ cmd_status() {
 cmd_run() {
     local service_id=""
     local sync=false
+    local -a extra_args=()
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --sync) sync=true; shift ;;
+            --max-workers)
+                extra_args+=("--max-workers" "$2")
+                shift 2
+                ;;
             -*) shift ;;
             *) service_id="$1"; shift ;;
         esac
@@ -264,7 +273,7 @@ cmd_run() {
 
     if [ -z "$service_id" ]; then
         echo "Error: Service ID required" >&2
-        echo "Usage: wiggum service run <service-id>" >&2
+        echo "Usage: wiggum service run <service-id> [--max-workers N]" >&2
         return 1
     fi
 
@@ -278,7 +287,7 @@ cmd_run() {
     echo "Running service: $service_id"
 
     if [ "$sync" = true ]; then
-        service_run_sync "$service_id"
+        service_run_sync "$service_id" "${extra_args[@]}"
         local rc=$?
         if [ "$rc" -eq 0 ]; then
             echo "Service completed successfully"
@@ -287,7 +296,7 @@ cmd_run() {
         fi
         return "$rc"
     else
-        service_run "$service_id"
+        service_run "$service_id" "${extra_args[@]}"
         echo "Service started in background"
         echo "Use 'wiggum service status $service_id' to check progress"
     fi

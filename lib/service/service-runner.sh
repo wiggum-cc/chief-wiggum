@@ -434,6 +434,125 @@ _resolve_service_workspace() {
     fi
 }
 
+# Set up workspace directory for a pipeline worker
+#
+# Args:
+#   id               - Service identifier
+#   use_workspace    - "true" for isolated workspace
+#   use_git_worktree - "true" for git worktree
+#   worker_dir       - Worker directory path
+#
+# Returns: workspace path via stdout, non-zero on failure
+_setup_pipeline_workspace() {
+    local id="$1"
+    local use_workspace="$2"
+    local use_git_worktree="$3"
+    local worker_dir="$4"
+
+    if [ "$use_workspace" = "true" ]; then
+        if [ "$use_git_worktree" = "true" ]; then
+            source "$WIGGUM_HOME/lib/git/worktree-helpers.sh"
+            if ! setup_worktree "$_RUNNER_PROJECT_DIR" "$worker_dir" "service-${id}"; then
+                log_error "Service $id: failed to create git worktree"
+                return 1
+            fi
+            echo "$WORKTREE_PATH"
+        else
+            local ws="$worker_dir/workspace"
+            mkdir -p "$ws"
+            echo "$ws"
+        fi
+    else
+        echo "$_RUNNER_PROJECT_DIR"
+    fi
+}
+
+# Run a single pipeline worker instance
+#
+# Executes the pipeline in a subshell with proper logging and environment.
+# Designed to be called directly or in a background subshell.
+#
+# Args:
+#   id               - Service identifier
+#   pipeline_name    - Pipeline name
+#   pipeline_config  - Path to pipeline config file
+#   worker_dir       - Worker directory
+#   workspace_path   - Workspace directory (project or worktree)
+#   use_git_worktree - "true" if using git worktree
+#   start_time       - Service start timestamp
+#   worker_index     - Worker index (0-based, for logging)
+_run_pipeline_worker() {
+    local id="$1"
+    local pipeline_name="$2"
+    local pipeline_config="$3"
+    local worker_dir="$4"
+    local workspace_path="$5"
+    local use_git_worktree="$6"
+    local start_time="$7"
+    local worker_index="$8"
+
+    local worker_suffix=""
+    [ "$worker_index" -gt 0 ] && worker_suffix="-w${worker_index}"
+
+    export LOG_FILE="$_RUNNER_RALPH_DIR/logs/service-${id}${worker_suffix}.log"
+    source "$WIGGUM_HOME/lib/core/logger.sh"
+    source "$WIGGUM_HOME/lib/utils/activity-log.sh"
+    activity_init "$_RUNNER_PROJECT_DIR"
+
+    log "Service $id worker $worker_index starting (type: pipeline)"
+    log_debug "pipeline=$pipeline_name"
+    log_debug "config=$pipeline_config"
+    log_debug "worker_dir=$worker_dir"
+    log_debug "workspace=$workspace_path"
+
+    export RALPH_DIR="$_RUNNER_RALPH_DIR"
+    export PROJECT_DIR="$_RUNNER_PROJECT_DIR"
+    export SERVICE_ID="$id"
+    export SERVICE_START_TIME="$start_time"
+    export WIGGUM_HOME
+    export WIGGUM_TASK_ID="${WIGGUM_TASK_ID:-${id}}${worker_suffix}"
+
+    activity_log "service.started" "" "" "service=$id" "type=pipeline" "pipeline=$pipeline_name" "worker=$worker_index"
+
+    # Source pipeline loader, runner, and agent registry
+    source "$WIGGUM_HOME/lib/pipeline/pipeline-loader.sh"
+    source "$WIGGUM_HOME/lib/pipeline/pipeline-runner.sh"
+    source "$WIGGUM_HOME/lib/worker/agent-registry.sh"
+
+    # Stubs for task-worker functions
+    _phase_start()  { :; }
+    _phase_end()    { :; }
+
+    if [ "$use_git_worktree" = "true" ]; then
+        source "$WIGGUM_HOME/lib/git/git-operations.sh"
+        _commit_subagent_changes() {
+            local ws="$1" agent_name="$2"
+            cd "$ws" || return 1
+            if git diff --quiet && git diff --staged --quiet; then return 0; fi
+            git add . 2>/dev/null || true
+            git reset HEAD -- '.env' '.env.*' '*.pem' '*.key' 'credentials.json' '.secrets' 2>/dev/null || true
+            if git diff --staged --quiet; then return 0; fi
+            git_set_identity
+            local msg="${SERVICE_ID:-service}: ${WIGGUM_STEP_ID:-unknown} - ${agent_name}"
+            git commit -m "$msg" >/dev/null 2>&1 && log "Committed $agent_name changes" || log_warn "Failed to commit $agent_name changes"
+        }
+    else
+        _commit_subagent_changes() { :; }
+    fi
+
+    # Load and run the pipeline
+    local _exit_code=0
+    pipeline_load "$pipeline_config" || _exit_code=$?
+
+    if [ "$_exit_code" -eq 0 ]; then
+        pipeline_run_all "$worker_dir" "$_RUNNER_PROJECT_DIR" "$workspace_path" "" || _exit_code=$?
+    fi
+
+    log "Service $id worker $worker_index completed (exit_code=$_exit_code)"
+    activity_log "service.completed" "" "" "service=$id" "exit_code=$_exit_code" "worker=$worker_index"
+    return "$_exit_code"
+}
+
 # Run a pipeline-type service
 #
 # Executes a named pipeline using pipeline_load + pipeline_run_all.
@@ -441,12 +560,15 @@ _resolve_service_workspace() {
 #   workspace: true  -> isolated worker directory per run
 #   workspace: false -> lightweight .ralph/services/{id}/ directory (default)
 #
+# When execution.max_workers > 1, spawns multiple parallel pipeline instances,
+# each in its own isolated workspace/worktree.
+#
 # Args:
 #   id            - Service identifier
 #   pipeline_name - Pipeline name to execute
 #   timeout       - Timeout in seconds
 #   limits        - JSON limits config
-#   extra         - Extra arguments
+#   extra         - Extra arguments (supports --max-workers N override)
 _run_service_pipeline() {
     local id="$1"
     local pipeline_name="$2"
@@ -502,100 +624,96 @@ _run_service_pipeline() {
             log_warn "Service $id: could not fast-forward to origin/$default_branch"
     fi
 
-    # Resolve workspace/worker directory before forking
-    local worker_dir
-    worker_dir=$(_resolve_service_workspace "$id" "$use_workspace")
-
-    # Workspace path: for isolated workspace services, the worker's workspace dir;
-    # for lightweight services, the project directory directly
-    local workspace_path
-    if [ "$use_workspace" = "true" ]; then
-        if [ "$use_git_worktree" = "true" ]; then
-            # Create a proper git worktree for code-modifying pipelines
-            source "$WIGGUM_HOME/lib/git/worktree-helpers.sh"
-            if ! setup_worktree "$_RUNNER_PROJECT_DIR" "$worker_dir" "service-${id}"; then
-                log_error "Service $id: failed to create git worktree"
-                service_state_mark_failed "$id"
-                return 1
+    # Determine max workers (how many parallel pipelines to spawn)
+    local max_workers="${_SVC_CACHE["exec_max_workers:${id}"]:-1}"
+    # Allow env override: WIGGUM_AUTOFIX_MAX_WORKERS (or generic WIGGUM_{ID}_MAX_WORKERS)
+    local env_key="WIGGUM_${id^^}_MAX_WORKERS"
+    env_key="${env_key//-/_}"
+    max_workers="${!env_key:-$max_workers}"
+    # Validate
+    if ! [[ "$max_workers" =~ ^[0-9]+$ ]] || [ "$max_workers" -lt 1 ]; then
+        max_workers=1
+    fi
+    # CLI override via extra_args (--max-workers N)
+    local i=0
+    while [ "$i" -lt "${#extra_args[@]}" ]; do
+        if [ "${extra_args[$i]}" = "--max-workers" ] && [ "$((i + 1))" -lt "${#extra_args[@]}" ]; then
+            local mw_val="${extra_args[$((i + 1))]}"
+            if [[ "$mw_val" =~ ^[0-9]+$ ]] && [ "$mw_val" -ge 1 ]; then
+                max_workers="$mw_val"
             fi
-            workspace_path="$WORKTREE_PATH"
-        else
-            workspace_path="$worker_dir/workspace"
-            mkdir -p "$workspace_path"
+            break
         fi
+        ((++i))
+    done
+
+    if [ "$max_workers" -eq 1 ]; then
+        # Single-worker path (original behavior)
+        local worker_dir
+        worker_dir=$(_resolve_service_workspace "$id" "$use_workspace")
+
+        local workspace_path
+        workspace_path=$(_setup_pipeline_workspace "$id" "$use_workspace" "$use_git_worktree" "$worker_dir")
+        if [ $? -ne 0 ]; then
+            service_state_mark_failed "$id"
+            return 1
+        fi
+
+        (
+            _run_pipeline_worker "$id" "$pipeline_name" "$pipeline_config" "$worker_dir" \
+                "$workspace_path" "$use_git_worktree" "$start_time" 0
+        ) &
+
+        local pid=$!
+        service_state_mark_started "$id" "$pid"
+        log_debug "Service $id (pipeline: $pipeline_name) started (PID: $pid, worker: $worker_dir)"
     else
-        workspace_path="$_RUNNER_PROJECT_DIR"
+        # Multi-worker path: spawn N parallel pipeline instances
+        (
+            export LOG_FILE="$_RUNNER_RALPH_DIR/logs/service-${id}.log"
+            source "$WIGGUM_HOME/lib/core/logger.sh"
+            log "Service $id starting $max_workers parallel workers"
+
+            local -a worker_pids=()
+            local w=0
+            while [ "$w" -lt "$max_workers" ]; do
+                local worker_dir
+                worker_dir=$(_resolve_service_workspace "$id" "$use_workspace")
+
+                local workspace_path
+                workspace_path=$(_setup_pipeline_workspace "$id" "$use_workspace" "$use_git_worktree" "$worker_dir")
+                if [ $? -ne 0 ]; then
+                    log_warn "Service $id: worker $w failed workspace setup, skipping"
+                    ((++w))
+                    continue
+                fi
+
+                _run_pipeline_worker "$id" "$pipeline_name" "$pipeline_config" "$worker_dir" \
+                    "$workspace_path" "$use_git_worktree" "$start_time" "$w" &
+                worker_pids+=($!)
+                log_debug "Service $id: spawned worker $w (PID: ${worker_pids[-1]}, dir: $worker_dir)"
+                ((++w))
+            done
+
+            # Wait for all workers, track failures
+            local any_failed=0
+            for pid in "${worker_pids[@]}"; do
+                local wrc=0
+                wait "$pid" 2>/dev/null || wrc=$?
+                if [ "$wrc" -ne 0 ]; then
+                    any_failed=1
+                fi
+            done
+
+            log "Service $id: all $max_workers workers completed (any_failed=$any_failed)"
+            exit "$any_failed"
+        ) &
+
+        local pid=$!
+        service_state_mark_started "$id" "$pid"
+        log_debug "Service $id (pipeline: $pipeline_name) started $max_workers workers (coordinator PID: $pid)"
     fi
 
-    # Run pipeline in background
-    (
-        # Initialize logging for service
-        export LOG_FILE="$_RUNNER_RALPH_DIR/logs/service-${id}.log"
-        source "$WIGGUM_HOME/lib/core/logger.sh"
-        source "$WIGGUM_HOME/lib/utils/activity-log.sh"
-        activity_init "$_RUNNER_PROJECT_DIR"
-
-        log "Service $id starting (type: pipeline)"
-        log_debug "pipeline=$pipeline_name"
-        log_debug "config=$pipeline_config"
-        log_debug "worker_dir=$worker_dir"
-        log_debug "workspace=$workspace_path"
-
-        export RALPH_DIR="$_RUNNER_RALPH_DIR"
-        export PROJECT_DIR="$_RUNNER_PROJECT_DIR"
-        export SERVICE_ID="$id"
-        export SERVICE_START_TIME="$start_time"
-        export WIGGUM_HOME
-        export WIGGUM_TASK_ID="${WIGGUM_TASK_ID:-${id}}"
-
-        activity_log "service.started" "" "" "service=$id" "type=pipeline" "pipeline=$pipeline_name"
-
-        # Source pipeline loader, runner, and agent registry (provides run_sub_agent)
-        source "$WIGGUM_HOME/lib/pipeline/pipeline-loader.sh"
-        source "$WIGGUM_HOME/lib/pipeline/pipeline-runner.sh"
-        source "$WIGGUM_HOME/lib/worker/agent-registry.sh"
-
-        # Provide stubs for task-worker functions that pipeline-runner calls.
-        # These are normally provided by task-worker.sh but service pipelines run standalone.
-        _phase_start()              { :; }
-        _phase_end()                { :; }
-
-        # Git worktree services get a real _commit_subagent_changes so pipeline steps
-        # can commit between phases. Non-worktree services get a no-op.
-        if [ "$use_git_worktree" = "true" ]; then
-            source "$WIGGUM_HOME/lib/git/git-operations.sh"
-            _commit_subagent_changes() {
-                local ws="$1" agent_name="$2"
-                cd "$ws" || return 1
-                if git diff --quiet && git diff --staged --quiet; then return 0; fi
-                git add . 2>/dev/null || true
-                git reset HEAD -- '.env' '.env.*' '*.pem' '*.key' 'credentials.json' '.secrets' 2>/dev/null || true
-                if git diff --staged --quiet; then return 0; fi
-                git_set_identity
-                local msg="${SERVICE_ID:-service}: ${WIGGUM_STEP_ID:-unknown} - ${agent_name}"
-                git commit -m "$msg" >/dev/null 2>&1 && log "Committed $agent_name changes" || log_warn "Failed to commit $agent_name changes"
-            }
-        else
-            _commit_subagent_changes()  { :; }
-        fi
-
-        # Load and run the pipeline
-        _exit_code=0
-        pipeline_load "$pipeline_config" || _exit_code=$?
-
-        if [ "$_exit_code" -eq 0 ]; then
-            pipeline_run_all "$worker_dir" "$_RUNNER_PROJECT_DIR" "$workspace_path" "" || _exit_code=$?
-        fi
-
-        log "Service $id completed (exit_code=$_exit_code)"
-        activity_log "service.completed" "" "" "service=$id" "exit_code=$_exit_code"
-        exit "$_exit_code"
-    ) &
-
-    local pid=$!
-    service_state_mark_started "$id" "$pid"
-
-    log_debug "Service $id (pipeline: $pipeline_name) started (PID: $pid, worker: $worker_dir)"
     return 0
 }
 
@@ -816,60 +934,68 @@ service_run_sync() {
                         log_warn "Service $id: could not fast-forward to origin/$default_branch"
                 fi
 
-                local worker_dir
-                worker_dir=$(_resolve_service_workspace "$id" "$use_workspace")
-                local workspace_path
-                if [ "$use_workspace" = "true" ]; then
-                    if [ "$use_git_worktree" = "true" ]; then
-                        source "$WIGGUM_HOME/lib/git/worktree-helpers.sh"
-                        if ! setup_worktree "$_RUNNER_PROJECT_DIR" "$worker_dir" "service-${id}"; then
-                            log_error "Service $id: failed to create git worktree"
+                # Determine max workers (same logic as async path)
+                local max_workers="${_SVC_CACHE["exec_max_workers:${id}"]:-1}"
+                local env_key="WIGGUM_${id^^}_MAX_WORKERS"
+                env_key="${env_key//-/_}"
+                max_workers="${!env_key:-$max_workers}"
+                if ! [[ "$max_workers" =~ ^[0-9]+$ ]] || [ "$max_workers" -lt 1 ]; then
+                    max_workers=1
+                fi
+                # CLI override via extra_args
+                local ei=0
+                while [ "$ei" -lt "${#extra_args[@]}" ]; do
+                    if [ "${extra_args[$ei]}" = "--max-workers" ] && [ "$((ei + 1))" -lt "${#extra_args[@]}" ]; then
+                        local mw_val="${extra_args[$((ei + 1))]}"
+                        if [[ "$mw_val" =~ ^[0-9]+$ ]] && [ "$mw_val" -ge 1 ]; then
+                            max_workers="$mw_val"
+                        fi
+                        break
+                    fi
+                    ((++ei))
+                done
+
+                if [ "$max_workers" -eq 1 ]; then
+                    # Single worker (original sync behavior)
+                    local worker_dir
+                    worker_dir=$(_resolve_service_workspace "$id" "$use_workspace")
+                    local workspace_path
+                    workspace_path=$(_setup_pipeline_workspace "$id" "$use_workspace" "$use_git_worktree" "$worker_dir")
+                    if [ $? -ne 0 ]; then
+                        exit_code=1
+                    else
+                        _run_pipeline_worker "$id" "$pipeline_name" "$pipeline_config" "$worker_dir" \
+                            "$workspace_path" "$use_git_worktree" "$start_time" 0
+                        exit_code=$?
+                    fi
+                else
+                    # Multi-worker sync: spawn N workers, wait for all
+                    local -a worker_pids=()
+                    local w=0
+                    while [ "$w" -lt "$max_workers" ]; do
+                        local worker_dir
+                        worker_dir=$(_resolve_service_workspace "$id" "$use_workspace")
+                        local workspace_path
+                        workspace_path=$(_setup_pipeline_workspace "$id" "$use_workspace" "$use_git_worktree" "$worker_dir")
+                        if [ $? -ne 0 ]; then
+                            log_warn "Service $id: worker $w failed workspace setup, skipping"
+                            ((++w))
+                            continue
+                        fi
+
+                        _run_pipeline_worker "$id" "$pipeline_name" "$pipeline_config" "$worker_dir" \
+                            "$workspace_path" "$use_git_worktree" "$start_time" "$w" &
+                        worker_pids+=($!)
+                        ((++w))
+                    done
+
+                    for pid in "${worker_pids[@]}"; do
+                        local wrc=0
+                        wait "$pid" 2>/dev/null || wrc=$?
+                        if [ "$wrc" -ne 0 ]; then
                             exit_code=1
                         fi
-                        workspace_path="$WORKTREE_PATH"
-                    else
-                        workspace_path="$worker_dir/workspace"
-                        mkdir -p "$workspace_path"
-                    fi
-                else
-                    workspace_path="$_RUNNER_PROJECT_DIR"
-                fi
-
-                export WIGGUM_TASK_ID="${WIGGUM_TASK_ID:-${id}}"
-
-                source "$WIGGUM_HOME/lib/pipeline/pipeline-loader.sh" 2>/dev/null || true
-                source "$WIGGUM_HOME/lib/pipeline/pipeline-runner.sh" 2>/dev/null || true
-                source "$WIGGUM_HOME/lib/worker/agent-registry.sh" 2>/dev/null || true
-
-                # Provide stubs for task-worker functions
-                declare -F _phase_start &>/dev/null || _phase_start() { :; }
-                declare -F _phase_end &>/dev/null || _phase_end() { :; }
-
-                if [ "$use_git_worktree" = "true" ]; then
-                    source "$WIGGUM_HOME/lib/git/git-operations.sh"
-                    _commit_subagent_changes() {
-                        local ws="$1" agent_name="$2"
-                        cd "$ws" || return 1
-                        if git diff --quiet && git diff --staged --quiet; then return 0; fi
-                        git add . 2>/dev/null || true
-                        git reset HEAD -- '.env' '.env.*' '*.pem' '*.key' 'credentials.json' '.secrets' 2>/dev/null || true
-                        if git diff --staged --quiet; then return 0; fi
-                        git_set_identity
-                        local msg="${SERVICE_ID:-service}: ${WIGGUM_STEP_ID:-unknown} - ${agent_name}"
-                        git commit -m "$msg" >/dev/null 2>&1 && log "Committed $agent_name changes" || log_warn "Failed to commit $agent_name changes"
-                    }
-                else
-                    declare -F _commit_subagent_changes &>/dev/null || _commit_subagent_changes() { :; }
-                fi
-
-                if declare -F pipeline_load &>/dev/null && declare -F pipeline_run_all &>/dev/null; then
-                    pipeline_load "$pipeline_config" || exit_code=$?
-                    if [ "$exit_code" -eq 0 ]; then
-                        pipeline_run_all "$worker_dir" "$_RUNNER_PROJECT_DIR" "$workspace_path" "" || exit_code=$?
-                    fi
-                else
-                    log_error "Pipeline loader/runner not available"
-                    exit_code=1
+                    done
                 fi
             fi
             ;;
