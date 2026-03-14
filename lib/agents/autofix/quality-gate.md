@@ -53,6 +53,7 @@ For each changed file, assess:
 - Makes code harder to read without functional benefit
 - Cosmetic-only changes (renaming, reformatting) with no substance
 - Over-engineering simple code
+- Leftover artifacts or temporary files (`.tmp`, `.bak`, `.orig`, `__pycache__/`, scratch files, new lockfiles like `package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`)
 
 ### Neutral (not enough to justify a commit)
 - Trivially correct but inconsequential fixes (e.g., fixing a typo in a comment nobody reads)
@@ -105,12 +106,18 @@ Run applicable build commands.
 3. **Check tests** (changes must not break tests):
 Run applicable test commands.
 
-4. **Evaluate each changed file**:
+4. **Check for leftover artifacts** (untracked non-ignored files):
+```bash
+git ls-files --others --exclude-standard
+```
+Any temp files, `.bak`, `.orig`, `.tmp`, `__pycache__/`, scratch files, or newly created lockfiles (`package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`, etc.) = automatic FAIL.
+
+5. **Evaluate each changed file**:
    - Read the diff hunks
    - Assess whether each change is positive, negative, or neutral
    - Note specific concerns
 
-5. **Make your decision**: Does this diff, as a whole, improve the codebase?
+6. **Make your decision**: Does this diff, as a whole, improve the codebase?
 
 ## Output Format
 

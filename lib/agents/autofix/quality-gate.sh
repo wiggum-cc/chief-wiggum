@@ -42,6 +42,7 @@ agent_run() {
         log "Quality gate FAIL — discarding uncommitted changes"
         git -C "$workspace" checkout -- . 2>/dev/null || true
         git -C "$workspace" clean -fd 2>/dev/null || true
+        _verify_workspace_clean "$workspace" "FAIL"
         return "$md_exit"
     fi
 
@@ -55,12 +56,29 @@ agent_run() {
         return "$md_exit"
     fi
 
+    # Check for leftover artifacts/temp files in git-untracked non-ignored space
+    local untracked_artifacts
+    untracked_artifacts=$(git -C "$workspace" ls-files --others --exclude-standard \
+        | grep -iE '\.(tmp|bak|orig|swp|swo|pyc|pyo|DS_Store|log)$|~$|^\.#|__pycache__|\.cache/|node_modules/|package-lock\.json|pnpm-lock\.yaml|yarn\.lock|Gemfile\.lock|poetry\.lock|composer\.lock|Cargo\.lock|go\.sum' \
+        2>/dev/null || true)
+    if [[ -n "$untracked_artifacts" ]]; then
+        log_warn "Leftover artifacts detected — cleaning before commit:"
+        log_warn "$untracked_artifacts"
+        local artifact
+        while IFS= read -r artifact; do
+            [[ -n "$artifact" ]] && rm -f "$workspace/$artifact"
+        done <<< "$untracked_artifacts"
+    fi
+
     # Stage and commit
     git_set_identity
     git -C "$workspace" add -A 2>/dev/null
 
+    # Build commit message including auditor's original scope (shell-only,
+    # not exposed to the quality-gate LLM prompt — preserves blind review)
     local task_id="${WIGGUM_TASK_ID:-autofix}"
-    local commit_msg="$task_id: automated code improvement"
+    local commit_msg
+    commit_msg=$(_build_commit_msg "$worker_dir" "$task_id")
     local commit_exit=0
     git -C "$workspace" commit --no-gpg-sign -m "$commit_msg" 2>&1 || commit_exit=$?
     if [[ "$commit_exit" -ne 0 ]]; then
@@ -71,6 +89,9 @@ agent_run() {
     local commit_sha
     commit_sha=$(git -C "$workspace" rev-parse HEAD 2>/dev/null)
     log "Committed: ${commit_sha:0:8}"
+
+    # Verify no leftover artifacts after commit
+    _verify_workspace_clean "$workspace" "PASS"
 
     # Push
     local current_branch
@@ -93,6 +114,66 @@ agent_run() {
     _ensure_pr "$workspace" "$current_branch" "$worker_dir" "$project_dir"
 
     return "$md_exit"
+}
+
+# Build a commit message that includes the auditor's original scope/concern.
+# Falls back to a generic message if the audit report is unavailable.
+#
+# Args:
+#   worker_dir - Worker directory
+#   task_id    - Task identifier
+#
+# Returns: commit message string (via stdout)
+_build_commit_msg() {
+    local worker_dir="$1"
+    local task_id="$2"
+
+    # Find the latest random-audit report
+    local audit_report
+    audit_report=$(agent_find_latest_report "$worker_dir" "random-audit")
+
+    if [[ -z "$audit_report" ]] || [[ ! -f "$audit_report" ]]; then
+        echo "$task_id: automated code improvement"
+        return
+    fi
+
+    # Extract scope and concern from the structured report
+    local scope_target concern
+    scope_target=$(grep -m1 '^\- \*\*Scope target\*\*:' "$audit_report" 2>/dev/null \
+        | sed 's/^- \*\*Scope target\*\*: *//' | sed 's/[[:space:]]*$//' || true)
+    concern=$(grep -m1 '^\- \*\*Concern\*\*:' "$audit_report" 2>/dev/null \
+        | sed 's/^- \*\*Concern\*\*: *//' | sed 's/[[:space:]]*$//' || true)
+
+    if [[ -n "$concern" ]]; then
+        local scope_part=""
+        if [[ -n "$scope_target" ]] && [[ "$scope_target" != "entire codebase" ]]; then
+            scope_part=" in ${scope_target}"
+        fi
+        # Lowercase the concern for commit message style
+        local concern_lower
+        concern_lower=$(echo "$concern" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//')
+        echo "$task_id: autofix ${concern_lower}${scope_part}"
+    else
+        echo "$task_id: automated code improvement"
+    fi
+}
+
+# Verify no untracked non-ignored files remain in workspace after cleanup.
+# Logs a warning if artifacts are found — helps catch missed cleanup.
+#
+# Args:
+#   workspace - Git workspace directory
+#   context   - Context label for logging (e.g., "FAIL", "PASS")
+_verify_workspace_clean() {
+    local workspace="$1"
+    local context="$2"
+
+    local remaining
+    remaining=$(git -C "$workspace" ls-files --others --exclude-standard 2>/dev/null || true)
+    if [[ -n "$remaining" ]]; then
+        log_warn "Workspace not clean after $context — leftover files:"
+        log_warn "$remaining"
+    fi
 }
 
 # Create a PR for the branch if one doesn't already exist.

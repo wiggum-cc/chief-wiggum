@@ -5,7 +5,7 @@
     {
       "id": "random-audit",
       "agent": "autofix.random-audit",
-      "max": 30,
+      "max": 50,
       "readonly": true,
       "on_result": {
         "PASS": {

@@ -59,6 +59,15 @@ ls package.json Cargo.toml go.mod pyproject.toml pom.xml 2>/dev/null
 
 Run ALL applicable build commands. A fix that breaks the build is not a fix.
 
+## Artifact Cleanup (CRITICAL)
+
+Before finishing, ensure no temporary or artifact files remain in the workspace:
+- Delete any `.tmp`, `.bak`, `.orig`, `.swp`, `__pycache__/`, `.pyc` files you created
+- Remove any test fixture files, scratch files, or debug outputs
+- Do NOT create new lockfiles (`package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`, etc.) — if a build command generates an untracked lockfile, delete it. Pre-existing lockfiles already tracked by git are fine to leave alone.
+- Run `git status` and verify only intentional code changes appear as modified/new files
+- If you created temporary files for testing, remove them after use
+
 ## Git Restrictions (CRITICAL)
 
 The workspace may contain uncommitted work. You MUST NOT destroy it.
@@ -91,7 +100,8 @@ The upstream audit report is above. Independently verify each finding and fix co
    e. If false positive: document why and skip
    f. Verify build after each fix
 3. **Run tests** after all fixes
-4. **Report** which findings were verified/fixed vs rejected
+4. **Clean up** — remove any temporary/artifact files you created (`git status` to verify)
+5. **Report** which findings were verified/fixed vs rejected
 
 ## Output Format
 
