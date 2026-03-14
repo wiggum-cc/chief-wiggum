@@ -970,11 +970,8 @@ _md_extract_and_write_result() {
     fi
 
     # For other completion checks, use log extraction
+    # (agent_extract_and_write_result logs the result internally)
     agent_extract_and_write_result "$worker_dir" "$agent_name" "$step_id" "${_MD_REPORT_TAG:-report}" "$valid_regex"
-    # Log the result that was written (status_file path above already logs)
-    local _written_result
-    _written_result=$(agent_read_step_result "$worker_dir" "$step_id" 2>/dev/null)
-    log "${agent_name} result: ${_written_result:-UNKNOWN}"
 }
 
 # =============================================================================

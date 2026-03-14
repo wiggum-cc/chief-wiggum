@@ -206,13 +206,13 @@ _pipeline_backup_result_extraction() {
         fi
     fi
 
-    log "Pipeline backup: attempting session resume for step '$step_id' (session: ${session_id:0:8}...)"
+    log_debug "Pipeline backup: attempting session resume for step '$step_id' (session: ${session_id:0:8}...)"
 
     local recovered
     recovered=$(_backup_result_extraction "$session_id" "$valid_values" "$worker_dir" "$step_id")
 
     if [ -n "$recovered" ] && [ "$recovered" != "UNKNOWN" ]; then
-        log "Pipeline backup: recovered result '$recovered' for step '$step_id'"
+        log_debug "Pipeline backup: recovered result '$recovered' for step '$step_id'"
         # Rewrite result file with recovered value
         agent_write_result "$worker_dir" "$recovered"
         echo "$recovered"
