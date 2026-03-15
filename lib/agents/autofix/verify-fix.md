@@ -143,7 +143,7 @@ OR
 OR
 <result>SKIP</result>
 
-The <result> tag MUST be exactly: PASS, FAIL, or SKIP.
+IMPORTANT: You MUST emit exactly one <result> tag as the very last thing in your response. The tag must contain exactly PASS, FAIL, or SKIP. Omitting this tag causes a pipeline failure.
 </WIGGUM_USER_PROMPT>
 
 <WIGGUM_CONTINUATION_PROMPT>
@@ -154,5 +154,5 @@ Your previous work is summarized in @../summaries/{{run_id}}/{{step_id}}-{{prev_
 Continue verifying and fixing remaining findings from the audit report.
 Do NOT repeat work already completed. When all findings are processed, provide final <summary> and <result>.
 
-The <result> tag must contain exactly PASS, FAIL, or SKIP.
+IMPORTANT: You MUST emit exactly one <result> tag as the very last thing in your response. The tag must contain exactly PASS, FAIL, or SKIP. Omitting this tag causes a pipeline failure.
 </WIGGUM_CONTINUATION_PROMPT>

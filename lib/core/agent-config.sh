@@ -77,6 +77,18 @@ load_agent_config() {
         fi
     fi
 
+    # Apply pipeline step config overrides (highest priority).
+    # _PIPELINE_STEP_CONFIG is exported by pipeline-runner.sh before run_sub_agent.
+    if [ -n "${_PIPELINE_STEP_CONFIG:-}" ] && [ "$_PIPELINE_STEP_CONFIG" != "{}" ]; then
+        local v
+        v=$(echo "$_PIPELINE_STEP_CONFIG" | jq -r '.max_iterations // empty' 2>/dev/null) && [ -n "$v" ] && AGENT_CONFIG_MAX_ITERATIONS="$v"
+        v=$(echo "$_PIPELINE_STEP_CONFIG" | jq -r '.max_turns // empty' 2>/dev/null) && [ -n "$v" ] && AGENT_CONFIG_MAX_TURNS="$v"
+        v=$(echo "$_PIPELINE_STEP_CONFIG" | jq -r '.timeout_seconds // empty' 2>/dev/null) && [ -n "$v" ] && AGENT_CONFIG_TIMEOUT_SECONDS="$v"
+        v=$(echo "$_PIPELINE_STEP_CONFIG" | jq -r '.auto_commit // empty' 2>/dev/null) && [ -n "$v" ] && AGENT_CONFIG_AUTO_COMMIT="$v"
+        v=$(echo "$_PIPELINE_STEP_CONFIG" | jq -r '.supervisor_interval // empty' 2>/dev/null) && [ -n "$v" ] && AGENT_CONFIG_SUPERVISOR_INTERVAL="$v"
+        v=$(echo "$_PIPELINE_STEP_CONFIG" | jq -r '.max_restarts // empty' 2>/dev/null) && [ -n "$v" ] && AGENT_CONFIG_MAX_RESTARTS="$v"
+    fi
+
     # Export for use by agent
     export AGENT_CONFIG_MAX_ITERATIONS
     export AGENT_CONFIG_MAX_TURNS

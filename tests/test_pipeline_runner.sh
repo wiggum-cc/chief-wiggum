@@ -869,6 +869,82 @@ test_pipeline_workspace_disappears_before_agent() {
 }
 
 # =============================================================================
+# Test: Pipeline step config is exported to _PIPELINE_STEP_CONFIG
+# =============================================================================
+test_pipeline_step_config_exported() {
+    # Override run_sub_agent to capture the exported config
+    run_sub_agent() {
+        local agent_type="$1"
+        local worker_dir="$2"
+        echo "config:${_PIPELINE_STEP_CONFIG:-UNSET}" >> "$TEST_DIR/agent_invocations.txt"
+        local step_id="${WIGGUM_STEP_ID:-unknown}"
+        local epoch
+        epoch=$(_mock_epoch)
+        mkdir -p "$worker_dir/results"
+        echo '{"outputs": {"gate_result": "PASS"}}' > "$worker_dir/results/${epoch}-${step_id}-result.json"
+    }
+
+    _create_pipeline "$TEST_DIR/pipeline.json" '{
+        "name": "test-step-config",
+        "steps": [
+            {"id": "with-config", "agent": "agent-a", "config": {"max_iterations": 5, "max_turns": 120}}
+        ]
+    }'
+
+    _pipeline_runner_reset
+
+    : > "$TEST_DIR/agent_invocations.txt"
+    pipeline_run_all "$TEST_DIR/worker" "$TEST_DIR/project" "$TEST_DIR/worker/workspace" ""
+
+    local captured
+    captured=$(cat "$TEST_DIR/agent_invocations.txt")
+
+    # Verify the config JSON was exported
+    assert_output_contains "$captured" '"max_iterations":5' "Step config should export max_iterations"
+    assert_output_contains "$captured" '"max_turns":120' "Step config should export max_turns"
+}
+
+# =============================================================================
+# Test: Pipeline step config is cleaned up between steps
+# =============================================================================
+test_pipeline_step_config_cleaned_between_steps() {
+    # Override run_sub_agent to capture the exported config per step
+    run_sub_agent() {
+        local agent_type="$1"
+        local worker_dir="$2"
+        local step_id="${WIGGUM_STEP_ID:-unknown}"
+        echo "${step_id}:${_PIPELINE_STEP_CONFIG:-UNSET}" >> "$TEST_DIR/agent_invocations.txt"
+        local epoch
+        epoch=$(_mock_epoch)
+        mkdir -p "$worker_dir/results"
+        echo '{"outputs": {"gate_result": "PASS"}}' > "$worker_dir/results/${epoch}-${step_id}-result.json"
+    }
+
+    _create_pipeline "$TEST_DIR/pipeline.json" '{
+        "name": "test-config-cleanup",
+        "steps": [
+            {"id": "step-with", "agent": "agent-a", "config": {"max_turns": 99}},
+            {"id": "step-without", "agent": "agent-b"}
+        ]
+    }'
+
+    _pipeline_runner_reset
+
+    : > "$TEST_DIR/agent_invocations.txt"
+    pipeline_run_all "$TEST_DIR/worker" "$TEST_DIR/project" "$TEST_DIR/worker/workspace" ""
+
+    # Step with config should have it
+    local line_with
+    line_with=$(grep "^step-with:" "$TEST_DIR/agent_invocations.txt")
+    assert_output_contains "$line_with" '"max_turns":99' "Step with config should see max_turns"
+
+    # Step without config should NOT inherit previous step's config
+    local line_without
+    line_without=$(grep "^step-without:" "$TEST_DIR/agent_invocations.txt")
+    assert_equals "step-without:UNSET" "$line_without" "Step without config should have UNSET _PIPELINE_STEP_CONFIG"
+}
+
+# =============================================================================
 # Run all tests
 # =============================================================================
 run_test test_pipeline_runs_steps_in_order
@@ -893,6 +969,8 @@ run_test test_pipeline_emits_activity_events
 run_test test_pipeline_circuit_breaker_escalates_repeated_fix
 run_test test_pipeline_circuit_breaker_resets_on_different_result
 run_test test_pipeline_workspace_disappears_before_agent
+run_test test_pipeline_step_config_exported
+run_test test_pipeline_step_config_cleaned_between_steps
 
 print_test_summary
 exit_with_test_result

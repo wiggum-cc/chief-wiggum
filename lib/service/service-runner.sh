@@ -491,8 +491,7 @@ _run_pipeline_worker() {
     local start_time="$7"
     local worker_index="$8"
 
-    local worker_suffix=""
-    [ "$worker_index" -gt 0 ] && worker_suffix="-w${worker_index}"
+    local worker_suffix="-w${worker_index}"
 
     export LOG_FILE="$_RUNNER_RALPH_DIR/logs/service-${id}${worker_suffix}.log"
     source "$WIGGUM_HOME/lib/core/logger.sh"

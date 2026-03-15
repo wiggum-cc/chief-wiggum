@@ -3,7 +3,7 @@ type: autofix.random-audit
 description: Randomly selects a scope and concern to audit, then performs a thorough code audit
 required_paths: [workspace]
 valid_results: [PASS, FAIL]
-mode: once
+mode: ralph_loop
 readonly: true
 report_tag: report
 outputs: [session_id, report_file, audit_scope, audit_concern]
@@ -201,7 +201,7 @@ Perform a randomly-scoped, randomly-concerned code audit of the workspace.
 2. **Select concern** using the random process described in your instructions
 3. **Announce your selections** before starting the audit
 4. **Perform the audit** — read code, find real issues, provide evidence
-5. **Write report** with findings
+5. **Write report and result** — ALWAYS finish with the report and result tag
 
 ## Output Format
 
@@ -243,5 +243,18 @@ Perform a randomly-scoped, randomly-concerned code audit of the workspace.
 OR
 <result>FAIL</result>
 
-The <result> tag MUST be exactly: PASS or FAIL.
+IMPORTANT: You MUST emit exactly one <result> tag as the very last thing in your response. The tag must contain exactly PASS or FAIL. Omitting this tag causes a pipeline failure.
 </WIGGUM_USER_PROMPT>
+
+<WIGGUM_CONTINUATION_PROMPT>
+CONTINUATION CONTEXT (Iteration {{iteration}}):
+
+Your previous audit work is summarized in @../summaries/{{run_id}}/{{step_id}}-{{prev_iteration}}-summary.txt.
+
+Continue your audit from where you left off:
+1. If you haven't completed all scan areas in your selected scope, continue reading code
+2. If you found issues that need deeper investigation, investigate them now
+3. When your audit is complete, provide the final <report> and <result> tags
+
+IMPORTANT: You MUST emit exactly one <result> tag as the very last thing in your response. The tag must contain exactly PASS or FAIL. Omitting this tag causes a pipeline failure.
+</WIGGUM_CONTINUATION_PROMPT>

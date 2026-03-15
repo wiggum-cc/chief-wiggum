@@ -141,6 +141,55 @@ test_config_loading_unknown_agent_uses_defaults() {
     [ -n "$fixture_home" ] && rm -rf "$fixture_home"
 }
 
+test_config_pipeline_step_config_overrides_agent() {
+    local fixture_home
+    fixture_home=$(_setup_config_fixture)
+    WIGGUM_HOME="$fixture_home" source "$fixture_home/lib/core/agent-base.sh"
+
+    # system.task-worker has max_iterations=20, max_turns=50 in agents.json
+    # Pipeline step config should override both
+    export _PIPELINE_STEP_CONFIG='{"max_iterations": 5, "max_turns": 120}'
+    WIGGUM_HOME="$fixture_home" load_agent_config "system.task-worker"
+
+    assert_equals "5" "$AGENT_CONFIG_MAX_ITERATIONS" "pipeline step config should override max_iterations"
+    assert_equals "120" "$AGENT_CONFIG_MAX_TURNS" "pipeline step config should override max_turns"
+    assert_equals "3600" "$AGENT_CONFIG_TIMEOUT_SECONDS" "non-overridden fields should keep agent value"
+
+    unset _PIPELINE_STEP_CONFIG
+    [ -n "$fixture_home" ] && rm -rf "$fixture_home"
+}
+
+test_config_pipeline_step_config_partial_override() {
+    local fixture_home
+    fixture_home=$(_setup_config_fixture)
+    WIGGUM_HOME="$fixture_home" source "$fixture_home/lib/core/agent-base.sh"
+
+    # Only override max_turns, leave max_iterations at agent default
+    export _PIPELINE_STEP_CONFIG='{"max_turns": 200}'
+    WIGGUM_HOME="$fixture_home" load_agent_config "system.task-worker"
+
+    assert_equals "20" "$AGENT_CONFIG_MAX_ITERATIONS" "max_iterations should stay at agent config value"
+    assert_equals "200" "$AGENT_CONFIG_MAX_TURNS" "max_turns should be overridden by pipeline step config"
+
+    unset _PIPELINE_STEP_CONFIG
+    [ -n "$fixture_home" ] && rm -rf "$fixture_home"
+}
+
+test_config_pipeline_step_config_empty_is_noop() {
+    local fixture_home
+    fixture_home=$(_setup_config_fixture)
+    WIGGUM_HOME="$fixture_home" source "$fixture_home/lib/core/agent-base.sh"
+
+    export _PIPELINE_STEP_CONFIG='{}'
+    WIGGUM_HOME="$fixture_home" load_agent_config "system.task-worker"
+
+    assert_equals "20" "$AGENT_CONFIG_MAX_ITERATIONS" "empty step config should not change max_iterations"
+    assert_equals "50" "$AGENT_CONFIG_MAX_TURNS" "empty step config should not change max_turns"
+
+    unset _PIPELINE_STEP_CONFIG
+    [ -n "$fixture_home" ] && rm -rf "$fixture_home"
+}
+
 # =============================================================================
 # Test: Communication Protocol - Paths
 # =============================================================================
@@ -579,6 +628,9 @@ run_test test_config_loading_task_worker
 run_test test_config_loading_pr_comment_fix
 run_test test_config_loading_validation_review
 run_test test_config_loading_unknown_agent_uses_defaults
+run_test test_config_pipeline_step_config_overrides_agent
+run_test test_config_pipeline_step_config_partial_override
+run_test test_config_pipeline_step_config_empty_is_noop
 run_test test_agent_comm_path_prd
 run_test test_agent_comm_path_workspace
 run_test test_agent_comm_path_summary

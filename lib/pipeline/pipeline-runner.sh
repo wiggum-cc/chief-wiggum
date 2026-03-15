@@ -916,6 +916,20 @@ _pipeline_run_step() {
         return 1
     }
 
+    # Export pipeline step config JSON for load_agent_config to apply as
+    # highest-priority overrides (pipeline JSON > agents.json > defaults).
+    local _step_config
+    _step_config=$(pipeline_get_json "$idx" ".config" "{}")
+    if [ "$_step_config" != "{}" ]; then
+        export _PIPELINE_STEP_CONFIG="$_step_config"
+        # Also apply timeout_seconds to step_timeout (used by watchdog, not AGENT_CONFIG)
+        local _sc_timeout
+        _sc_timeout=$(echo "$_step_config" | jq -r '.timeout_seconds // empty' 2>/dev/null)
+        [ -n "$_sc_timeout" ] && step_timeout="$_sc_timeout"
+    else
+        unset _PIPELINE_STEP_CONFIG 2>/dev/null || true
+    fi
+
     # Resolve step timeout: step config > agent config > no timeout
     if [ -z "$step_timeout" ]; then
         step_timeout=$(jq -r ".agents[\"$step_agent\"].timeout_seconds // 0" \
@@ -976,6 +990,7 @@ _pipeline_run_step() {
     fi
 
     unset WIGGUM_STEP_READONLY
+    unset _PIPELINE_STEP_CONFIG 2>/dev/null || true
 
     # Run post-hooks
     _run_step_hooks "post" "$idx" "$worker_dir" "$project_dir" "$workspace"
@@ -1012,6 +1027,16 @@ _pipeline_run_step() {
     # extraction failed (status_file agents, empty logs, truncated output).
     if [ "$gate_result" = "UNKNOWN" ]; then
         gate_result=$(_pipeline_backup_result_extraction "$worker_dir" "$step_id" "$step_agent")
+    fi
+
+    # UNKNOWN is not a valid agent result — it means extraction failed entirely
+    # (typically max_turns exhausted before <result> tag was emitted). Downgrade
+    # to FAIL so the step's normal failure handling applies (e.g., retry, next,
+    # abort) instead of always hard-aborting via the global UNKNOWN→abort default.
+    if [ "$gate_result" = "UNKNOWN" ]; then
+        log_warn "Step '$step_id' produced no extractable result (UNKNOWN) — downgrading to FAIL"
+        gate_result="FAIL"
+        agent_write_result "$worker_dir" "$gate_result"
     fi
 
     _PIPELINE_LAST_STEP_ID="$step_id"

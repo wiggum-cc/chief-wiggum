@@ -3,7 +3,7 @@ type: autofix.quality-gate
 description: Evaluates uncommitted changes without context to decide if they improve the codebase
 required_paths: [workspace]
 valid_results: [PASS, FAIL]
-mode: once
+mode: ralph_loop
 readonly: false
 outputs: [session_id, gate_result]
 ---
@@ -143,5 +143,15 @@ Any temp files, `.bak`, `.orig`, `.tmp`, `__pycache__/`, scratch files, or newly
 OR
 <result>FAIL</result>
 
-The <result> tag MUST be exactly: PASS or FAIL.
+IMPORTANT: You MUST emit exactly one <result> tag as the very last thing in your response. The tag must contain exactly PASS or FAIL. Omitting this tag causes a pipeline failure.
 </WIGGUM_USER_PROMPT>
+
+<WIGGUM_CONTINUATION_PROMPT>
+CONTINUATION CONTEXT (Iteration {{iteration}}):
+
+Your previous evaluation work is summarized in @../summaries/{{run_id}}/{{step_id}}-{{prev_iteration}}-summary.txt.
+
+Continue your quality gate evaluation. If you've already reviewed the diff and run checks, provide your final assessment and decision now.
+
+IMPORTANT: You MUST emit exactly one <result> tag as the very last thing in your response. The tag must contain exactly PASS or FAIL. Omitting this tag causes a pipeline failure.
+</WIGGUM_CONTINUATION_PROMPT>
