@@ -19,6 +19,7 @@
       "agent": "autofix.verify-fix",
       "max": 100,
       "commit_after": false,
+      "config": { "max_iterations": 20, "max_turns": 60, "supervisor_interval": 2 },
       "on_result": {
         "SKIP": {
           "jump": "random-audit"
@@ -29,6 +30,7 @@
       "id": "quality-gate",
       "agent": "autofix.quality-gate",
       "max": 100,
+      "config": { "max_iterations": 3, "max_turns": 120 },
       "on_result": {
         "PASS": {
           "jump": "random-audit"
