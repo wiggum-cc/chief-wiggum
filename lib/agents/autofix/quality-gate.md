@@ -72,16 +72,10 @@ make things worse. The bar is: "Would a careful maintainer accept this PR?"
 - Good changes are mixed with bad changes that outweigh them
 - Changes break the build or tests
 
-## Post-Decision Actions
+## After Your Decision
 
-**If FAIL**: You MUST discard all uncommitted changes before returning your result:
-```bash
-git checkout -- .
-git clean -fd
-```
-This resets the workspace so the next audit cycle starts clean.
-
-**If PASS**: Leave changes in place. Commit, push, and PR creation are handled automatically.
+Just emit your result. Workspace cleanup (on FAIL) and commit/push/PR (on PASS) are
+handled automatically by the pipeline — you don't need to do anything beyond deciding.
 </WIGGUM_SYSTEM_PROMPT>
 
 <WIGGUM_USER_PROMPT>
