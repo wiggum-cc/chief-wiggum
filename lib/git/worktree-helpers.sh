@@ -67,7 +67,7 @@ setup_worktree() {
     log_debug "Creating git worktree at $workspace (detached HEAD at $commit_sha)"
 
     # Create worktree with DETACHED HEAD - avoids "branch already used" errors
-    if ! git worktree add --detach "$workspace" "$commit_sha" 2>&1 | tee -a "$worker_dir/worker.log"; then
+    if ! git worktree add --detach "$workspace" "$commit_sha" >> "$worker_dir/worker.log" 2>&1; then
         log_error "setup_worktree: failed to create detached worktree"
         return 1
     fi
@@ -82,7 +82,7 @@ setup_worktree() {
         local branch_name
         branch_name="task/${task_id}-$(epoch_now)"
         log_debug "Creating task branch: $branch_name"
-        if ! (cd "$workspace" && git checkout -b "$branch_name" 2>&1) | tee -a "$worker_dir/worker.log"; then
+        if ! (cd "$workspace" && git checkout -b "$branch_name" >> "$worker_dir/worker.log" 2>&1); then
             log_warn "setup_worktree: failed to create branch $branch_name, continuing with detached HEAD"
         fi
     fi
@@ -219,7 +219,7 @@ setup_worktree_from_branch() {
 
     # Fetch the branch from origin
     log_debug "Fetching branch $branch from origin"
-    if ! git fetch origin "$branch" 2>&1 | tee -a "$worker_dir/worker.log"; then
+    if ! git fetch origin "$branch" >> "$worker_dir/worker.log" 2>&1; then
         log_error "setup_worktree_from_branch: failed to fetch branch $branch"
         return 1
     fi
@@ -229,7 +229,7 @@ setup_worktree_from_branch() {
 
     # Create worktree tracking the remote branch
     log_debug "Creating git worktree at $workspace from origin/$branch"
-    if ! git worktree add "$workspace" "origin/$branch" 2>&1 | tee -a "$worker_dir/worker.log"; then
+    if ! git worktree add "$workspace" "origin/$branch" >> "$worker_dir/worker.log" 2>&1; then
         log_error "setup_worktree_from_branch: failed to create worktree from $branch"
         return 1
     fi
@@ -237,7 +237,7 @@ setup_worktree_from_branch() {
     # Setup local branch tracking remote
     (
         cd "$workspace" || exit 1
-        git checkout -B "$branch" "origin/$branch" 2>&1 | tee -a "$worker_dir/worker.log"
+        git checkout -B "$branch" "origin/$branch" >> "$worker_dir/worker.log" 2>&1
     )
 
     if [ ! -d "$workspace" ]; then
@@ -364,7 +364,7 @@ cleanup_worktree() {
 
     if [ "$can_cleanup" = true ]; then
         log_debug "Removing git worktree"
-        git worktree remove "$workspace" --force 2>&1 | tee -a "$worker_dir/worker.log" || true
+        git worktree remove "$workspace" --force >> "$worker_dir/worker.log" 2>&1 || true
     elif [ "$final_status" != "COMPLETE" ]; then
         log "Preserving worktree for debugging (status: $final_status): $workspace"
     fi
