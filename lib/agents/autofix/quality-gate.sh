@@ -4,8 +4,8 @@ set -euo pipefail
 # AGENT: autofix.quality-gate (shell override)
 #
 # Extends the markdown quality-gate with post-decision actions:
-#   - PASS: commit, push, and ensure a PR exists
-#   - FAIL: discard all uncommitted changes
+#   - PASS: commit, push (with backoff), create PR → remove workspace on success
+#   - FAIL: remove workspace entirely
 #
 # The markdown base handles the LLM evaluation. This shell layer acts on the
 # decision by reading the gate_result from the agent's result file.
@@ -14,6 +14,7 @@ set -euo pipefail
 source "$WIGGUM_HOME/lib/core/agent-base.sh"
 agent_source_core
 source "$WIGGUM_HOME/lib/git/git-operations.sh"
+source "$WIGGUM_HOME/lib/git/worktree-helpers.sh"
 [ -z "${_WIGGUM_SRC_PLATFORM_LOADED:-}" ] && source "$WIGGUM_HOME/lib/core/platform.sh"
 
 # Save the md-generated agent_run so we can call it from our override
@@ -24,13 +25,11 @@ agent_run() {
     local project_dir="$2"
     local workspace="$worker_dir/workspace"
 
-    # Run the markdown agent (LLM evaluation + discard on FAIL)
+    # Run the markdown agent (LLM evaluation)
     local md_exit=0
     _md_quality_gate_run "$@" || md_exit=$?
 
     # Read the gate result from the CURRENT run's result file.
-    # agent_find_latest_result searches by agent type ("autofix.quality-gate") but
-    # result files are named by step ID ("quality-gate"), so it finds nothing.
     local result_file
     result_file=$(agent_get_result_path "$worker_dir")
     local gate_result="FAIL"
@@ -38,26 +37,69 @@ agent_run() {
         gate_result=$(jq -r '.outputs.gate_result // "FAIL"' "$result_file" 2>/dev/null)
     fi
 
-    if [[ "$gate_result" != "PASS" ]]; then
-        log "Quality gate FAIL — discarding uncommitted changes"
-        git -C "$workspace" checkout -- . 2>/dev/null || true
-        git -C "$workspace" clean -fd 2>/dev/null || true
-        _verify_workspace_clean "$workspace" "FAIL"
-        _resync_to_main "$workspace"
-        return "$md_exit"
+    if [[ "$gate_result" == "PASS" ]]; then
+        if _handle_pass "$workspace" "$worker_dir" "$project_dir"; then
+            # Push+PR succeeded — remove workspace
+            log "Quality gate PASS — push/PR succeeded, removing workspace"
+            _remove_workspace "$workspace" "$project_dir"
+        else
+            # Push+PR failed — leave workspace intact for debugging
+            log_warn "Quality gate PASS — push/PR failed, leaving workspace for inspection"
+        fi
+    else
+        # FAIL — remove workspace entirely
+        log "Quality gate FAIL — removing workspace"
+        _remove_workspace "$workspace" "$project_dir"
     fi
 
-    # --- PASS path: commit, push, ensure PR ---
+    return "$md_exit"
+}
+
+# Handle PASS: commit changes, push per-cycle branch with backoff, create PR.
+#
+# Returns: 0 if push+PR succeeded, 1 if any step failed
+_handle_pass() {
+    local workspace="$1"
+    local worker_dir="$2"
+    local project_dir="$3"
 
     # Check for uncommitted changes to commit
     if git -C "$workspace" diff --quiet 2>/dev/null \
         && git -C "$workspace" diff --cached --quiet 2>/dev/null \
         && [[ -z "$(git -C "$workspace" ls-files --others --exclude-standard 2>/dev/null)" ]]; then
         log_debug "Quality gate PASS but no uncommitted changes to commit"
-        return "$md_exit"
+        return 0
     fi
 
-    # Check for leftover artifacts/temp files in git-untracked non-ignored space
+    # Clean leftover artifacts before committing
+    _clean_artifacts "$workspace"
+
+    # Stage and commit
+    git_set_identity
+    git -C "$workspace" add -A 2>/dev/null
+
+    local task_id="${WIGGUM_TASK_ID:-autofix}"
+    local commit_msg
+    commit_msg=$(_build_commit_msg "$worker_dir" "$task_id")
+    local commit_exit=0
+    git -C "$workspace" commit --no-gpg-sign -m "$commit_msg" 2>&1 || commit_exit=$?
+    if [[ "$commit_exit" -ne 0 ]]; then
+        log_warn "Commit failed (exit=$commit_exit)"
+        return 1
+    fi
+
+    local commit_sha
+    commit_sha=$(git -C "$workspace" rev-parse HEAD 2>/dev/null)
+    log "Committed: ${commit_sha:0:8}"
+
+    # Push and create PR (with exponential backoff)
+    _push_per_cycle_pr "$workspace" "$commit_sha" "$commit_msg" "$worker_dir" "$project_dir"
+}
+
+# Remove leftover artifact files from the workspace before committing.
+_clean_artifacts() {
+    local workspace="$1"
+
     local untracked_artifacts
     untracked_artifacts=$(git -C "$workspace" ls-files --others --exclude-standard \
         | grep -iE '\.(tmp|bak|orig|swp|swo|pyc|pyo|DS_Store|log)$|~$|^\.#|__pycache__|\.cache/|node_modules/|package-lock\.json|pnpm-lock\.yaml|yarn\.lock|Gemfile\.lock|poetry\.lock|composer\.lock|Cargo\.lock|go\.sum' \
@@ -70,36 +112,29 @@ agent_run() {
             [[ -n "$artifact" ]] && rm -f "$workspace/$artifact"
         done <<< "$untracked_artifacts"
     fi
+}
 
-    # Stage and commit
-    git_set_identity
-    git -C "$workspace" add -A 2>/dev/null
+# Remove the workspace worktree entirely.
+#
+# Args:
+#   workspace   - Git workspace directory (worker_dir/workspace)
+#   project_dir - Project directory (git root)
+_remove_workspace() {
+    local workspace="$1"
+    local project_dir="$2"
 
-    # Build commit message including auditor's original scope (shell-only,
-    # not exposed to the quality-gate LLM prompt — preserves blind review)
-    local task_id="${WIGGUM_TASK_ID:-autofix}"
-    local commit_msg
-    commit_msg=$(_build_commit_msg "$worker_dir" "$task_id")
-    local commit_exit=0
-    git -C "$workspace" commit --no-gpg-sign -m "$commit_msg" 2>&1 || commit_exit=$?
-    if [[ "$commit_exit" -ne 0 ]]; then
-        log_warn "Commit failed (exit=$commit_exit), skipping push/PR"
-        return "$md_exit"
+    if [[ ! -d "$workspace" ]]; then
+        return 0
     fi
 
-    local commit_sha
-    commit_sha=$(git -C "$workspace" rev-parse HEAD 2>/dev/null)
-    log "Committed: ${commit_sha:0:8}"
-
-    # Verify no leftover artifacts after commit
-    _verify_workspace_clean "$workspace" "PASS"
-
-    # Create a per-cycle branch from main, cherry-pick the commit onto it,
-    # push, and open a dedicated PR. This gives each audit cycle its own PR
-    # for easy review and cherry-picking.
-    _push_per_cycle_pr "$workspace" "$commit_sha" "$commit_msg" "$worker_dir" "$project_dir"
-
-    return "$md_exit"
+    cd "$project_dir" || return 1
+    git worktree remove --force "$workspace" 2>/dev/null || {
+        # Fallback: manual removal if git worktree remove fails
+        log_warn "git worktree remove failed, removing manually"
+        rm -rf "$workspace"
+        git worktree prune 2>/dev/null || true
+    }
+    log_debug "Removed workspace worktree"
 }
 
 # Build a commit message that includes the auditor's original scope/concern.
@@ -144,41 +179,45 @@ _build_commit_msg() {
     fi
 }
 
-# Verify no untracked non-ignored files remain in workspace after cleanup.
-# Logs a warning if artifacts are found — helps catch missed cleanup.
+# Run a command with exponential backoff retry.
 #
 # Args:
-#   workspace - Git workspace directory
-#   context   - Context label for logging (e.g., "FAIL", "PASS")
-_verify_workspace_clean() {
-    local workspace="$1"
-    local context="$2"
-
-    local remaining
-    remaining=$(git -C "$workspace" ls-files --others --exclude-standard 2>/dev/null || true)
-    if [[ -n "$remaining" ]]; then
-        log_warn "Workspace not clean after $context — leftover files:"
-        log_warn "$remaining"
-    fi
-}
-
-# Pull latest main into the workspace so the next audit cycle starts up-to-date.
+#   max_attempts - Maximum number of attempts
+#   description  - Human-readable description for logging
+#   ...          - Command and arguments to run
 #
-# Args:
-#   workspace - Git workspace directory
-_resync_to_main() {
-    local workspace="$1"
-    local default_branch
-    default_branch=$(get_default_branch)
+# Returns: exit code from final attempt
+_with_backoff() {
+    local max_attempts="$1"
+    local description="$2"
+    shift 2
 
-    git -C "$workspace" fetch origin "$default_branch" 2>/dev/null || true
-    git -C "$workspace" reset --hard "origin/$default_branch" 2>/dev/null || true
-    log_debug "Resynced workspace to origin/$default_branch"
+    local attempt=1
+    local delay=2
+    local exit_code=0
+
+    while (( attempt <= max_attempts )); do
+        exit_code=0
+        "$@" 2>&1 || exit_code=$?
+
+        if [[ "$exit_code" -eq 0 ]]; then
+            return 0
+        fi
+
+        if (( attempt == max_attempts )); then
+            log_warn "$description failed after $max_attempts attempts"
+            return "$exit_code"
+        fi
+
+        log_warn "$description failed (attempt $attempt/$max_attempts), retrying in ${delay}s"
+        sleep "$delay"
+        (( delay *= 2 ))
+        ((++attempt))
+    done
 }
 
 # Create a per-cycle branch from main, cherry-pick the commit, push, and open a PR.
-# After pushing, resets the workspace back to origin/<default_branch> so the next
-# audit cycle starts from a clean main.
+# Push and PR creation use exponential backoff.
 #
 # Args:
 #   workspace   - Git workspace directory
@@ -186,6 +225,8 @@ _resync_to_main() {
 #   commit_msg  - Commit message (reused as PR title)
 #   worker_dir  - Worker directory
 #   project_dir - Project directory
+#
+# Returns: 0 if push+PR succeeded, 1 on failure
 _push_per_cycle_pr() {
     local workspace="$1"
     local commit_sha="$2"
@@ -223,30 +264,22 @@ _push_per_cycle_pr() {
     if [[ "$pick_exit" -ne 0 ]]; then
         log_warn "Cherry-pick onto $cycle_branch failed (conflict with main) — discarding"
         git -C "$workspace" cherry-pick --abort 2>/dev/null || true
-        git -C "$workspace" checkout "$task_branch" 2>/dev/null || true
-        git -C "$workspace" branch -D "$cycle_branch" 2>/dev/null || true
-        _resync_to_main "$workspace"
-        return
+        return 1
     fi
 
-    # Push the per-cycle branch
-    local push_exit=0
-    git -C "$workspace" push -u origin "$cycle_branch" 2>&1 || push_exit=$?
-    if [[ "$push_exit" -ne 0 ]]; then
-        log_warn "Push failed for $cycle_branch (exit=$push_exit)"
-        git -C "$workspace" checkout "$task_branch" 2>/dev/null || true
-        git -C "$workspace" branch -D "$cycle_branch" 2>/dev/null || true
-        _resync_to_main "$workspace"
-        return
+    # Push with exponential backoff (3 attempts: 2s, 4s)
+    if ! _with_backoff 3 "Push $cycle_branch" \
+        git -C "$workspace" push -u origin "$cycle_branch"; then
+        return 1
     fi
     log "Pushed to $cycle_branch"
 
-    # Create PR
-    _create_cycle_pr "$workspace" "$cycle_branch" "$commit_msg" "$worker_dir" "$default_branch"
+    # Create PR with exponential backoff (3 attempts: 2s, 4s)
+    _with_backoff 3 "Create PR for $cycle_branch" \
+        _create_cycle_pr "$workspace" "$cycle_branch" "$commit_msg" "$worker_dir" "$default_branch" \
+        || log_warn "PR creation failed — branch was pushed, PR can be created manually"
 
-    # Return to task branch and resync to main for next audit cycle
-    git -C "$workspace" checkout "$task_branch" 2>/dev/null || true
-    _resync_to_main "$workspace"
+    return 0
 }
 
 # Generate a branch name for this audit cycle: autofix/<epoch>-<concern-slug>
@@ -294,21 +327,22 @@ _fallback_push() {
     local worker_dir="$4"
     local project_dir="${5:-${PROJECT_DIR:-}}"
 
-    local push_exit=0
-    git -C "$workspace" push -u origin "$branch" 2>&1 || push_exit=$?
-    if [[ "$push_exit" -ne 0 ]]; then
-        push_exit=0
-        git -C "$workspace" push --force-with-lease -u origin "$branch" 2>&1 || push_exit=$?
-    fi
-    if [[ "$push_exit" -ne 0 ]]; then
-        log_warn "Fallback push failed (exit=$push_exit)"
-        return
+    if ! _with_backoff 3 "Fallback push $branch" \
+        git -C "$workspace" push -u origin "$branch"; then
+        # Try force-with-lease as last resort
+        if ! _with_backoff 2 "Force push $branch" \
+            git -C "$workspace" push --force-with-lease -u origin "$branch"; then
+            log_warn "Fallback push failed"
+            return 1
+        fi
     fi
     log "Pushed to $branch (fallback)"
 
     local default_branch
     default_branch=$(get_default_branch)
-    _create_cycle_pr "$workspace" "$branch" "$commit_msg" "$worker_dir" "$default_branch"
+    _with_backoff 3 "Create PR for $branch" \
+        _create_cycle_pr "$workspace" "$branch" "$commit_msg" "$worker_dir" "$default_branch" \
+        || log_warn "PR creation failed — branch was pushed, PR can be created manually"
 }
 
 # Create a PR for a per-cycle branch with audit context in the body.
@@ -344,7 +378,7 @@ _create_cycle_pr() {
         --base "$default_branch" \
         --head "$branch" 2>&1) || {
         log_warn "Failed to create PR: ${pr_output:0:200}"
-        return 0
+        return 1
     }
 
     local pr_url

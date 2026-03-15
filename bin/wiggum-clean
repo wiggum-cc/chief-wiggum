@@ -169,6 +169,8 @@ do_archive() {
 }
 
 # Resolve patterns to worker directories
+#
+# A pattern can match multiple workers — all matches are returned.
 resolve_patterns() {
     local input="$1"
     local resolved=()
@@ -186,17 +188,9 @@ resolve_patterns() {
             return 1
         fi
 
-        local match_count
-        match_count=$(echo "$matches" | wc -l | tr -d '[:space:]')
-
-        if [ "$match_count" -gt 1 ]; then
-            echo "Multiple workers match '$pattern':" >&2
-            sed 's/^/  /' <<< "$matches" >&2
-            echo "Please be more specific." >&2
-            return 1
-        fi
-
-        resolved+=("$(echo "$matches" | head -1)")
+        while IFS= read -r match; do
+            resolved+=("$match")
+        done <<< "$matches"
     done
 
     printf '%s\n' "${resolved[@]}"

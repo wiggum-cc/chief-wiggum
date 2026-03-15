@@ -463,9 +463,11 @@ list_all_workers() {
 
 # Find workers matching a pattern
 #
+# Searches all directories under workers/ (worker-*, service-*, planner-*, etc.)
+#
 # Args:
 #   ralph_dir - Ralph directory path
-#   pattern   - Pattern to match
+#   pattern   - Pattern to match (matched against directory name)
 #
 # Returns: matching worker names (one per line)
 find_workers_by_pattern() {
@@ -474,7 +476,7 @@ find_workers_by_pattern() {
 
     [ -d "$ralph_dir/workers" ] || return 0
 
-    for dir in "$ralph_dir/workers"/worker-*; do
+    for dir in "$ralph_dir/workers"/*/; do
         [ -d "$dir" ] || continue
         local dirname
         dirname=$(basename "$dir")
