@@ -184,11 +184,11 @@ test_pass_creates_per_cycle_branch() {
     assert_output_contains "$remote_branches" "race-conditions" \
         "Branch name should contain concern slug"
 
-    # Verify workspace is back on the task branch at main's HEAD
+    # Verify workspace is reset to the default branch for next audit cycle
     local current_branch
     current_branch=$(git -C "$TEST_DIR/worker/workspace" rev-parse --abbrev-ref HEAD 2>/dev/null)
-    assert_output_contains "$current_branch" "task/" \
-        "Workspace should be back on task branch after per-cycle push"
+    assert_equals "main" "$current_branch" \
+        "Workspace should be on default branch after quality-gate PASS"
 
     # Verify workspace HEAD matches origin/main (reset for next cycle)
     local workspace_head main_head
