@@ -4,8 +4,12 @@ set -euo pipefail
 # AGENT: autofix.quality-gate (shell override)
 #
 # Extends the markdown quality-gate with post-decision actions:
-#   - PASS: commit, push (with backoff), create PR → remove workspace on success
-#   - FAIL: remove workspace entirely
+#   - PASS: commit, push (with backoff), create PR
+#   - FAIL: discard changes (reset workspace to clean state)
+#
+# Workspace cleanup is NOT done here — it is handled by `wiggum service stop`
+# when the service is shut down. This allows the pipeline to loop back to
+# random-audit with the workspace intact for the next audit cycle.
 #
 # The markdown base handles the LLM evaluation. This shell layer acts on the
 # decision by reading the gate_result from the agent's result file.
@@ -39,17 +43,15 @@ agent_run() {
 
     if [[ "$gate_result" == "PASS" ]]; then
         if _handle_pass "$workspace" "$worker_dir" "$project_dir"; then
-            # Push+PR succeeded — remove workspace
-            log "Quality gate PASS — push/PR succeeded, removing workspace"
-            _remove_workspace "$workspace" "$project_dir"
+            log "Quality gate PASS — push/PR succeeded"
+            # Reset workspace to main so the next audit cycle starts clean
+            _reset_workspace_to_main "$workspace" "$project_dir"
         else
-            # Push+PR failed — leave workspace intact for debugging
             log_warn "Quality gate PASS — push/PR failed, leaving workspace for inspection"
         fi
     else
-        # FAIL — remove workspace entirely
-        log "Quality gate FAIL — removing workspace"
-        _remove_workspace "$workspace" "$project_dir"
+        log "Quality gate FAIL — discarding changes"
+        _reset_workspace_to_main "$workspace" "$project_dir"
     fi
 
     return "$md_exit"
@@ -114,12 +116,14 @@ _clean_artifacts() {
     fi
 }
 
-# Remove the workspace worktree entirely.
+# Reset the workspace worktree to a clean state on the default branch.
+# Discards all uncommitted changes and untracked files so the next
+# audit cycle starts fresh without needing a new worktree.
 #
 # Args:
 #   workspace   - Git workspace directory (worker_dir/workspace)
 #   project_dir - Project directory (git root)
-_remove_workspace() {
+_reset_workspace_to_main() {
     local workspace="$1"
     local project_dir="$2"
 
@@ -127,14 +131,16 @@ _remove_workspace() {
         return 0
     fi
 
-    cd "$project_dir" || return 1
-    git worktree remove --force "$workspace" 2>/dev/null || {
-        # Fallback: manual removal if git worktree remove fails
-        log_warn "git worktree remove failed, removing manually"
-        rm -rf "$workspace"
-        git worktree prune 2>/dev/null || true
-    }
-    log_debug "Removed workspace worktree"
+    local default_branch
+    default_branch=$(get_default_branch)
+
+    # Fetch latest main and reset workspace to it
+    git -C "$workspace" fetch origin "$default_branch" 2>/dev/null || true
+    git -C "$workspace" checkout -f "$default_branch" 2>/dev/null || true
+    git -C "$workspace" reset --hard "origin/$default_branch" 2>/dev/null || true
+    git -C "$workspace" clean -fdx 2>/dev/null || true
+
+    log_debug "Reset workspace to origin/$default_branch"
 }
 
 # Build a commit message that includes the auditor's original scope/concern.

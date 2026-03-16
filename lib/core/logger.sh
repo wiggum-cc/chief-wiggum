@@ -9,9 +9,10 @@
 #   ERROR - Error conditions requiring attention
 #
 # Environment variables:
-#   LOG_FILE  - Optional file to append all logs to (in addition to stdout/stderr)
-#   LOG_LEVEL - Minimum level to output: TRACE, DEBUG, INFO, WARN, ERROR (default: INFO)
-#   DEBUG     - If set to 1, equivalent to LOG_LEVEL=DEBUG (legacy compatibility)
+#   LOG_FILE   - Optional file to append all logs to (in addition to stdout/stderr)
+#   LOG_LEVEL  - Minimum level to output: TRACE, DEBUG, INFO, WARN, ERROR (default: INFO)
+#   LOG_PREFIX - Optional prefix inserted before level (e.g., "[w2]" for worker identification)
+#   DEBUG      - If set to 1, equivalent to LOG_LEVEL=DEBUG (legacy compatibility)
 set -euo pipefail
 
 # Log level numeric values for comparison
@@ -72,7 +73,8 @@ _log_output() {
     else
         timestamp=$(date -Iseconds)
     fi
-    local formatted="[$timestamp] ${level}: $message"
+    local prefix="${LOG_PREFIX:+${LOG_PREFIX} }"
+    local formatted="[$timestamp] ${prefix}${level}: $message"
 
     # Output to appropriate stream
     if [[ "$stream" == "2" ]]; then

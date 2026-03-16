@@ -494,6 +494,7 @@ _run_pipeline_worker() {
     local worker_suffix="-w${worker_index}"
 
     export LOG_FILE="$_RUNNER_RALPH_DIR/logs/service-${id}${worker_suffix}.log"
+    export LOG_PREFIX="[w${worker_index}]"
     source "$WIGGUM_HOME/lib/core/logger.sh"
     source "$WIGGUM_HOME/lib/utils/activity-log.sh"
     activity_init "$_RUNNER_PROJECT_DIR"
@@ -1111,6 +1112,9 @@ service_wait() {
 
 # Stop a running service
 #
+# Sends signal to the service process tree, waits for shutdown, then
+# cleans up any leftover worktree workspaces for the service.
+#
 # Args:
 #   id     - Service identifier
 #   signal - Signal to send (default: TERM)
@@ -1125,17 +1129,26 @@ service_stop() {
 
     if [ -z "$pid" ]; then
         log_debug "Service $id not running (no PID)"
+        # Still clean up stale workspaces even if PID is gone
+        _service_cleanup_workspaces "$id"
         return 1
     fi
 
     if ! kill -0 "$pid" 2>/dev/null; then
         log_debug "Service $id not running (PID $pid dead)"
         service_state_mark_completed "$id"
+        _service_cleanup_workspaces "$id"
         return 1
     fi
 
     log_debug "Stopping service $id (PID: $pid, signal: $signal)"
-    kill "-$signal" "$pid" 2>/dev/null || true
+
+    # Kill the entire process tree (workers, agents, claude CLI subprocesses)
+    if declare -F kill_process_tree &>/dev/null; then
+        kill_process_tree "$pid" "$signal"
+    else
+        kill "-$signal" "$pid" 2>/dev/null || true
+    fi
 
     # Wait briefly for clean shutdown
     local waited=0
@@ -1147,11 +1160,67 @@ service_stop() {
     # Force kill if still running
     if kill -0 "$pid" 2>/dev/null; then
         log_warn "Service $id did not stop gracefully, force killing"
-        kill -9 "$pid" 2>/dev/null || true
+        if declare -F kill_process_tree &>/dev/null; then
+            kill_process_tree "$pid" KILL
+        else
+            kill -9 "$pid" 2>/dev/null || true
+        fi
+        sleep 1
     fi
 
     service_state_mark_completed "$id"
+
+    # Clean up worktree workspaces after workers are dead
+    _service_cleanup_workspaces "$id"
+
     return 0
+}
+
+# Clean up worktree workspaces for a service
+#
+# Finds all worker directories matching service-{id}-* in .ralph/workers/
+# and removes their workspace worktrees, then removes the worker directories.
+#
+# Args:
+#   id - Service identifier
+_service_cleanup_workspaces() {
+    local id="$1"
+    local ralph_dir="${_RUNNER_RALPH_DIR:-${RALPH_DIR:-}}"
+    local project_dir="${_RUNNER_PROJECT_DIR:-${PROJECT_DIR:-}}"
+
+    if [ -z "$ralph_dir" ] || [ ! -d "$ralph_dir/workers" ]; then
+        return 0
+    fi
+
+    local worker_dirs
+    worker_dirs=$(find "$ralph_dir/workers" -maxdepth 1 -type d -name "service-${id}-*" 2>/dev/null) || true
+
+    if [ -z "$worker_dirs" ]; then
+        return 0
+    fi
+
+    local count=0
+    while IFS= read -r worker_dir; do
+        [ -z "$worker_dir" ] && continue
+        local workspace="$worker_dir/workspace"
+
+        # Remove git worktree if workspace exists
+        if [ -d "$workspace" ] && [ -n "$project_dir" ]; then
+            cd "$project_dir" 2>/dev/null || true
+            git worktree remove --force "$workspace" 2>/dev/null || {
+                rm -rf "$workspace"
+                git worktree prune 2>/dev/null || true
+            }
+        fi
+
+        # Remove the worker directory (guard against empty path)
+        [ -n "$worker_dir" ] && rm -rf "$worker_dir"
+        ((++count)) || true
+    done <<< "$worker_dirs"
+
+    if [ "$count" -gt 0 ]; then
+        log_debug "Cleaned up $count service-$id worker workspace(s)"
+    fi
 }
 
 # Stop all running services
@@ -1177,7 +1246,7 @@ service_stop_all() {
     # Wait for graceful shutdown
     sleep 2
 
-    # Second pass: force kill any remaining
+    # Second pass: force kill any remaining and clean up workspaces
     for id in $enabled_services; do
         if service_state_is_running "$id"; then
             local pid
@@ -1188,6 +1257,7 @@ service_stop_all() {
             fi
             service_state_mark_completed "$id"
         fi
+        _service_cleanup_workspaces "$id"
     done
 }
 

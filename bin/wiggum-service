@@ -16,6 +16,7 @@ source "$WIGGUM_HOME/lib/core/verbose-flags.sh"
 # Source consolidated service modules
 source "$WIGGUM_HOME/lib/service/service-core.sh"
 source "$WIGGUM_HOME/lib/service/service-state.sh"
+source "$WIGGUM_HOME/lib/worker/worker-lifecycle.sh"
 
 show_help() {
     cat << EOF
@@ -327,9 +328,9 @@ cmd_stop() {
     fi
 
     if service_stop "$service_id"; then
-        echo "Service '$service_id' stopped"
+        echo "Service '$service_id' stopped (workers killed, workspaces cleaned)"
     else
-        echo "Service '$service_id' was not running"
+        echo "Service '$service_id' was not running (stale workspaces cleaned)"
     fi
 }
 
