@@ -418,12 +418,17 @@ _run_service_function() {
 _resolve_service_workspace() {
     local id="$1"
     local workspace="$2"
+    local worker_index="${3:-}"
 
     if [ "$workspace" = "true" ]; then
         # Isolated workspace: new directory per run
+        # Append worker_index (if provided) to avoid collisions when
+        # multiple workers are spawned within the same second.
         local timestamp
         timestamp=$(epoch_now)
-        local worker_dir="$_RUNNER_RALPH_DIR/workers/service-${id}-${timestamp}"
+        local suffix="${timestamp}"
+        [[ -n "$worker_index" ]] && suffix="${timestamp}-w${worker_index}"
+        local worker_dir="$_RUNNER_RALPH_DIR/workers/service-${id}-${suffix}"
         mkdir -p "$worker_dir/logs" "$worker_dir/results" "$worker_dir/output"
         echo "$worker_dir"
     else
@@ -678,7 +683,7 @@ _run_service_pipeline() {
             local w=0
             while [ "$w" -lt "$max_workers" ]; do
                 local worker_dir
-                worker_dir=$(_resolve_service_workspace "$id" "$use_workspace")
+                worker_dir=$(_resolve_service_workspace "$id" "$use_workspace" "$w")
 
                 local workspace_path
                 workspace_path=$(_setup_pipeline_workspace "$id" "$use_workspace" "$use_git_worktree" "$worker_dir")
@@ -974,7 +979,7 @@ service_run_sync() {
                     local w=0
                     while [ "$w" -lt "$max_workers" ]; do
                         local worker_dir
-                        worker_dir=$(_resolve_service_workspace "$id" "$use_workspace")
+                        worker_dir=$(_resolve_service_workspace "$id" "$use_workspace" "$w")
                         local workspace_path
                         workspace_path=$(_setup_pipeline_workspace "$id" "$use_workspace" "$use_git_worktree" "$worker_dir")
                         if [ $? -ne 0 ]; then
