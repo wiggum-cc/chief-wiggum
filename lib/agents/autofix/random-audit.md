@@ -38,9 +38,24 @@ You must randomly choose ONE scope to audit. Use this process:
 4. Build a weighted pool: repeat each entry's number by its weight, then pick one randomly with `shuf -n 1`
    - Example: if `lib/` has 100 files (weight=10) and `README.md` has 1 file (weight=1), the pool has 10 entries for `lib/` and 1 for `README.md`
    - This gives larger scopes more audit opportunity, but sublinearly — a 100-file directory is only 10x more likely than a 1-file entry, not 100x
-5. Coin flip (`shuf -i 0-1 -n 1`):
+5. Pick a scope type (`shuf -i 0-2 -n 1`):
    - 0 = **Global scope**: audit the entire codebase for the chosen concern
    - 1 = **Focused scope**: drill into the randomly selected directory/file only
+   - 2 = **Vertical slice scope**: pick one small, concrete entry point (a route handler,
+     CLI command, UI event handler, API endpoint, message consumer, cron job — whatever
+     the codebase uses as user-facing entry points) at random from the selected directory,
+     then trace the **entire vertical path** it takes through the codebase:
+     - Start at the entry point / user interaction layer
+     - Follow every call, import, and data transformation through each architectural layer
+       (controller → service → repository → database/external system, or whatever layering
+       the project uses)
+     - Trace the return path back up (response construction, error propagation, side effects)
+     - If the codebase is not layered, trace from the public API surface through all internal
+       modules to the deepest dependency (filesystem, network, subprocess, etc.) and back
+     - Your audit concern applies **along the entire traced path** — look for issues at every
+       layer and at every boundary crossing between layers
+     - Document the traced path in your report ("Vertical path" field) so the fix agent
+       understands the full chain
 
 ### Step 2: Random Concern Selection
 
@@ -122,6 +137,8 @@ report under "Selection method".
 61. Spec drift (code diverges from spec/, intent/, or TLA+ specifications — missing invariants, extra params, different defaults, renamed concepts)
 62. Over-engineering or under-engineering for stated scope (premature abstractions, gold-plating, or missing safeguards relative to the project's phase, scale, and performance targets — but never below production quality standards)
 63. Trivial or fake tests (tests that assert nothing meaningful, always pass, test mock wiring instead of behavior, or exist only to inflate coverage)
+64. N+1 database queries (loops that issue one query per item instead of batching — ORM lazy-loading, missing eager-loads/joins/preloads, unbounded query fans in resolvers or serializers)
+65. Missing database query batching in non-ORM code (raw SQL in loops, repeated single-row fetches, fan-out to external services without bulk APIs)
 
 **Generic Concerns** (broad, holistic):
 1. Overall code readability and clarity
@@ -209,10 +226,11 @@ Perform a randomly-scoped, randomly-concerned code audit of the workspace.
 
 ## Audit Parameters
 
-- **Scope type**: Global / Focused
+- **Scope type**: Global / Focused / Vertical slice
 - **Scope target**: [directory or file selected, or "entire codebase"]
 - **Concern type**: Specific / Generic
 - **Concern**: [the concern selected]
+- **Vertical path** (if vertical slice): [entry point] → [layer] → ... → [deepest dependency] → ... → [response]
 - **Selection method**: [show the random commands used]
 
 ## Findings

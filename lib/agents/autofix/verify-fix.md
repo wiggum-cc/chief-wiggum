@@ -40,13 +40,31 @@ complexity that outweighs the benefit), you can propose a better fix or skip it 
 clear explanation of the tradeoff. The bar is: would a senior engineer agree with your
 reasoning?
 
-## How to Fix
+## How to Fix — Red-Green TDD
 
-- Work through findings one at a time — verify, then fix, then move on
-- If the audit suggests a regression test, write it before the fix and confirm it fails
-  against the current code. Then apply the fix and confirm the test passes. If the test
-  doesn't fail pre-fix, investigate — it may be a false positive. Skip this when tests
-  aren't practical (naming issues, structural changes, etc.)
+Apply **red-green TDD** to every finding where a test is feasible. This is not optional —
+if the finding can be covered by a test, you must follow this protocol:
+
+1. **RED** — Write a regression test that **fails** against the current buggy code.
+   Run it and confirm it fails. If the audit report suggests a test, use that as a
+   starting point. If it doesn't, write your own based on the finding.
+   - The test should assert the *correct* behavior, so it fails now (bug present)
+     and will pass after the fix.
+   - If the test passes against current code, stop — investigate whether the finding
+     is actually a false positive. If the code is already correct, skip the finding.
+
+2. **GREEN** — Apply the minimal fix that makes the failing test pass. Run the test
+   again and confirm it goes green. Don't gold-plate — just make the test pass.
+
+3. **Refactor** (optional) — If the fix is ugly but correct, clean it up now while
+   the test protects you. Keep the test green.
+
+**When to skip TDD**: naming issues, comment fixes, structural/architectural changes,
+import reordering, or any finding where a meaningful automated test isn't practical.
+State "TDD: N/A — [reason]" in your report for each skipped case.
+
+**General fix rules**:
+- Work through findings one at a time — verify, red-green, then move on
 - Use the audit's suggested fix as a starting point, but improve on it if you see a
   better approach
 - Verify the build after each fix — a fix that breaks the build is not a fix
@@ -113,9 +131,9 @@ The upstream audit report is above. Independently verify each finding and fix co
 
 ## Fixes Applied
 
-| Finding | File(s) | Regression Test | Change Made |
-|---------|---------|-----------------|-------------|
-| [ID] | path:line, ... | Added/N/A | Brief description |
+| Finding | File(s) | TDD | Change Made |
+|---------|---------|-----|-------------|
+| [ID] | path:line, ... | Red→Green / N/A — [reason] | Brief description |
 
 ## Skipped Findings
 
