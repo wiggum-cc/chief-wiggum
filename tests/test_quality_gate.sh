@@ -125,13 +125,33 @@ _load_quality_gate() {
     source "$WIGGUM_HOME/lib/agents/autofix/quality-gate.sh"
 }
 
-# Helper: stub gh CLI to avoid real GitHub calls
+# Helper: stub gh CLI to avoid real GitHub calls.
+# Creates a fake gh script on PATH so that `timeout ... gh` and
+# `command -v gh` both find the stub instead of the real binary.
+# The stub succeeds (exit 0) to avoid triggering backoff retries.
 _stub_gh() {
-    gh() { return 1; }
-    export -f gh
+    _GH_STUB_DIR=$(mktemp -d)
+    cat > "$_GH_STUB_DIR/gh" << 'STUB'
+#!/usr/bin/env bash
+# Stub: print a fake PR URL for `gh pr create`, empty for others
+if [[ "${1:-}" == "pr" && "${2:-}" == "create" ]]; then
+    echo "https://github.com/test/test/pull/1"
+elif [[ "${1:-}" == "pr" && "${2:-}" == "view" ]]; then
+    echo '{"url":"https://github.com/test/test/pull/1"}'
+fi
+exit 0
+STUB
+    chmod +x "$_GH_STUB_DIR/gh"
+    _GH_OLD_PATH="$PATH"
+    export PATH="$_GH_STUB_DIR:$PATH"
 }
 _unstub_gh() {
-    unset -f gh 2>/dev/null || true
+    if [[ -n "${_GH_OLD_PATH:-}" ]]; then
+        export PATH="$_GH_OLD_PATH"
+        unset _GH_OLD_PATH
+    fi
+    [[ -n "${_GH_STUB_DIR:-}" ]] && rm -rf "$_GH_STUB_DIR"
+    unset _GH_STUB_DIR
 }
 
 # =============================================================================
@@ -184,13 +204,9 @@ test_pass_creates_per_cycle_branch() {
     assert_output_contains "$remote_branches" "race-conditions" \
         "Branch name should contain concern slug"
 
-    # Verify workspace is reset to the default branch for next audit cycle
-    local current_branch
-    current_branch=$(git -C "$TEST_DIR/worker/workspace" rev-parse --abbrev-ref HEAD 2>/dev/null)
-    assert_equals "main" "$current_branch" \
-        "Workspace should be on default branch after quality-gate PASS"
-
-    # Verify workspace HEAD matches origin/main (reset for next cycle)
+    # Verify workspace HEAD matches origin/main (reset for next cycle).
+    # Uses detached HEAD to avoid worktree branch contention, so we check
+    # commit SHA rather than branch name.
     local workspace_head main_head
     workspace_head=$(git -C "$TEST_DIR/worker/workspace" rev-parse HEAD)
     main_head=$(git -C "$TEST_DIR/worker/workspace" rev-parse origin/main)
@@ -310,8 +326,11 @@ test_commit_msg_includes_audit_scope() {
 
     _write_audit_report "$TEST_DIR/worker" "tests/" "Stale or misleading comments"
 
+    local audit_report
+    audit_report=$(agent_find_latest_report "$TEST_DIR/worker" "random-audit")
+
     local msg
-    msg=$(_build_commit_msg "$TEST_DIR/worker" "autofix")
+    msg=$(_build_commit_msg "autofix" "$audit_report")
     assert_output_contains "$msg" "stale or misleading comments" \
         "Commit message should include lowercase concern"
     assert_output_contains "$msg" "tests/" \
@@ -330,7 +349,7 @@ test_commit_msg_fallback_no_report() {
     # No audit report written
 
     local msg
-    msg=$(_build_commit_msg "$TEST_DIR/worker" "autofix")
+    msg=$(_build_commit_msg "autofix" "")
     assert_equals "autofix: automated code improvement" "$msg" \
         "Commit message should fall back to generic when no report"
 }

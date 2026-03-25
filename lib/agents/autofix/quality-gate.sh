@@ -73,6 +73,14 @@ _handle_pass() {
         return 0
     fi
 
+    # Resolve the audit report ONCE to prevent race conditions.
+    # With multiple concurrent workers, separate calls to agent_find_latest_report
+    # (which sorts by mtime) could return different files if filesystem operations
+    # interleave. Capturing the path here guarantees the commit message, branch
+    # name, and PR body all reference the same audit report.
+    local audit_report
+    audit_report=$(agent_find_latest_report "$worker_dir" "random-audit")
+
     # Clean leftover artifacts before committing
     _clean_artifacts "$workspace"
 
@@ -82,7 +90,7 @@ _handle_pass() {
 
     local task_id="${WIGGUM_TASK_ID:-autofix}"
     local commit_msg
-    commit_msg=$(_build_commit_msg "$worker_dir" "$task_id")
+    commit_msg=$(_build_commit_msg "$task_id" "$audit_report")
     local commit_exit=0
     git -C "$workspace" commit --no-gpg-sign -m "$commit_msg" 2>&1 || commit_exit=$?
     if [[ "$commit_exit" -ne 0 ]]; then
@@ -95,7 +103,7 @@ _handle_pass() {
     log "Committed: ${commit_sha:0:8}"
 
     # Push and create PR (with exponential backoff)
-    _push_per_cycle_pr "$workspace" "$commit_sha" "$commit_msg" "$worker_dir" "$project_dir"
+    _push_per_cycle_pr "$workspace" "$commit_sha" "$commit_msg" "$worker_dir" "$project_dir" "$audit_report"
 }
 
 # Remove leftover artifact files from the workspace before committing.
@@ -116,9 +124,13 @@ _clean_artifacts() {
     fi
 }
 
-# Reset the workspace worktree to a clean state on the default branch.
+# Reset the workspace worktree to a clean state matching the default branch.
 # Discards all uncommitted changes and untracked files so the next
 # audit cycle starts fresh without needing a new worktree.
+#
+# Uses detached HEAD instead of checking out the default branch directly,
+# because git worktrees cannot checkout a branch that is already checked
+# out in another worktree (including the main repo).
 #
 # Args:
 #   workspace   - Git workspace directory (worker_dir/workspace)
@@ -134,30 +146,28 @@ _reset_workspace_to_main() {
     local default_branch
     default_branch=$(get_default_branch)
 
-    # Fetch latest main and reset workspace to it
+    # Fetch latest main and detach HEAD at that commit.
+    # Using --detach avoids "branch already checked out" errors in worktrees
+    # where 'main' is already checked out by the main repo or another worktree.
     git -C "$workspace" fetch origin "$default_branch" 2>/dev/null || true
-    git -C "$workspace" checkout -f "$default_branch" 2>/dev/null || true
+    git -C "$workspace" checkout --detach "origin/$default_branch" 2>/dev/null || true
     git -C "$workspace" reset --hard "origin/$default_branch" 2>/dev/null || true
     git -C "$workspace" clean -fdx 2>/dev/null || true
 
-    log_debug "Reset workspace to origin/$default_branch"
+    log_debug "Reset workspace to origin/$default_branch (detached)"
 }
 
 # Build a commit message that includes the auditor's original scope/concern.
 # Falls back to a generic message if the audit report is unavailable.
 #
 # Args:
-#   worker_dir - Worker directory
-#   task_id    - Task identifier
+#   task_id      - Task identifier
+#   audit_report - Path to the audit report file (resolved by caller)
 #
 # Returns: commit message string (via stdout)
 _build_commit_msg() {
-    local worker_dir="$1"
-    local task_id="$2"
-
-    # Find the latest random-audit report
-    local audit_report
-    audit_report=$(agent_find_latest_report "$worker_dir" "random-audit")
+    local task_id="$1"
+    local audit_report="${2:-}"
 
     if [[ -z "$audit_report" ]] || [[ ! -f "$audit_report" ]]; then
         echo "$task_id: automated code improvement"
@@ -226,11 +236,12 @@ _with_backoff() {
 # Push and PR creation use exponential backoff.
 #
 # Args:
-#   workspace   - Git workspace directory
-#   commit_sha  - SHA of the commit on the task branch
-#   commit_msg  - Commit message (reused as PR title)
-#   worker_dir  - Worker directory
-#   project_dir - Project directory
+#   workspace    - Git workspace directory
+#   commit_sha   - SHA of the commit on the task branch
+#   commit_msg   - Commit message (reused as PR title)
+#   worker_dir   - Worker directory
+#   project_dir  - Project directory
+#   audit_report - Path to the audit report (resolved once by caller)
 #
 # Returns: 0 if push+PR succeeded, 1 on failure
 _push_per_cycle_pr() {
@@ -239,6 +250,7 @@ _push_per_cycle_pr() {
     local commit_msg="$3"
     local worker_dir="$4"
     local project_dir="${5:-${PROJECT_DIR:-}}"
+    local audit_report="${6:-}"
 
     local default_branch
     default_branch=$(get_default_branch)
@@ -248,7 +260,7 @@ _push_per_cycle_pr() {
 
     # Build a slug from the concern for a human-readable branch name
     local cycle_branch
-    cycle_branch=$(_make_cycle_branch_name "$worker_dir")
+    cycle_branch=$(_make_cycle_branch_name "$audit_report")
 
     # Save current branch to return to after cherry-pick
     local task_branch
@@ -260,7 +272,7 @@ _push_per_cycle_pr() {
     if [[ "$branch_exit" -ne 0 ]]; then
         log_warn "Failed to create cycle branch $cycle_branch — falling back to task branch push"
         git -C "$workspace" checkout "$task_branch" 2>/dev/null || true
-        _fallback_push "$workspace" "$task_branch" "$commit_msg" "$worker_dir" "$project_dir"
+        _fallback_push "$workspace" "$task_branch" "$commit_msg" "$worker_dir" "$project_dir" "$audit_report"
         return
     fi
 
@@ -282,7 +294,7 @@ _push_per_cycle_pr() {
 
     # Create PR with exponential backoff (3 attempts: 2s, 4s)
     _with_backoff 3 "Create PR for $cycle_branch" \
-        _create_cycle_pr "$workspace" "$cycle_branch" "$commit_msg" "$worker_dir" "$default_branch" \
+        _create_cycle_pr "$workspace" "$cycle_branch" "$commit_msg" "$worker_dir" "$default_branch" "$audit_report" \
         || log_warn "PR creation failed — branch was pushed, PR can be created manually"
 
     return 0
@@ -291,16 +303,13 @@ _push_per_cycle_pr() {
 # Generate a branch name for this audit cycle: autofix/<epoch>-<concern-slug>
 #
 # Args:
-#   worker_dir - Worker directory (to find the audit report)
+#   audit_report - Path to the audit report file (resolved by caller)
 #
 # Returns: branch name (via stdout)
 _make_cycle_branch_name() {
-    local worker_dir="$1"
+    local audit_report="${1:-}"
     local epoch
     epoch=$(epoch_now)
-
-    local audit_report
-    audit_report=$(agent_find_latest_report "$worker_dir" "random-audit")
 
     local slug="improvement"
     if [[ -n "$audit_report" ]] && [[ -f "$audit_report" ]]; then
@@ -321,17 +330,19 @@ _make_cycle_branch_name() {
 # Fallback: push on the existing task branch (used when per-cycle branch fails)
 #
 # Args:
-#   workspace   - Git workspace directory
-#   branch      - Branch to push
-#   commit_msg  - Commit message (for PR title)
-#   worker_dir  - Worker directory
-#   project_dir - Project directory
+#   workspace    - Git workspace directory
+#   branch       - Branch to push
+#   commit_msg   - Commit message (for PR title)
+#   worker_dir   - Worker directory
+#   project_dir  - Project directory
+#   audit_report - Path to the audit report (resolved once by caller)
 _fallback_push() {
     local workspace="$1"
     local branch="$2"
     local commit_msg="$3"
     local worker_dir="$4"
     local project_dir="${5:-${PROJECT_DIR:-}}"
+    local audit_report="${6:-}"
 
     if ! _with_backoff 3 "Fallback push $branch" \
         git -C "$workspace" push -u origin "$branch"; then
@@ -347,7 +358,7 @@ _fallback_push() {
     local default_branch
     default_branch=$(get_default_branch)
     _with_backoff 3 "Create PR for $branch" \
-        _create_cycle_pr "$workspace" "$branch" "$commit_msg" "$worker_dir" "$default_branch" \
+        _create_cycle_pr "$workspace" "$branch" "$commit_msg" "$worker_dir" "$default_branch" "$audit_report" \
         || log_warn "PR creation failed — branch was pushed, PR can be created manually"
 }
 
@@ -359,12 +370,14 @@ _fallback_push() {
 #   commit_msg     - Used as PR title
 #   worker_dir     - Worker directory
 #   default_branch - Base branch for the PR
+#   audit_report   - Path to the audit report (resolved once by caller)
 _create_cycle_pr() {
     local workspace="$1"
     local branch="$2"
     local commit_msg="$3"
     local worker_dir="$4"
     local default_branch="$5"
+    local audit_report="${6:-}"
 
     if ! command -v gh &>/dev/null; then
         log_debug "gh CLI not found, skipping PR creation"
@@ -373,9 +386,9 @@ _create_cycle_pr() {
 
     local gh_timeout="${WIGGUM_GH_TIMEOUT:-30}"
 
-    # Build PR body with audit context
+    # Build PR body from the pre-resolved audit report
     local body
-    body=$(_build_pr_body "$worker_dir")
+    body=$(_build_pr_body "$audit_report")
 
     local pr_output
     pr_output=$(timeout "$gh_timeout" gh pr create \
@@ -395,17 +408,14 @@ _create_cycle_pr() {
     fi
 }
 
-# Build a PR body with audit scope/concern context for reviewer convenience.
+# Build a PR body from the audit report.
 #
 # Args:
-#   worker_dir - Worker directory
+#   audit_report - Path to the audit report file (resolved by caller)
 #
 # Returns: PR body string (via stdout)
 _build_pr_body() {
-    local worker_dir="$1"
-
-    local audit_report
-    audit_report=$(agent_find_latest_report "$worker_dir" "random-audit")
+    local audit_report="${1:-}"
 
     if [[ -n "$audit_report" ]] && [[ -f "$audit_report" ]]; then
         cat "$audit_report" 2>/dev/null || echo "Autofix code improvement."
