@@ -447,6 +447,17 @@
           "default": false,
           "description": "If true, pulls latest main (fast-forward) before creating the workspace. Ensures the pipeline operates on the most recent codebase state."
         },
+        "max_workers": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 1,
+          "description": "Maximum number of parallel pipeline worker instances to spawn for one service execution."
+        },
+        "tolerate_worker_failures": {
+          "type": "boolean",
+          "default": false,
+          "description": "If true, failed pipeline worker runs are treated as non-fatal to the service execution as long as at least one worker started."
+        },
         "env": {
           "type": "object",
           "additionalProperties": { "type": "string" },

@@ -337,6 +337,49 @@ test_commit_msg_includes_audit_scope() {
         "Commit message should include scope target"
 }
 
+test_commit_msg_strips_issue_reference_from_concern() {
+    export WIGGUM_STEP_ID="quality-gate"
+    export _AGENT_START_EPOCH="4000003"
+
+    _load_quality_gate
+
+    _write_audit_report "$TEST_DIR/worker" "packages/" "#41 — Incorrect escaping or quoting in generated code"
+
+    local audit_report
+    audit_report=$(agent_find_latest_report "$TEST_DIR/worker" "random-audit")
+
+    local msg
+    msg=$(_build_commit_msg "autofix" "$audit_report")
+    assert_output_not_contains "$msg" "#41" \
+        "Commit/PR title should not contain issue-reference shorthand"
+    assert_output_contains "$msg" "incorrect escaping or quoting" \
+        "Commit/PR title should keep the concern text"
+}
+
+test_pr_body_strips_issue_reference_shorthand() {
+    export WIGGUM_STEP_ID="quality-gate"
+    export _AGENT_START_EPOCH="4000004"
+
+    _load_quality_gate
+
+    _write_audit_report "$TEST_DIR/worker" "packages/" "#54 — Sensitive data in log output"
+    cat >> "$TEST_DIR/worker/reports/4000004-random-audit-report.md" << 'EOF'
+- **Issue**: Finding #1 leaks tokens
+EOF
+
+    local audit_report
+    audit_report=$(agent_find_latest_report "$TEST_DIR/worker" "random-audit")
+
+    local body
+    body=$(_build_pr_body "$audit_report")
+    assert_output_not_contains "$body" "#54" \
+        "PR body should not contain issue-reference shorthand for concerns"
+    assert_output_not_contains "$body" "#1" \
+        "PR body should not contain issue-reference shorthand for findings"
+    assert_output_contains "$body" "Sensitive data in log output" \
+        "PR body should keep concern text"
+}
+
 # =============================================================================
 # Test: Commit message falls back when no report exists
 # =============================================================================
@@ -407,6 +450,8 @@ run_test test_per_cycle_branch_has_correct_commit
 run_test test_second_visit_reads_current_result
 run_test test_pass_no_changes_is_noop
 run_test test_commit_msg_includes_audit_scope
+run_test test_commit_msg_strips_issue_reference_from_concern
+run_test test_pr_body_strips_issue_reference_shorthand
 run_test test_commit_msg_fallback_no_report
 run_test test_artifact_cleanup
 

@@ -762,7 +762,8 @@
         "workspace": true,
         "git_worktree": true,
         "pull_before": true,
-        "max_workers": 4
+        "max_workers": 4,
+        "tolerate_worker_failures": true
       },
       "timeout": 7200,
       "concurrency": {

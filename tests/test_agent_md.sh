@@ -1098,6 +1098,38 @@ _create_mock_stream_log() {
     echo '{"type":"assistant","message":{"content":[{"type":"text","text":"Work completed successfully.\n\n<result>'"$result_value"'</result>"}]}}' > "$log_file"
 }
 
+test_result_tag_completion_detects_codex_jsonl() {
+    source "$WIGGUM_HOME/lib/core/agent-md.sh"
+
+    local tmpdir
+    tmpdir=$(mktemp -d)
+
+    local worker_dir="$tmpdir/worker-TEST-000-12345"
+    local run_id="verify-fix-1700000000"
+    export RALPH_RUN_ID="$run_id"
+    export WIGGUM_STEP_ID="verify-fix"
+    mkdir -p "$worker_dir/logs/$run_id"
+
+    cat > "$worker_dir/logs/$run_id/verify-fix-0-1700000000.log" << 'LOGEOF'
+{"type":"session_start","session_id":"abc-123","model":"gpt-5-codex"}
+{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Done.\n<result>PASS</result>"}}
+{"type":"result","session_id":"abc-123","is_error":false}
+LOGEOF
+
+    _MD_WORKER_DIR="$worker_dir"
+    _MD_RESULT_TAG="result"
+    declare -gA _MD_VALID_RESULTS=([0]="PASS" [1]="FAIL" [2]="SKIP")
+
+    if _md_completion_check_result_tag; then
+        assert_success "Codex JSONL content deltas should satisfy result-tag completion" true
+    else
+        assert_failure "Codex JSONL content deltas should satisfy result-tag completion" true
+    fi
+
+    unset RALPH_RUN_ID WIGGUM_STEP_ID
+    [ -n "$tmpdir" ] && rm -rf "$tmpdir"
+}
+
 test_supervisor_stop_fallback_overrides_fail_with_pass() {
     source "$WIGGUM_HOME/lib/core/agent-md.sh"
 
@@ -1351,6 +1383,7 @@ run_test test_live_mode_session_directory_creation
 run_test test_live_mode_session_file_naming
 run_test test_live_mode_first_run_detection
 run_test test_live_mode_session_id_persistence
+run_test test_result_tag_completion_detects_codex_jsonl
 run_test test_supervisor_stop_fallback_overrides_fail_with_pass
 run_test test_no_supervisor_stop_preserves_fail
 run_test test_supervisor_stop_no_log_result_stays_fail

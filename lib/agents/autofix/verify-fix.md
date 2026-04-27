@@ -105,6 +105,9 @@ The workspace may contain uncommitted work. You MUST NOT destroy it.
 VERIFY-AND-FIX TASK:
 
 The upstream audit report is above. Independently verify each finding and fix confirmed issues.
+When referring to findings or selected concerns, do not introduce `#123`
+shorthand. That syntax is reserved for GitHub issue references and does not
+apply to autofix audit reports.
 
 ## Process
 

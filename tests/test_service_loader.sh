@@ -85,6 +85,31 @@ JSON
     assert_output_contains "$service_json" "A test service" "Should contain description"
 }
 
+test_load_pipeline_worker_failure_tolerance_cache() {
+    cat > "$TEST_DIR/services.json" << 'JSON'
+{
+    "version": "1.0",
+    "services": [
+        {
+            "id": "pipeline-svc",
+            "schedule": { "type": "interval", "interval": 60 },
+            "execution": {
+                "type": "pipeline",
+                "pipeline": "autofix",
+                "max_workers": 3,
+                "tolerate_worker_failures": true
+            }
+        }
+    ]
+}
+JSON
+
+    service_load "$TEST_DIR/services.json"
+
+    assert_equals "3" "${_SVC_CACHE["exec_max_workers:pipeline-svc"]}" "Should cache max_workers"
+    assert_equals "true" "${_SVC_CACHE["exec_tolerate_worker_failures:pipeline-svc"]}" "Should cache worker failure tolerance"
+}
+
 # =============================================================================
 # service_load - Error Handling Tests
 # =============================================================================
@@ -696,6 +721,7 @@ JSON
 # service_load - valid input
 run_test test_load_valid_two_service_config
 run_test test_load_gets_service_by_id
+run_test test_load_pipeline_worker_failure_tolerance_cache
 
 # service_load - error handling
 run_test test_load_missing_file

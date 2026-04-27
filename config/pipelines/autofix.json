@@ -21,6 +21,9 @@
       "commit_after": false,
       "config": { "max_iterations": 20, "max_turns": 60, "supervisor_interval": 2 },
       "on_result": {
+        "FAIL": {
+          "jump": "random-audit"
+        },
         "SKIP": {
           "jump": "random-audit"
         }

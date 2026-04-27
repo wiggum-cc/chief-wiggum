@@ -476,6 +476,22 @@ test_service_runner_resolve_workspace_lightweight() {
     assert_dir_exists "$workspace/output"
 }
 
+test_service_runner_worker_failures_can_be_tolerated() {
+    source "$WIGGUM_HOME/lib/service/service-runner.sh"
+
+    local rc=0
+    _service_pipeline_workers_exit_code "true" 4 2 || rc=$?
+    assert_equals "0" "$rc" "Tolerated worker failures should not fail service execution"
+
+    rc=0
+    _service_pipeline_workers_exit_code "false" 4 2 || rc=$?
+    assert_equals "1" "$rc" "Untolerated worker failures should fail service execution"
+
+    rc=0
+    _service_pipeline_workers_exit_code "true" 0 0 || rc=$?
+    assert_equals "1" "$rc" "No started workers should still fail service execution"
+}
+
 # =============================================================================
 # SERVICE-CORE.SH TESTS
 # =============================================================================
@@ -752,6 +768,7 @@ run_test test_service_runner_function_security_check
 run_test test_service_runner_function_type_valid
 run_test test_service_runner_resolve_workspace_isolated
 run_test test_service_runner_resolve_workspace_lightweight
+run_test test_service_runner_worker_failures_can_be_tolerated
 
 run_test test_service_core_init
 run_test test_service_can_run_checks_dependencies

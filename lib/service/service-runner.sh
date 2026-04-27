@@ -558,6 +558,30 @@ _run_pipeline_worker() {
     return "$_exit_code"
 }
 
+# Convert worker results into a service-level exit code.
+#
+# Args:
+#   tolerate_worker_failures - "true" to isolate worker run failures
+#   spawned_count            - number of workers that actually started
+#   failed_count             - number of started workers that exited non-zero
+#
+# Returns: 0 when the service execution should be considered successful
+_service_pipeline_workers_exit_code() {
+    local tolerate_worker_failures="$1"
+    local spawned_count="$2"
+    local failed_count="$3"
+
+    if [ "$spawned_count" -le 0 ]; then
+        return 1
+    fi
+
+    if [ "$failed_count" -gt 0 ] && [ "$tolerate_worker_failures" != "true" ]; then
+        return 1
+    fi
+
+    return 0
+}
+
 # Run a pipeline-type service
 #
 # Executes a named pipeline using pipeline_load + pipeline_run_all.
@@ -613,6 +637,7 @@ _run_service_pipeline() {
     local use_workspace="${_SVC_CACHE["exec_workspace:${id}"]:-false}"
     local use_git_worktree="${_SVC_CACHE["exec_git_worktree:${id}"]:-false}"
     local pull_before="${_SVC_CACHE["exec_pull_before:${id}"]:-false}"
+    local tolerate_worker_failures="${_SVC_CACHE["exec_tolerate_worker_failures:${id}"]:-false}"
 
     # Record start time
     local start_time
@@ -665,8 +690,16 @@ _run_service_pipeline() {
         fi
 
         (
+            local worker_rc=0
             _run_pipeline_worker "$id" "$pipeline_name" "$pipeline_config" "$worker_dir" \
-                "$workspace_path" "$use_git_worktree" "$start_time" 0
+                "$workspace_path" "$use_git_worktree" "$start_time" 0 || worker_rc=$?
+
+            if [ "$worker_rc" -ne 0 ] && [ "$tolerate_worker_failures" = "true" ]; then
+                log_warn "Service $id: worker 0 failed with exit_code=$worker_rc; treating as non-fatal"
+                exit 0
+            fi
+
+            exit "$worker_rc"
         ) &
 
         local pid=$!
@@ -701,17 +734,24 @@ _run_service_pipeline() {
             done
 
             # Wait for all workers, track failures
-            local any_failed=0
+            local failed_count=0
             for pid in "${worker_pids[@]}"; do
                 local wrc=0
                 wait "$pid" 2>/dev/null || wrc=$?
                 if [ "$wrc" -ne 0 ]; then
-                    any_failed=1
+                    ((++failed_count))
                 fi
             done
 
-            log "Service $id: all $max_workers workers completed (any_failed=$any_failed)"
-            exit "$any_failed"
+            local spawned_count="${#worker_pids[@]}"
+            log "Service $id: workers completed (requested=$max_workers spawned=$spawned_count failed=$failed_count tolerate_worker_failures=$tolerate_worker_failures)"
+
+            if [ "$failed_count" -gt 0 ] && [ "$tolerate_worker_failures" = "true" ]; then
+                log_warn "Service $id: treating $failed_count failed worker(s) as non-fatal"
+            fi
+
+            _service_pipeline_workers_exit_code "$tolerate_worker_failures" "$spawned_count" "$failed_count"
+            exit "$?"
         ) &
 
         local pid=$!
@@ -928,6 +968,7 @@ service_run_sync() {
                 local use_workspace="${_SVC_CACHE["exec_workspace:${id}"]:-false}"
                 local use_git_worktree="${_SVC_CACHE["exec_git_worktree:${id}"]:-false}"
                 local pull_before="${_SVC_CACHE["exec_pull_before:${id}"]:-false}"
+                local tolerate_worker_failures="${_SVC_CACHE["exec_tolerate_worker_failures:${id}"]:-false}"
 
                 # Pull latest main if requested
                 if [ "$pull_before" = "true" ]; then
@@ -969,9 +1010,15 @@ service_run_sync() {
                     if [ $? -ne 0 ]; then
                         exit_code=1
                     else
+                        local worker_rc=0
                         _run_pipeline_worker "$id" "$pipeline_name" "$pipeline_config" "$worker_dir" \
-                            "$workspace_path" "$use_git_worktree" "$start_time" 0
-                        exit_code=$?
+                            "$workspace_path" "$use_git_worktree" "$start_time" 0 || worker_rc=$?
+                        if [ "$worker_rc" -ne 0 ] && [ "$tolerate_worker_failures" = "true" ]; then
+                            log_warn "Service $id: worker 0 failed with exit_code=$worker_rc; treating as non-fatal"
+                            exit_code=0
+                        else
+                            exit_code="$worker_rc"
+                        fi
                     fi
                 else
                     # Multi-worker sync: spawn N workers, wait for all
@@ -994,13 +1041,21 @@ service_run_sync() {
                         ((++w))
                     done
 
+                    local failed_count=0
                     for pid in "${worker_pids[@]}"; do
                         local wrc=0
                         wait "$pid" 2>/dev/null || wrc=$?
                         if [ "$wrc" -ne 0 ]; then
-                            exit_code=1
+                            ((++failed_count))
                         fi
                     done
+
+                    local spawned_count="${#worker_pids[@]}"
+                    log "Service $id: workers completed (requested=$max_workers spawned=$spawned_count failed=$failed_count tolerate_worker_failures=$tolerate_worker_failures)"
+                    if [ "$failed_count" -gt 0 ] && [ "$tolerate_worker_failures" = "true" ]; then
+                        log_warn "Service $id: treating $failed_count failed worker(s) as non-fatal"
+                    fi
+                    _service_pipeline_workers_exit_code "$tolerate_worker_failures" "$spawned_count" "$failed_count" || exit_code=$?
                 fi
             fi
             ;;

@@ -732,10 +732,11 @@ _md_completion_check_result_tag() {
     fi
 
     if [ -n "$latest_log" ] && [ -f "$latest_log" ]; then
-        local result_tag="${_MD_RESULT_TAG:-result}"
-        # Only search assistant messages to avoid matching example tags in prompts
-        if grep '"type":"assistant"' "$latest_log" 2>/dev/null | \
-           grep_pcre_test "<${result_tag}>(${valid_regex})</${result_tag}>"; then
+        local result
+        result=$(_extract_result_value_from_stream_json "$latest_log" "$valid_regex" "${_MD_RESULT_TAG:-result}") || true
+        # Only search model output text to avoid matching example tags in prompts.
+        # The extractor handles Claude assistant events and Codex content deltas.
+        if [ -n "$result" ]; then
             return 0  # Complete
         fi
     fi

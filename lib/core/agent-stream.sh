@@ -20,12 +20,12 @@ _AGENT_STREAM_LOADED=1
 # STREAM-JSON EXTRACTION UTILITIES
 # =============================================================================
 
-# Extract all text content from assistant messages in a stream-JSON log file
+# Extract all text content from model messages in a JSONL log file
 #
 # Args:
 #   log_file - Path to the stream-JSON log file
 #
-# Returns: All text content from assistant messages, one per line
+# Returns: All text content from model messages, one per line
 _extract_text_from_stream_json() {
     local log_file="$1"
 
@@ -33,8 +33,27 @@ _extract_text_from_stream_json() {
         return 1
     fi
 
-    grep '"type":"assistant"' "$log_file" 2>/dev/null | \
-        jq -r 'select(.message.content[]? | .type == "text") | .message.content[] | select(.type == "text") | .text' 2>/dev/null \
+    # Support both Claude stream-json (`assistant.message.content[].text`)
+    # and Codex JSONL (`content_block_delta.delta.text`) logs. Some Claude
+    # wrappers also mirror final text in a result event.
+    jq -Rr '
+        fromjson? // empty |
+        if .type == "assistant" then
+            .message.content[]? | select(.type == "text") | .text
+        elif .type == "content_block_delta" then
+            .delta.text // empty
+        elif .type == "result" then
+            if ((.result? | type) == "array") then
+                .result[]? | select(.type == "text") | .text
+            elif ((.result? | type) == "string") then
+                .result
+            else
+                empty
+            end
+        else
+            empty
+        end
+    ' "$log_file" 2>/dev/null \
         || true
 }
 
@@ -44,11 +63,13 @@ _extract_text_from_stream_json() {
 # Args:
 #   log_file     - Path to the stream-JSON log file
 #   valid_values - Pipe-separated list of valid values (e.g., "PASS|FAIL")
+#   tag          - XML tag name to search, defaults to "result"
 #
 # Returns: The LAST result value found, or empty string if none
 _extract_result_value_from_stream_json() {
     local log_file="$1"
     local valid_values="$2"
+    local tag="${3:-result}"
 
     if [ ! -f "$log_file" ]; then
         return 1
@@ -56,7 +77,7 @@ _extract_result_value_from_stream_json() {
 
     # Extract text, find all <result>VALUE</result> matches, take LAST one
     _extract_text_from_stream_json "$log_file" | \
-        grep_pcre_match "(?<=<result>)(${valid_values})(?=</result>)" | \
+        grep_pcre_match "(?<=<${tag}>)(${valid_values})(?=</${tag}>)" | \
         tail -1 \
         || true
 }

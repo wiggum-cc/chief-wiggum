@@ -20,6 +20,7 @@
 
 # Claude local settings
 .claude/settings.local.json
+.codex
 
 # Test artifacts
 test-*/

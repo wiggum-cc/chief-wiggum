@@ -945,6 +945,56 @@ test_pipeline_step_config_cleaned_between_steps() {
 }
 
 # =============================================================================
+# Test: Backup result extraction can recover session from logs
+# =============================================================================
+test_pipeline_backup_uses_log_session_when_result_missing() {
+    local worker_dir="$TEST_DIR/worker"
+    local run_id="verify-fix-1700000000"
+    local session_id="abc-123-def-456"
+
+    mkdir -p "$worker_dir/logs/$run_id"
+    cat > "$worker_dir/logs/$run_id/verify-fix-0-1700000000.log" << LOGEOF
+{"type":"iteration_start","iteration":0,"session_id":"$session_id","max_turns":60}
+{"type":"content_block_delta","delta":{"text":"partial"}}
+LOGEOF
+
+    _backup_result_extraction() {
+        echo "$1" > "$TEST_DIR/seen_session.txt"
+        echo "PASS"
+    }
+
+    export WIGGUM_STEP_ID="verify-fix"
+    local recovered
+    recovered=$(_pipeline_backup_result_extraction "$worker_dir" "verify-fix" "autofix.verify-fix")
+
+    assert_equals "PASS" "$recovered" "Backup extraction should recover a result using session_id from logs"
+    local seen_session
+    seen_session=$(cat "$TEST_DIR/seen_session.txt" 2>/dev/null || true)
+    assert_equals "$session_id" "$seen_session" "Backup extraction should receive the session_id parsed from the work log"
+
+    local result_file
+    result_file=$(find "$worker_dir/results" -name "*-verify-fix-result.json" 2>/dev/null | head -1)
+    if [ -n "$result_file" ] && [ -f "$result_file" ]; then
+        local written_session
+        written_session=$(jq -r '.outputs.session_id // ""' "$result_file")
+        assert_equals "$session_id" "$written_session" "Recovered result should preserve session_id"
+    else
+        assert_failure "Recovered backup result should write a step result file" true
+    fi
+
+    unset WIGGUM_STEP_ID
+}
+
+test_autofix_verify_fail_jumps_to_random_audit() {
+    pipeline_load "$WIGGUM_HOME/config/pipelines/autofix.json" 2>/dev/null
+    _pipeline_runner_reset
+
+    _dispatch_on_result 1 "FAIL" "$TEST_DIR/worker" "$TEST_DIR/project" "$TEST_DIR/worker/workspace"
+
+    assert_equals "0" "$_PIPELINE_NEXT_IDX" "autofix verify-fix FAIL should return to random-audit"
+}
+
+# =============================================================================
 # Run all tests
 # =============================================================================
 run_test test_pipeline_runs_steps_in_order
@@ -971,6 +1021,8 @@ run_test test_pipeline_circuit_breaker_resets_on_different_result
 run_test test_pipeline_workspace_disappears_before_agent
 run_test test_pipeline_step_config_exported
 run_test test_pipeline_step_config_cleaned_between_steps
+run_test test_pipeline_backup_uses_log_session_when_result_missing
+run_test test_autofix_verify_fail_jumps_to_random_audit
 
 print_test_summary
 exit_with_test_result

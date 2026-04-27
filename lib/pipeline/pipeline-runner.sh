@@ -144,6 +144,38 @@ _circuit_breaker_check() {
 # backup mechanism from agent-stream.sh/_backup_result_extraction so that ALL
 # pipeline steps benefit, regardless of agent type or completion_check mode.
 
+# Find the newest work log for a pipeline step. This is used as a fallback when
+# a timed-out step was killed before it could write its result JSON.
+#
+# Args:
+#   worker_dir - Worker directory path
+#   step_id    - Pipeline step ID
+#
+# Returns: Path to newest work log, or empty string
+_pipeline_find_latest_step_log() {
+    local worker_dir="$1"
+    local step_id="$2"
+    local log_root="$worker_dir/logs"
+
+    [ -d "$log_root" ] || return 0
+
+    local latest_log=""
+    local run_id="${RALPH_RUN_ID:-}"
+    if [ -n "$run_id" ] && [ -d "$log_root/$run_id" ]; then
+        latest_log=$(find_newest "$log_root/$run_id" -type f -name "${step_id}-*.log" ! -name "*summary*" ! -name "*backup*")
+    fi
+
+    if [ -z "$latest_log" ]; then
+        local latest_run_dir
+        latest_run_dir=$(find_newest "$log_root" -maxdepth 1 -type d -name "${step_id}-*")
+        if [ -n "$latest_run_dir" ] && [ -d "$latest_run_dir" ]; then
+            latest_log=$(find_newest "$latest_run_dir" -type f -name "${step_id}-*.log" ! -name "*summary*" ! -name "*backup*")
+        fi
+    fi
+
+    echo "$latest_log"
+}
+
 # Attempt backup session resume to recover an UNKNOWN result
 #
 # Args:
@@ -164,17 +196,28 @@ _pipeline_backup_result_extraction() {
     fi
 
     # Get session_id from the result file
-    local result_file session_id
+    local result_file session_id=""
     result_file=$(agent_find_latest_result "$worker_dir" "$step_id")
-    if [ -z "$result_file" ] || [ ! -f "$result_file" ]; then
-        echo "UNKNOWN"
-        return 0
+    if [ -n "$result_file" ] && [ -f "$result_file" ]; then
+        session_id=$(jq -r '.outputs.session_id // ""' "$result_file" 2>/dev/null)
     fi
-    session_id=$(jq -r '.outputs.session_id // ""' "$result_file" 2>/dev/null)
 
-    # Fallback: try RALPH_LOOP_LAST_SESSION_ID if result file has no session
+    # Fallback: try RALPH_LOOP_LAST_SESSION_ID if result file has no session.
+    # This works when the agent process exited normally; step timeouts often
+    # happen in a subshell, so the variable is not visible here.
     if [ -z "$session_id" ]; then
         session_id="${RALPH_LOOP_LAST_SESSION_ID:-}"
+    fi
+
+    # Final fallback: recover the session_id from the latest step work log.
+    # Timed-out agents can be killed before result extraction writes JSON, but
+    # runtime-loop writes the session_id into the first line of each work log.
+    if [ -z "$session_id" ]; then
+        local latest_log
+        latest_log=$(_pipeline_find_latest_step_log "$worker_dir" "$step_id")
+        if [ -n "$latest_log" ] && [ -f "$latest_log" ]; then
+            session_id=$(_extract_session_id_from_log "$latest_log") || true
+        fi
     fi
 
     if [ -z "$session_id" ]; then
@@ -213,8 +256,11 @@ _pipeline_backup_result_extraction() {
 
     if [ -n "$recovered" ] && [ "$recovered" != "UNKNOWN" ]; then
         log_debug "Pipeline backup: recovered result '$recovered' for step '$step_id'"
-        # Rewrite result file with recovered value
-        agent_write_result "$worker_dir" "$recovered"
+        # Rewrite result file with recovered value and preserve the recovered
+        # session_id so downstream resume steps still have context.
+        local extra_outputs
+        extra_outputs=$(jq -nc --arg session_id "$session_id" '{session_id: $session_id}')
+        agent_write_result "$worker_dir" "$recovered" "$extra_outputs"
         echo "$recovered"
     else
         log_warn "Pipeline backup: session resume failed for step '$step_id' — result remains UNKNOWN"
@@ -1253,4 +1299,3 @@ _update_current_step() {
         '.current = {step_idx: $idx, step_id: $id}' \
         "$config_file" > "$tmp_file" && mv "$tmp_file" "$config_file"
 }
-

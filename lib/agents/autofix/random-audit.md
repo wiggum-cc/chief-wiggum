@@ -195,6 +195,10 @@ With your randomly selected scope and concern, perform a thorough, evidence-base
   (e.g. architectural concern, naming issue), say so briefly.
 - Provide a concrete fix suggestion for each finding
 - Rate severity honestly: CRITICAL / HIGH / MEDIUM / LOW / INFO
+- Do NOT use `#123` shorthand anywhere in the report. That syntax is reserved
+  for GitHub issue references and autofix audits are not issue-backed. When
+  naming a selected concern, write only the concern text, without the numbered
+  list index or an issue-like marker such as `#41`.
 
 ## Rules
 
@@ -229,7 +233,7 @@ Perform a randomly-scoped, randomly-concerned code audit of the workspace.
 - **Scope type**: Global / Focused / Vertical slice
 - **Scope target**: [directory or file selected, or "entire codebase"]
 - **Concern type**: Specific / Generic
-- **Concern**: [the concern selected]
+- **Concern**: [the concern text only; no numbered list index and no `#N` marker]
 - **Vertical path** (if vertical slice): [entry point] → [layer] → ... → [deepest dependency] → ... → [response]
 - **Selection method**: [show the random commands used]
 

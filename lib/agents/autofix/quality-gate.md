@@ -82,6 +82,8 @@ handled automatically by the pipeline — you don't need to do anything beyond d
 QUALITY GATE EVALUATION:
 
 Evaluate the uncommitted changes in the workspace. Judge ONLY the diff — no context.
+Do not introduce `#123` shorthand in your assessment. That syntax is reserved
+for GitHub issue references and does not apply to autofix runs.
 
 ## Process
 

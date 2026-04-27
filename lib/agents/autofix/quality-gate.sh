@@ -186,6 +186,7 @@ _build_commit_msg() {
         if [[ -n "$scope_target" ]] && [[ "$scope_target" != "entire codebase" ]]; then
             scope_part=" in ${scope_target}"
         fi
+        concern=$(_sanitize_audit_title_field "$concern")
         # Lowercase the concern for commit message style
         local concern_lower
         concern_lower=$(echo "$concern" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//')
@@ -193,6 +194,29 @@ _build_commit_msg() {
     else
         echo "$task_id: automated code improvement"
     fi
+}
+
+# Strip list indexes and issue-like markers from audit metadata used in PR
+# titles. Autofix cycles are not backed by GitHub issues, so `#123` in PR
+# metadata is misleading.
+_sanitize_audit_title_field() {
+    local value="$1"
+
+    value="$(echo "$value" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+
+    value="$(printf '%s\n' "$value" | sed -E \
+        -e 's/^[Ss]pecific[[:space:]]+[Cc]oncern[[:space:]]+#?[0-9]+[[:space:]]*[^[:alnum:]]*[[:space:]]*//' \
+        -e 's/^[Gg]eneric[[:space:]]+[Cc]oncern[[:space:]]+#?[0-9]+[[:space:]]*[^[:alnum:]]*[[:space:]]*//' \
+        -e 's/^#?[0-9]+[[:space:]]*[^[:alnum:]]*[[:space:]]*//')"
+
+    echo "$value"
+}
+
+_sanitize_autofix_pr_text() {
+    sed -E \
+        -e 's/(\*\*[Cc]oncern\*\*:[[:space:]]*)#[0-9]+[[:space:]]*[^[:alnum:]]*[[:space:]]*/\1/' \
+        -e 's/(^|[[:space:]])#[0-9]+[[:space:]]*[^[:alnum:]]+[[:space:]]*/\1/g' \
+        -e 's/(^|[[:space:]])#([0-9]+)([^[:alnum:]_]|$)/\1item \2\3/g'
 }
 
 # Run a command with exponential backoff retry.
@@ -387,12 +411,13 @@ _create_cycle_pr() {
     local gh_timeout="${WIGGUM_GH_TIMEOUT:-30}"
 
     # Build PR body from the pre-resolved audit report
-    local body
+    local body title
     body=$(_build_pr_body "$audit_report")
+    title=$(echo "$commit_msg" | _sanitize_autofix_pr_text)
 
     local pr_output
     pr_output=$(timeout "$gh_timeout" gh pr create \
-        --title "$commit_msg" \
+        --title "$title" \
         --body "$body" \
         --base "$default_branch" \
         --head "$branch" 2>&1) || {
@@ -418,7 +443,7 @@ _build_pr_body() {
     local audit_report="${1:-}"
 
     if [[ -n "$audit_report" ]] && [[ -f "$audit_report" ]]; then
-        cat "$audit_report" 2>/dev/null || echo "Autofix code improvement."
+        _sanitize_autofix_pr_text < "$audit_report" 2>/dev/null || echo "Autofix code improvement."
     else
         echo "Autofix code improvement."
     fi
