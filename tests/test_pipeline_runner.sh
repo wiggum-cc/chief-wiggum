@@ -994,6 +994,56 @@ test_autofix_verify_fail_jumps_to_random_audit() {
     assert_equals "0" "$_PIPELINE_NEXT_IDX" "autofix verify-fix FAIL should return to random-audit"
 }
 
+test_autofix_random_audit_unknown_aborts_before_verify() {
+    run_sub_agent() {
+        local agent_type="$1"
+        local worker_dir="$2"
+        local project_dir="$3"
+
+        local agent_file="$TEST_DIR/fake-home/lib/agents/${agent_type}.sh"
+        if [ -f "$agent_file" ]; then
+            # shellcheck source=/dev/null
+            source "$agent_file"
+            agent_run "$worker_dir" "$project_dir"
+        else
+            echo "mock-agent:$agent_type" >> "$TEST_DIR/agent_invocations.txt"
+            local step_id="${WIGGUM_STEP_ID:-unknown}"
+            local epoch
+            epoch=$(_mock_epoch)
+            mkdir -p "$worker_dir/results"
+            echo '{"outputs": {"gate_result": "PASS"}}' > "$worker_dir/results/${epoch}-${step_id}-result.json"
+        fi
+    }
+
+    _create_mock_agent "autofix.random-audit" "UNKNOWN"
+    _create_mock_agent "verify-agent" "PASS"
+
+    _create_pipeline "$TEST_DIR/pipeline.json" '{
+        "name": "test-autofix-unknown",
+        "steps": [
+            {"id": "random-audit", "agent": "autofix.random-audit", "max": 1},
+            {"id": "verify-fix", "agent": "verify-agent"}
+        ]
+    }'
+
+    _pipeline_runner_reset
+    : > "$TEST_DIR/agent_invocations.txt"
+
+    local exit_code=0
+    pipeline_run_all "$TEST_DIR/worker" "$TEST_DIR/project" "$TEST_DIR/worker/workspace" "" || exit_code=$?
+
+    local invocations
+    invocations=$(cat "$TEST_DIR/agent_invocations.txt")
+
+    assert_equals "1" "$exit_code" "UNKNOWN random-audit should abort the pipeline"
+    assert_output_contains "$invocations" "autofix.random-audit" "Random audit should run"
+    assert_output_not_contains "$invocations" "verify-agent" "UNKNOWN audit should not enter verify-fix"
+
+    local result
+    result=$(agent_read_step_result "$TEST_DIR/worker" "random-audit")
+    assert_equals "UNKNOWN" "$result" "Infrastructure UNKNOWN should not be rewritten to FAIL"
+}
+
 # =============================================================================
 # Run all tests
 # =============================================================================
@@ -1023,6 +1073,7 @@ run_test test_pipeline_step_config_exported
 run_test test_pipeline_step_config_cleaned_between_steps
 run_test test_pipeline_backup_uses_log_session_when_result_missing
 run_test test_autofix_verify_fail_jumps_to_random_audit
+run_test test_autofix_random_audit_unknown_aborts_before_verify
 
 print_test_summary
 exit_with_test_result

@@ -247,6 +247,8 @@ run_ralph_loop() {
     local consecutive_fast_fails=0
     local max_consecutive_fast_fails="${WIGGUM_MAX_FAST_FAILS:-3}"
     local fast_fail_threshold_secs="${WIGGUM_FAST_FAIL_THRESHOLD:-5}"
+    local consecutive_backend_failures=0
+    local max_consecutive_backend_failures="${WIGGUM_MAX_BACKEND_FAILURES:-2}"
 
     # Track currently running subprocess PID for signal propagation.
     # When the loop receives SIGTERM/SIGINT, we kill this subprocess
@@ -611,6 +613,21 @@ ${summary_prompt}"
             break
         fi
 
+        # If both the work phase and summary phase are failing, the backend is
+        # not producing usable output. Repeating the same iteration burns the
+        # whole timeout and sends downstream pipeline steps an UNKNOWN result.
+        if [ "$exit_code" -ne 0 ] && [ "$summary_exit_code" -ne 0 ]; then
+            consecutive_backend_failures=$((consecutive_backend_failures + 1))
+            if [ "$consecutive_backend_failures" -ge "$max_consecutive_backend_failures" ]; then
+                log_error "Backend failure: $consecutive_backend_failures consecutive iterations had non-zero work and summary phases - aborting loop"
+                loop_stop_reason="backend_failures"
+                break
+            fi
+            log_warn "Backend failure: iteration $iteration had non-zero work and summary phases ($consecutive_backend_failures/$max_consecutive_backend_failures before abort)"
+        else
+            consecutive_backend_failures=0
+        fi
+
         iteration=$((iteration + 1))
 
         # =================================================================
@@ -769,6 +786,15 @@ ${summary_prompt}"
     if [ "$loop_stop_reason" = "fast_fail" ]; then
         echo "[$(iso_now)] ERROR: LOOP_FAST_FAIL end_time=$end_time duration_sec=$duration iterations=$((iteration + 1)) consecutive_failures=$consecutive_fast_fails" >> "$output_dir/worker.log" 2>/dev/null || true
         export RALPH_LOOP_STOP_REASON="fast_fail"
+        export RALPH_LOOP_LAST_SESSION_ID="$last_session_id"
+        _ralph_loop_completed_normally=true
+        trap - EXIT
+        return 1
+    fi
+
+    if [ "$loop_stop_reason" = "backend_failures" ]; then
+        echo "[$(iso_now)] ERROR: LOOP_BACKEND_FAILURES end_time=$end_time duration_sec=$duration iterations=$((iteration + 1)) consecutive_failures=$consecutive_backend_failures" >> "$output_dir/worker.log" 2>/dev/null || true
+        export RALPH_LOOP_STOP_REASON="backend_failures"
         export RALPH_LOOP_LAST_SESSION_ID="$last_session_id"
         _ralph_loop_completed_normally=true
         trap - EXIT

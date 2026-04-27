@@ -482,6 +482,53 @@ test_stop_reason_all_exit_paths_covered() {
     fi
 }
 
+_backend_failure_user_prompt() {
+    echo "do failing backend work"
+}
+
+_backend_failure_completion_check() {
+    return 1
+}
+
+test_ralph_loop_aborts_repeated_backend_phase_failures() {
+    source "$WIGGUM_HOME/lib/runtime/runtime.sh"
+    source "$WIGGUM_HOME/lib/runtime/runtime-loop.sh"
+
+    runtime_backend_supports_sessions() { return 1; }
+    runtime_backend_supports_named_sessions() { return 1; }
+    runtime_backend_generate_session_id() { echo "test-session-$RANDOM"; }
+    runtime_backend_rate_limit_check() { return 1; }
+    runtime_backend_rate_limit_wait() { :; }
+    runtime_backend_build_exec_args() {
+        local -n _args_ref="$1"
+        _args_ref=("fake-backend")
+    }
+    runtime_backend_invoke() { return 1; }
+    runtime_backend_is_retryable() { return 1; }
+    runtime_backend_extract_text() { return 0; }
+    runtime_backend_extract_session_id() { return 0; }
+    runtime_backend_name() { echo "test"; }
+
+    mkdir -p "$TEST_TMP_DIR/workspace" "$TEST_TMP_DIR/output"
+
+    export WIGGUM_MAX_BACKEND_FAILURES=2
+    export WIGGUM_FAST_FAIL_THRESHOLD=0
+    export WIGGUM_LOOP_DELAY=0
+
+    local exit_code=0
+    run_ralph_loop "$TEST_TMP_DIR/workspace" "system" \
+        "_backend_failure_user_prompt" "_backend_failure_completion_check" \
+        5 1 "$TEST_TMP_DIR/output" "backend-fail" 0 || exit_code=$?
+
+    assert_equals "1" "$exit_code" "Repeated backend phase failures should abort the loop"
+    assert_equals "backend_failures" "${RALPH_LOOP_STOP_REASON:-}" \
+        "Stop reason should identify backend phase failures"
+    assert_file_contains "$TEST_TMP_DIR/output/worker.log" "LOOP_BACKEND_FAILURES" \
+        "Worker log should record backend failure abort"
+
+    unset WIGGUM_MAX_BACKEND_FAILURES WIGGUM_FAST_FAIL_THRESHOLD WIGGUM_LOOP_DELAY
+}
+
 # =============================================================================
 # Run Tests
 # =============================================================================
@@ -536,6 +583,7 @@ run_test test_stop_reason_variable_exported_on_max_iterations
 run_test test_stop_reason_variable_exported_on_restart_limit
 run_test test_stop_reason_variable_exported_on_normal_completion
 run_test test_stop_reason_all_exit_paths_covered
+run_test test_ralph_loop_aborts_repeated_backend_phase_failures
 
 # Print summary
 print_test_summary

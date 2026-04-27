@@ -1020,12 +1020,12 @@ _pipeline_run_step() {
         if [ "$_agent_exit" -eq 143 ] || [ "$_agent_exit" -eq 137 ]; then
             _step_timed_out=true
             log_error "Step '$step_id' timed out after ${step_timeout}s"
-            # Try backup extraction before defaulting to FAIL — the agent may have
+            # Try backup extraction before defaulting to UNKNOWN - the agent may have
             # written a valid result before the timeout killed it
-            local _timeout_result="FAIL"
+            local _timeout_result="UNKNOWN"
             _timeout_result=$(_pipeline_backup_result_extraction "$worker_dir" "$step_id" "$step_agent") || true
             if [ "$_timeout_result" = "UNKNOWN" ] || [ -z "$_timeout_result" ]; then
-                _timeout_result="FAIL"
+                _timeout_result="UNKNOWN"
             fi
             agent_write_result "$worker_dir" "$_timeout_result"
         fi
@@ -1075,13 +1075,12 @@ _pipeline_run_step() {
         gate_result=$(_pipeline_backup_result_extraction "$worker_dir" "$step_id" "$step_agent")
     fi
 
-    # UNKNOWN is not a valid agent result — it means extraction failed entirely
-    # (typically max_turns exhausted before <result> tag was emitted). Downgrade
-    # to FAIL so the step's normal failure handling applies (e.g., retry, next,
-    # abort) instead of always hard-aborting via the global UNKNOWN→abort default.
+    # UNKNOWN is not a semantic agent result; it means extraction or execution
+    # failed before the agent produced a decision. Preserve it so the normal
+    # UNKNOWN result mapping aborts the run instead of treating infrastructure
+    # failure as a domain-level FAIL.
     if [ "$gate_result" = "UNKNOWN" ]; then
-        log_warn "Step '$step_id' produced no extractable result (UNKNOWN) — downgrading to FAIL"
-        gate_result="FAIL"
+        log_warn "Step '$step_id' produced no extractable result (UNKNOWN) - treating as infrastructure failure"
         agent_write_result "$worker_dir" "$gate_result"
     fi
 
