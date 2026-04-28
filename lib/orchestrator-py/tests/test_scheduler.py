@@ -149,6 +149,50 @@ def test_periodic_interval_not_due(state, mock_executor, cb):
     mock_executor.run_function.assert_not_called()
 
 
+def test_periodic_continuous_runs_after_restart_delay(state, mock_executor, cb):
+    """Continuous services should restart after their restart delay."""
+    mock_executor.run_pipeline.return_value = 0
+    services = [
+        ServiceConfig(
+            id="autofix",
+            phase="periodic",
+            order=10,
+            schedule={"type": "continuous", "restart_delay": 60},
+            execution={"type": "pipeline", "pipeline": "autofix"},
+        ),
+    ]
+    scheduler = _make_scheduler(services, state, mock_executor, cb)
+    scheduler._startup_complete = True
+
+    state.get("autofix").last_run = time.time() - 120
+
+    scheduler.run_phase("periodic")
+
+    mock_executor.run_pipeline.assert_called_once()
+
+
+def test_periodic_continuous_waits_for_restart_delay(state, mock_executor, cb):
+    """Continuous services should not restart before their restart delay."""
+    mock_executor.run_pipeline.return_value = 0
+    services = [
+        ServiceConfig(
+            id="autofix",
+            phase="periodic",
+            order=10,
+            schedule={"type": "continuous", "restart_delay": 60},
+            execution={"type": "pipeline", "pipeline": "autofix"},
+        ),
+    ]
+    scheduler = _make_scheduler(services, state, mock_executor, cb)
+    scheduler._startup_complete = True
+
+    state.get("autofix").last_run = time.time()
+
+    scheduler.run_phase("periodic")
+
+    mock_executor.run_pipeline.assert_not_called()
+
+
 def test_periodic_circuit_breaker_blocks(state, mock_executor, cb):
     """Circuit breaker open should block periodic service."""
     services = [

@@ -753,8 +753,8 @@
       "phase": "periodic",
       "groups": ["autofix"],
       "schedule": {
-        "type": "cron",
-        "cron": "0 */6 * * *"
+        "type": "continuous",
+        "restart_delay": 300
       },
       "execution": {
         "type": "pipeline",

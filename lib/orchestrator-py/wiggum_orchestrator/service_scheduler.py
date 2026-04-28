@@ -185,6 +185,11 @@ class ServiceScheduler:
         if svc.schedule_type == "interval":
             return self._interval_is_due(svc, now)
 
+        if svc.schedule_type == "continuous":
+            entry = self._state.get(svc.id)
+            restart_delay = svc.schedule.get("restart_delay", 5)
+            return now - entry.last_run >= restart_delay
+
         if svc.schedule_type == "event":
             return False  # events are triggered externally
 

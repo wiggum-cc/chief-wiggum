@@ -104,10 +104,15 @@ test_function_3() {
     echo "test_function_3 called"
 }
 
+svc_continuous_sleep() {
+    sleep 1
+}
+
 # Export test functions so subshells can call them
 export -f test_function_1
 export -f test_function_2
 export -f test_function_3
+export -f svc_continuous_sleep
 
 # =============================================================================
 # service_state Tests
@@ -351,6 +356,68 @@ test_scheduler_service_status_returns_details() {
         "Status should contain interval"
 }
 
+test_scheduler_continuous_runs_after_restart_delay() {
+    cat > "$TEST_DIR/services.json" << 'JSON'
+{
+    "version": "1.0",
+    "services": [
+        {
+            "id": "continuous-svc",
+            "schedule": { "type": "continuous", "restart_delay": 5 },
+            "execution": { "type": "function", "function": "svc_continuous_sleep" }
+        }
+    ]
+}
+JSON
+
+    service_load "$TEST_DIR/services.json" 2>/dev/null
+    service_state_init "$TEST_DIR/.ralph"
+    service_runner_init "$TEST_DIR/.ralph" "$TEST_DIR"
+    _SCHED_INITIALIZED=true
+    _SCHED_STARTUP_COMPLETE=true
+
+    local past
+    past=$(($(date +%s) - 10))
+    service_state_set_last_run "continuous-svc" "$past"
+
+    service_scheduler_tick
+
+    assert_equals "running" "$(service_state_get_status "continuous-svc")" \
+        "Continuous service should restart after delay"
+    assert_equals "1" "$(service_state_get_run_count "continuous-svc")" \
+        "Continuous service should have one run after restart"
+}
+
+test_scheduler_continuous_waits_for_restart_delay() {
+    cat > "$TEST_DIR/services.json" << 'JSON'
+{
+    "version": "1.0",
+    "services": [
+        {
+            "id": "continuous-svc",
+            "schedule": { "type": "continuous", "restart_delay": 60 },
+            "execution": { "type": "function", "function": "svc_continuous_sleep" }
+        }
+    ]
+}
+JSON
+
+    service_load "$TEST_DIR/services.json" 2>/dev/null
+    service_state_init "$TEST_DIR/.ralph"
+    service_runner_init "$TEST_DIR/.ralph" "$TEST_DIR"
+    _SCHED_INITIALIZED=true
+    _SCHED_STARTUP_COMPLETE=true
+
+    service_state_set_last_run "continuous-svc" "$(date +%s)"
+
+    service_scheduler_tick
+
+    assert_equals "stopped" "$(service_state_get_status "continuous-svc")" \
+        "Continuous service should not restart before delay"
+    assert_equals "0" "$(service_state_get_run_count "continuous-svc")" \
+        "Continuous service should not run before restart delay"
+}
+
 # =============================================================================
 # Concurrency Tests
 # =============================================================================
@@ -416,6 +483,8 @@ run_test test_trigger_event_ignores_non_matching
 run_test test_scheduler_init_loads_config
 run_test test_scheduler_status_returns_json
 run_test test_scheduler_service_status_returns_details
+run_test test_scheduler_continuous_runs_after_restart_delay
+run_test test_scheduler_continuous_waits_for_restart_delay
 
 # Concurrency tests
 run_test test_concurrency_skip_when_running
