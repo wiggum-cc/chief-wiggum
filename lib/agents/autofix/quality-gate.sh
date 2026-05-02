@@ -24,6 +24,10 @@ source "$WIGGUM_HOME/lib/git/worktree-helpers.sh"
 # Save the md-generated agent_run so we can call it from our override
 eval "$(declare -f agent_run | sed '1s/agent_run/_md_quality_gate_run/')"
 
+AUTOFIX_CURRENT_AUDIT_FINGERPRINT=""
+AUTOFIX_LAST_PR_URL=""
+AUTOFIX_PASS_ACTION=""
+
 agent_run() {
     local worker_dir="$1"
     local project_dir="$2"
@@ -43,7 +47,20 @@ agent_run() {
 
     if [[ "$gate_result" == "PASS" ]]; then
         if _handle_pass "$workspace" "$worker_dir" "$project_dir"; then
-            log "Quality gate PASS — push/PR succeeded"
+            case "${AUTOFIX_PASS_ACTION:-}" in
+                duplicate_skipped)
+                    log "Quality gate PASS — duplicate audit skipped"
+                    ;;
+                no_changes)
+                    log "Quality gate PASS — no changes to publish"
+                    ;;
+                branch_pushed)
+                    log "Quality gate PASS — branch pushed, PR creation failed"
+                    ;;
+                *)
+                    log "Quality gate PASS — push/PR succeeded"
+                    ;;
+            esac
             # Reset workspace to main so the next audit cycle starts clean
             _reset_workspace_to_main "$workspace" "$project_dir"
         else
@@ -64,22 +81,43 @@ _handle_pass() {
     local workspace="$1"
     local worker_dir="$2"
     local project_dir="$3"
+    AUTOFIX_CURRENT_AUDIT_FINGERPRINT=""
+    AUTOFIX_LAST_PR_URL=""
+    AUTOFIX_PASS_ACTION=""
 
     # Check for uncommitted changes to commit
     if git -C "$workspace" diff --quiet 2>/dev/null \
         && git -C "$workspace" diff --cached --quiet 2>/dev/null \
         && [[ -z "$(git -C "$workspace" ls-files --others --exclude-standard 2>/dev/null)" ]]; then
         log_debug "Quality gate PASS but no uncommitted changes to commit"
+        AUTOFIX_PASS_ACTION="no_changes"
         return 0
     fi
 
     # Resolve the audit report ONCE to prevent race conditions.
-    # With multiple concurrent workers, separate calls to agent_find_latest_report
-    # (which sorts by mtime) could return different files if filesystem operations
-    # interleave. Capturing the path here guarantees the commit message, branch
-    # name, and PR body all reference the same audit report.
+    # Prefer the report that verify-fix actually consumed; falling back to the
+    # latest random-audit report is only for older result files.
     local audit_report
-    audit_report=$(agent_find_latest_report "$worker_dir" "random-audit")
+    audit_report=$(_resolve_cycle_audit_report "$worker_dir")
+
+    local task_id="${WIGGUM_TASK_ID:-autofix}"
+    local commit_msg
+    commit_msg=$(_build_commit_msg "$task_id" "$audit_report")
+
+    if [[ -n "$audit_report" ]] && [[ -f "$audit_report" ]]; then
+        local reserve_rc=0
+        _autofix_reserve_audit "$audit_report" "$worker_dir" "$project_dir" "$commit_msg" || reserve_rc=$?
+        if [[ "$reserve_rc" -eq 2 ]]; then
+            log "Autofix duplicate audit detected — skipping PR for this cycle"
+            AUTOFIX_PASS_ACTION="duplicate_skipped"
+            return 0
+        elif [[ "$reserve_rc" -ne 0 ]]; then
+            log_warn "Autofix audit reservation failed (exit=$reserve_rc)"
+            return 1
+        fi
+    else
+        log_warn "No random-audit report found — skipping autofix dedupe for this cycle"
+    fi
 
     # Clean leftover artifacts before committing
     _clean_artifacts "$workspace"
@@ -88,13 +126,12 @@ _handle_pass() {
     git_set_identity
     git -C "$workspace" add -A 2>/dev/null
 
-    local task_id="${WIGGUM_TASK_ID:-autofix}"
-    local commit_msg
-    commit_msg=$(_build_commit_msg "$task_id" "$audit_report")
     local commit_exit=0
     git -C "$workspace" commit --no-gpg-sign -m "$commit_msg" 2>&1 || commit_exit=$?
     if [[ "$commit_exit" -ne 0 ]]; then
         log_warn "Commit failed (exit=$commit_exit)"
+        _autofix_mark_audit_state "$audit_report" "$project_dir" "commit_failed" "" "" \
+            || log_warn "Failed to update autofix dedupe state"
         return 1
     fi
 
@@ -157,6 +194,56 @@ _reset_workspace_to_main() {
     log_debug "Reset workspace to origin/$default_branch (detached)"
 }
 
+# Resolve a worker-relative file path to an absolute path.
+_worker_file_path() {
+    local worker_dir="$1"
+    local file_path="${2:-}"
+
+    [[ -z "$file_path" ]] && return 1
+    if [[ "$file_path" = /* ]]; then
+        echo "$file_path"
+    else
+        echo "$worker_dir/$file_path"
+    fi
+}
+
+# Resolve the audit report associated with the current autofix cycle.
+#
+# verify-fix records the parent_report_file it used. That is the authoritative
+# audit report for PR title/body generation; latest random-audit is only a
+# compatibility fallback for older result files.
+_resolve_cycle_audit_report() {
+    local worker_dir="$1"
+
+    local verify_result parent_report parent_path
+    verify_result=$(agent_find_latest_result "$worker_dir" "verify-fix")
+    if [[ -n "$verify_result" ]] && [[ -f "$verify_result" ]]; then
+        parent_report=$(jq -r '.outputs.parent_report_file // ""' "$verify_result" 2>/dev/null)
+        if [[ -n "$parent_report" ]]; then
+            parent_path=$(_worker_file_path "$worker_dir" "$parent_report")
+            if [[ -f "$parent_path" ]]; then
+                echo "$parent_path"
+                return 0
+            fi
+        fi
+    fi
+
+    local audit_result audit_report audit_path
+    audit_result=$(agent_find_latest_result "$worker_dir" "random-audit")
+    if [[ -n "$audit_result" ]] && [[ -f "$audit_result" ]]; then
+        audit_report=$(jq -r '.outputs.report_file // ""' "$audit_result" 2>/dev/null)
+        if [[ -n "$audit_report" ]]; then
+            audit_path=$(_worker_file_path "$worker_dir" "$audit_report")
+            if [[ -f "$audit_path" ]]; then
+                echo "$audit_path"
+                return 0
+            fi
+        fi
+    fi
+
+    agent_find_latest_report "$worker_dir" "random-audit"
+}
+
 # Build a commit message that includes the auditor's original scope/concern.
 # Falls back to a generic message if the audit report is unavailable.
 #
@@ -217,6 +304,269 @@ _sanitize_autofix_pr_text() {
         -e 's/(\*\*[Cc]oncern\*\*:[[:space:]]*)#[0-9]+[[:space:]]*[^[:alnum:]]*[[:space:]]*/\1/' \
         -e 's/(^|[[:space:]])#[0-9]+[[:space:]]*[^[:alnum:]]+[[:space:]]*/\1/g' \
         -e 's/(^|[[:space:]])#([0-9]+)([^[:alnum:]_]|$)/\1item \2\3/g'
+}
+
+_autofix_report_field() {
+    local audit_report="$1"
+    local label="$2"
+
+    [[ -n "$audit_report" ]] && [[ -f "$audit_report" ]] || return 0
+    grep -m1 "^- \\*\\*${label}\\*\\*:" "$audit_report" 2>/dev/null \
+        | sed "s/^- \\*\\*${label}\\*\\*: *//" \
+        | sed 's/[[:space:]]*$//' \
+        || true
+}
+
+_autofix_normalize_value() {
+    tr '[:upper:]' '[:lower:]' \
+        | sed -E 's/[[:space:]]+/ /g; s/^[[:space:]]+//; s/[[:space:]]+$//'
+}
+
+_autofix_hash() {
+    local content="$1"
+    if command -v sha256sum &>/dev/null; then
+        printf '%s' "$content" | sha256sum | cut -d' ' -f1
+    elif command -v shasum &>/dev/null; then
+        printf '%s' "$content" | shasum -a 256 | cut -d' ' -f1
+    else
+        printf '%s' "$content" | cksum | awk '{print $1}'
+    fi
+}
+
+_autofix_audit_metadata_json() {
+    local audit_report="$1"
+    local scope_type scope_target concern_type concern vertical_path normalized_scope_type
+
+    scope_type=$(_autofix_report_field "$audit_report" "Scope type")
+    scope_target=$(_autofix_report_field "$audit_report" "Scope target")
+    concern_type=$(_autofix_report_field "$audit_report" "Concern type")
+    concern=$(_autofix_report_field "$audit_report" "Concern")
+    vertical_path=$(_autofix_report_field "$audit_report" "Vertical path")
+
+    concern=$(_sanitize_audit_title_field "$concern")
+    normalized_scope_type=$(printf '%s' "$scope_type" | _autofix_normalize_value)
+    if [[ "$normalized_scope_type" == global* ]]; then
+        scope_target="entire codebase"
+    fi
+
+    jq -cn \
+        --arg scope_type "$scope_type" \
+        --arg scope_target "$scope_target" \
+        --arg concern_type "$concern_type" \
+        --arg concern "$concern" \
+        --arg vertical_path "$vertical_path" \
+        '{
+            scope_type: $scope_type,
+            scope_target: $scope_target,
+            concern_type: $concern_type,
+            concern: $concern,
+            vertical_path: $vertical_path
+        }'
+}
+
+_autofix_audit_fingerprint() {
+    local audit_report="$1"
+    local metadata
+    metadata=$(_autofix_audit_metadata_json "$audit_report")
+
+    local canonical
+    canonical=$(echo "$metadata" | jq -r '
+        [
+            (.scope_type // "" | ascii_downcase | gsub("\\s+"; " ") | gsub("^\\s+|\\s+$"; "")),
+            (.scope_target // "" | ascii_downcase | gsub("\\s+"; " ") | gsub("^\\s+|\\s+$"; "")),
+            (.concern_type // "" | ascii_downcase | gsub("\\s+"; " ") | gsub("^\\s+|\\s+$"; "")),
+            (.concern // "" | ascii_downcase | gsub("\\s+"; " ") | gsub("^\\s+|\\s+$"; "")),
+            (.vertical_path // "" | ascii_downcase | gsub("\\s+"; " ") | gsub("^\\s+|\\s+$"; ""))
+        ] | @tsv
+    ')
+
+    _autofix_hash "$canonical"
+}
+
+_autofix_report_relative_path() {
+    local worker_dir="$1"
+    local audit_report="${2:-}"
+
+    [[ -n "$audit_report" ]] || return 0
+    case "$audit_report" in
+        "$worker_dir"/*) echo "${audit_report#"$worker_dir"/}" ;;
+        *) echo "$audit_report" ;;
+    esac
+}
+
+_autofix_dedupe_file() {
+    local project_dir="$1"
+    local ralph_dir="${RALPH_DIR:-$project_dir/.ralph}"
+    echo "$ralph_dir/autofix/dedupe.json"
+}
+
+_autofix_remote_duplicate_exists() {
+    local fingerprint="$1"
+    local title="$2"
+
+    [[ "${WIGGUM_AUTOFIX_REMOTE_DEDUPE:-true}" == "false" ]] && return 1
+    command -v gh &>/dev/null || return 1
+
+    local gh_timeout="${WIGGUM_GH_TIMEOUT:-30}"
+    local json count
+
+    if [[ -n "$fingerprint" ]]; then
+        json=$(timeout "$gh_timeout" gh pr list \
+            --state open \
+            --limit 100 \
+            --search "$fingerprint in:body" \
+            --json number 2>/dev/null || true)
+        count=$(printf '%s' "$json" | jq 'length' 2>/dev/null || echo 0)
+        [[ "$count" =~ ^[0-9]+$ ]] && (( count > 0 )) && return 0
+    fi
+
+    if [[ -n "$title" ]]; then
+        json=$(timeout "$gh_timeout" gh pr list \
+            --state open \
+            --limit 100 \
+            --json title,number 2>/dev/null || true)
+        count=$(printf '%s' "$json" | jq --arg title "$title" '[.[]? | select(.title == $title)] | length' 2>/dev/null || echo 0)
+        [[ "$count" =~ ^[0-9]+$ ]] && (( count > 0 )) && return 0
+    fi
+
+    return 1
+}
+
+_autofix_reserve_audit() {
+    local audit_report="$1"
+    local worker_dir="$2"
+    local project_dir="$3"
+    local title="$4"
+
+    local state_file state_dir lock_file fingerprint metadata now ttl cutoff lease_ttl lease_cutoff report_rel worker_id
+    state_file=$(_autofix_dedupe_file "$project_dir")
+    state_dir=$(dirname "$state_file")
+    lock_file="${state_file}.lock"
+    mkdir -p "$state_dir"
+
+    fingerprint=$(_autofix_audit_fingerprint "$audit_report")
+    metadata=$(_autofix_audit_metadata_json "$audit_report")
+    now=$(epoch_now)
+    ttl="${WIGGUM_AUTOFIX_DEDUPE_TTL_SECONDS:-604800}"
+    [[ "$ttl" =~ ^[0-9]+$ ]] || ttl=604800
+    cutoff=$((now - ttl))
+    lease_ttl="${WIGGUM_AUTOFIX_RESERVATION_TTL_SECONDS:-21600}"
+    [[ "$lease_ttl" =~ ^[0-9]+$ ]] || lease_ttl=21600
+    lease_cutoff=$((now - lease_ttl))
+    report_rel=$(_autofix_report_relative_path "$worker_dir" "$audit_report")
+    worker_id=$(basename "$worker_dir" 2>/dev/null || echo "")
+
+    AUTOFIX_CURRENT_AUDIT_FINGERPRINT="$fingerprint"
+
+    local rc=0
+    (
+        flock -w 10 200 || exit 3
+
+        if [[ ! -s "$state_file" ]] || ! jq -e . "$state_file" >/dev/null 2>&1; then
+            printf '{"version":1,"audits":{}}\n' > "$state_file"
+        fi
+
+        if jq -e --arg fp "$fingerprint" --argjson cutoff "$cutoff" --argjson lease_cutoff "$lease_cutoff" '
+            (.audits[$fp] // null) as $entry
+            | ($entry.status // "") as $status
+            | ($entry.updated_at // $entry.created_at // 0) as $updated
+            | (
+                $entry != null and (
+                    ($status == "reserved" and $updated >= $lease_cutoff) or
+                    (($status == "pr_created" or $status == "branch_pushed" or $status == "duplicate_remote") and $updated >= $cutoff)
+                )
+              )
+        ' "$state_file" >/dev/null 2>&1; then
+            exit 2
+        fi
+
+        local tmp_file
+        tmp_file=$(mktemp "${state_file}.XXXXXX")
+        jq \
+            --arg fp "$fingerprint" \
+            --arg status "reserved" \
+            --arg title "$title" \
+            --arg worker "$worker_id" \
+            --arg task "${WIGGUM_TASK_ID:-}" \
+            --arg report "$report_rel" \
+            --argjson metadata "$metadata" \
+            --argjson now "$now" \
+            --argjson cutoff "$cutoff" '
+                .version = 1
+                | .audits = (.audits // {} | with_entries(select((.value.updated_at // .value.created_at // 0) >= $cutoff)))
+                | .audits[$fp] = ($metadata + {
+                    fingerprint: $fp,
+                    status: $status,
+                    title: $title,
+                    worker_id: $worker,
+                    task_id: $task,
+                    report_file: $report,
+                    created_at: $now,
+                    updated_at: $now
+                })
+            ' "$state_file" > "$tmp_file" && mv "$tmp_file" "$state_file"
+    ) 200>"$lock_file" || rc=$?
+
+    if [[ "$rc" -ne 0 ]]; then
+        return "$rc"
+    fi
+
+    if _autofix_remote_duplicate_exists "$fingerprint" "$title"; then
+        _autofix_mark_audit_state "$audit_report" "$project_dir" "duplicate_remote" "" ""
+        return 2
+    fi
+
+    return 0
+}
+
+_autofix_mark_audit_state() {
+    local audit_report="$1"
+    local project_dir="$2"
+    local status="$3"
+    local branch="${4:-}"
+    local pr_url="${5:-}"
+
+    local state_file state_dir lock_file fingerprint now
+    state_file=$(_autofix_dedupe_file "$project_dir")
+    state_dir=$(dirname "$state_file")
+    lock_file="${state_file}.lock"
+    mkdir -p "$state_dir"
+
+    fingerprint="${AUTOFIX_CURRENT_AUDIT_FINGERPRINT:-}"
+    if [[ -z "$fingerprint" ]]; then
+        [[ -n "$audit_report" ]] && [[ -f "$audit_report" ]] || return 0
+        fingerprint=$(_autofix_audit_fingerprint "$audit_report")
+    fi
+    now=$(epoch_now)
+
+    local rc=0
+    (
+        flock -w 10 200 || exit 3
+
+        if [[ ! -s "$state_file" ]] || ! jq -e . "$state_file" >/dev/null 2>&1; then
+            printf '{"version":1,"audits":{}}\n' > "$state_file"
+        fi
+
+        local tmp_file
+        tmp_file=$(mktemp "${state_file}.XXXXXX")
+        jq \
+            --arg fp "$fingerprint" \
+            --arg status "$status" \
+            --arg branch "$branch" \
+            --arg pr_url "$pr_url" \
+            --argjson now "$now" '
+                .version = 1
+                | .audits = (.audits // {})
+                | .audits[$fp] = ((.audits[$fp] // {fingerprint: $fp, created_at: $now}) + {
+                    status: $status,
+                    branch: $branch,
+                    pr_url: $pr_url,
+                    updated_at: $now
+                })
+            ' "$state_file" > "$tmp_file" && mv "$tmp_file" "$state_file"
+    ) 200>"$lock_file" || rc=$?
+
+    return "$rc"
 }
 
 # Run a command with exponential backoff retry.
@@ -306,20 +656,33 @@ _push_per_cycle_pr() {
     if [[ "$pick_exit" -ne 0 ]]; then
         log_warn "Cherry-pick onto $cycle_branch failed (conflict with main) — discarding"
         git -C "$workspace" cherry-pick --abort 2>/dev/null || true
+        _autofix_mark_audit_state "$audit_report" "$project_dir" "cherry_pick_failed" "$cycle_branch" "" \
+            || log_warn "Failed to update autofix dedupe state"
         return 1
     fi
 
     # Push with exponential backoff (3 attempts: 2s, 4s)
     if ! _with_backoff 3 "Push $cycle_branch" \
         git -C "$workspace" push -u origin "$cycle_branch"; then
+        _autofix_mark_audit_state "$audit_report" "$project_dir" "push_failed" "$cycle_branch" "" \
+            || log_warn "Failed to update autofix dedupe state"
         return 1
     fi
     log "Pushed to $cycle_branch"
 
     # Create PR with exponential backoff (3 attempts: 2s, 4s)
-    _with_backoff 3 "Create PR for $cycle_branch" \
-        _create_cycle_pr "$workspace" "$cycle_branch" "$commit_msg" "$worker_dir" "$default_branch" "$audit_report" \
-        || log_warn "PR creation failed — branch was pushed, PR can be created manually"
+    AUTOFIX_LAST_PR_URL=""
+    if _with_backoff 3 "Create PR for $cycle_branch" \
+        _create_cycle_pr "$workspace" "$cycle_branch" "$commit_msg" "$worker_dir" "$default_branch" "$audit_report"; then
+        AUTOFIX_PASS_ACTION="pr_created"
+        _autofix_mark_audit_state "$audit_report" "$project_dir" "pr_created" "$cycle_branch" "$AUTOFIX_LAST_PR_URL" \
+            || log_warn "Failed to update autofix dedupe state"
+    else
+        log_warn "PR creation failed — branch was pushed, PR can be created manually"
+        AUTOFIX_PASS_ACTION="branch_pushed"
+        _autofix_mark_audit_state "$audit_report" "$project_dir" "branch_pushed" "$cycle_branch" "" \
+            || log_warn "Failed to update autofix dedupe state"
+    fi
 
     return 0
 }
@@ -334,6 +697,12 @@ _make_cycle_branch_name() {
     local audit_report="${1:-}"
     local epoch
     epoch=$(epoch_now)
+    local worker_slug
+    worker_slug=$(printf '%s' "${WIGGUM_TASK_ID:-autofix}-$$" \
+        | tr '[:upper:]' '[:lower:]' \
+        | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-//;s/-$//' \
+        | cut -c1-32)
+    [[ -n "$worker_slug" ]] || worker_slug="worker-$$"
 
     local slug="improvement"
     if [[ -n "$audit_report" ]] && [[ -f "$audit_report" ]]; then
@@ -348,7 +717,7 @@ _make_cycle_branch_name() {
         fi
     fi
 
-    echo "autofix/${epoch}-${slug}"
+    echo "autofix/${epoch}-${worker_slug}-${slug}"
 }
 
 # Fallback: push on the existing task branch (used when per-cycle branch fails)
@@ -374,6 +743,8 @@ _fallback_push() {
         if ! _with_backoff 2 "Force push $branch" \
             git -C "$workspace" push --force-with-lease -u origin "$branch"; then
             log_warn "Fallback push failed"
+            _autofix_mark_audit_state "$audit_report" "$project_dir" "push_failed" "$branch" "" \
+                || log_warn "Failed to update autofix dedupe state"
             return 1
         fi
     fi
@@ -381,9 +752,18 @@ _fallback_push() {
 
     local default_branch
     default_branch=$(get_default_branch)
-    _with_backoff 3 "Create PR for $branch" \
-        _create_cycle_pr "$workspace" "$branch" "$commit_msg" "$worker_dir" "$default_branch" "$audit_report" \
-        || log_warn "PR creation failed — branch was pushed, PR can be created manually"
+    AUTOFIX_LAST_PR_URL=""
+    if _with_backoff 3 "Create PR for $branch" \
+        _create_cycle_pr "$workspace" "$branch" "$commit_msg" "$worker_dir" "$default_branch" "$audit_report"; then
+        AUTOFIX_PASS_ACTION="pr_created"
+        _autofix_mark_audit_state "$audit_report" "$project_dir" "pr_created" "$branch" "$AUTOFIX_LAST_PR_URL" \
+            || log_warn "Failed to update autofix dedupe state"
+    else
+        log_warn "PR creation failed — branch was pushed, PR can be created manually"
+        AUTOFIX_PASS_ACTION="branch_pushed"
+        _autofix_mark_audit_state "$audit_report" "$project_dir" "branch_pushed" "$branch" "" \
+            || log_warn "Failed to update autofix dedupe state"
+    fi
 }
 
 # Create a PR for a per-cycle branch with audit context in the body.
@@ -405,7 +785,7 @@ _create_cycle_pr() {
 
     if ! command -v gh &>/dev/null; then
         log_debug "gh CLI not found, skipping PR creation"
-        return 0
+        return 1
     fi
 
     local gh_timeout="${WIGGUM_GH_TIMEOUT:-30}"
@@ -430,6 +810,7 @@ _create_cycle_pr() {
     if [[ -n "$pr_url" ]]; then
         log "Created PR: $pr_url"
         echo "$pr_url" > "$worker_dir/pr_url.txt"
+        AUTOFIX_LAST_PR_URL="$pr_url"
     fi
 }
 
@@ -441,6 +822,11 @@ _create_cycle_pr() {
 # Returns: PR body string (via stdout)
 _build_pr_body() {
     local audit_report="${1:-}"
+    local fingerprint="${AUTOFIX_CURRENT_AUDIT_FINGERPRINT:-}"
+
+    if [[ -n "$fingerprint" ]]; then
+        printf '<!-- wiggum-autofix-fingerprint: %s -->\n\n' "$fingerprint"
+    fi
 
     if [[ -n "$audit_report" ]] && [[ -f "$audit_report" ]]; then
         _sanitize_autofix_pr_text < "$audit_report" 2>/dev/null || echo "Autofix code improvement."

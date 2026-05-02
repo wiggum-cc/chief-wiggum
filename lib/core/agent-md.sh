@@ -384,10 +384,22 @@ _md_generate_context_section() {
         ((++item_num))
     fi
 
-    # Check for parent report
-    if [ -n "${WIGGUM_PARENT_REPORT:-}" ] && [ -f "$_MD_WORKER_DIR/$WIGGUM_PARENT_REPORT" ]; then
-        section+="${item_num}. **Read the Previous Report** (@../$WIGGUM_PARENT_REPORT) - Understand findings from previous step"$'\n'
-        ((++item_num))
+    # Check for parent report. New result files store report paths relative to
+    # worker_dir, but tolerate absolute paths from older runs.
+    if [ -n "${WIGGUM_PARENT_REPORT:-}" ]; then
+        local parent_report_path parent_report_ref
+        if [[ "$WIGGUM_PARENT_REPORT" = /* ]]; then
+            parent_report_path="$WIGGUM_PARENT_REPORT"
+            parent_report_ref="$WIGGUM_PARENT_REPORT"
+        else
+            parent_report_path="$_MD_WORKER_DIR/$WIGGUM_PARENT_REPORT"
+            parent_report_ref="../$WIGGUM_PARENT_REPORT"
+        fi
+
+        if [ -f "$parent_report_path" ]; then
+            section+="${item_num}. **Read the Previous Report** (@$parent_report_ref) - Understand findings from previous step"$'\n'
+            ((++item_num))
+        fi
     fi
 
     # Check for project memory

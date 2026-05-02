@@ -1339,6 +1339,74 @@ PRDEOF
     [ -n "$tmpdir" ] && rm -rf "$tmpdir"
 }
 
+test_extract_result_records_relative_report_file() {
+    source "$WIGGUM_HOME/lib/core/agent-base.sh"
+
+    local tmpdir worker_dir run_id
+    tmpdir=$(mktemp -d)
+    worker_dir="$tmpdir/worker"
+    run_id="random-audit-1234567"
+    mkdir -p "$worker_dir/logs/$run_id" "$worker_dir/results" "$worker_dir/reports"
+
+    cat > "$worker_dir/logs/$run_id/random-audit-0-1234567.log" << 'LOGEOF'
+{"type":"iteration_start","session_id":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"<report>\n## Audit Parameters\n\n- **Scope type**: Focused\n- **Scope target**: lib/\n- **Concern type**: Specific\n- **Concern**: Race conditions\n</report>\n<result>FAIL</result>"}]}}
+LOGEOF
+
+    export RALPH_RUN_ID="$run_id"
+    export WIGGUM_STEP_ID="random-audit"
+    export AGENT_TYPE="autofix.random-audit"
+    export _AGENT_START_EPOCH="1234567"
+    unset WIGGUM_PARENT_REPORT
+
+    agent_extract_and_write_result "$worker_dir" "random-audit" "random-audit" "report" "PASS|FAIL"
+
+    local result_file report_file
+    result_file="$worker_dir/results/1234567-random-audit-result.json"
+    report_file=$(jq -r '.outputs.report_file // ""' "$result_file")
+
+    assert_equals "reports/1234567-random-audit-report.md" "$report_file" \
+        "Result should expose report_file relative to worker_dir"
+    assert_file_exists "$worker_dir/$report_file" \
+        "Reported report_file should resolve under worker_dir"
+
+    unset RALPH_RUN_ID WIGGUM_STEP_ID AGENT_TYPE _AGENT_START_EPOCH
+    [ -n "$tmpdir" ] && rm -rf "$tmpdir"
+}
+
+test_extract_result_carries_parent_report_file() {
+    source "$WIGGUM_HOME/lib/core/agent-base.sh"
+
+    local tmpdir worker_dir run_id
+    tmpdir=$(mktemp -d)
+    worker_dir="$tmpdir/worker"
+    run_id="verify-fix-1234568"
+    mkdir -p "$worker_dir/logs/$run_id" "$worker_dir/results" "$worker_dir/reports"
+
+    cat > "$worker_dir/logs/$run_id/verify-fix-0-1234568.log" << 'LOGEOF'
+{"type":"iteration_start","session_id":"bbbbbbbb-cccc-dddd-eeee-ffffffffffff"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"<summary>\nFixed one issue.\n</summary>\n<result>PASS</result>"}]}}
+LOGEOF
+
+    export RALPH_RUN_ID="$run_id"
+    export WIGGUM_STEP_ID="verify-fix"
+    export AGENT_TYPE="autofix.verify-fix"
+    export _AGENT_START_EPOCH="1234568"
+    export WIGGUM_PARENT_REPORT="reports/1234567-random-audit-report.md"
+
+    agent_extract_and_write_result "$worker_dir" "verify-fix" "verify-fix" "summary" "PASS|FAIL|SKIP"
+
+    local result_file parent_report
+    result_file="$worker_dir/results/1234568-verify-fix-result.json"
+    parent_report=$(jq -r '.outputs.parent_report_file // ""' "$result_file")
+
+    assert_equals "reports/1234567-random-audit-report.md" "$parent_report" \
+        "Result should carry parent_report_file for later pipeline steps"
+
+    unset RALPH_RUN_ID WIGGUM_STEP_ID AGENT_TYPE _AGENT_START_EPOCH WIGGUM_PARENT_REPORT
+    [ -n "$tmpdir" ] && rm -rf "$tmpdir"
+}
+
 # =============================================================================
 # Run Tests
 # =============================================================================
@@ -1388,6 +1456,8 @@ run_test test_supervisor_stop_fallback_overrides_fail_with_pass
 run_test test_no_supervisor_stop_preserves_fail
 run_test test_supervisor_stop_no_log_result_stays_fail
 run_test test_max_iterations_unchecked_prd_stays_fail
+run_test test_extract_result_records_relative_report_file
+run_test test_extract_result_carries_parent_report_file
 
 # Print summary
 print_test_summary

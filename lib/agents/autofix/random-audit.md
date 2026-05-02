@@ -73,6 +73,13 @@ picked a shell-specific concern but the scope is pure Python), **repick** — ru
 on the same list until you land on a concern that is relevant. Record all repicks in your
 report under "Selection method".
 
+**Recent-duplicate rule**: Before finalizing the selected scope/concern pair, check
+`{{ralph_dir}}/autofix/dedupe.json` if it exists. If the same concern and effective
+scope were already reserved or turned into a PR recently, repick the scope and/or
+concern and record the repick in "Selection method". For global audits, treat the
+effective scope as "entire codebase" even if the random scope target was a specific
+file or directory.
+
 **Specific Concerns** (narrow, targeted):
 1. Off-by-one errors and boundary conditions
 2. Resource leaks (file handles, connections, memory, subprocesses)

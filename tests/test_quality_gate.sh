@@ -38,6 +38,8 @@ setup() {
     # Create worker structure
     mkdir -p "$TEST_DIR/worker/results" "$TEST_DIR/worker/logs" "$TEST_DIR/worker/reports"
     mkdir -p "$TEST_DIR/project"
+    export RALPH_DIR="$TEST_DIR/project/.ralph"
+    mkdir -p "$RALPH_DIR"
 
     # Create a bare remote repo so push/fetch/origin work
     git init --bare --quiet "$TEST_DIR/remote.git"
@@ -58,7 +60,7 @@ setup() {
 }
 
 teardown() {
-    unset WIGGUM_TASK_ID WIGGUM_STEP_ID _AGENT_START_EPOCH
+    unset WIGGUM_TASK_ID WIGGUM_STEP_ID _AGENT_START_EPOCH RALPH_DIR WIGGUM_AUTOFIX_REMOTE_DEDUPE
     [ -n "$TEST_DIR" ] && rm -rf "$TEST_DIR"
 }
 
@@ -397,6 +399,106 @@ test_commit_msg_fallback_no_report() {
         "Commit message should fall back to generic when no report"
 }
 
+test_resolve_cycle_audit_report_uses_verify_parent() {
+    export WIGGUM_STEP_ID="quality-gate"
+    export _AGENT_START_EPOCH="4100001"
+
+    _load_quality_gate
+
+    mkdir -p "$TEST_DIR/worker/reports" "$TEST_DIR/worker/results"
+
+    cat > "$TEST_DIR/worker/reports/4100001-random-audit-report.md" << 'EOF'
+## Audit Parameters
+
+- **Scope type**: Focused
+- **Scope target**: simulation/
+- **Concern type**: Specific
+- **Concern**: Unchecked return values from system calls or library functions
+EOF
+
+    cat > "$TEST_DIR/worker/reports/4100002-random-audit-report.md" << 'EOF'
+## Audit Parameters
+
+- **Scope type**: Focused
+- **Scope target**: lib/
+- **Concern type**: Specific
+- **Concern**: Race conditions and concurrency bugs
+EOF
+
+    cat > "$TEST_DIR/worker/results/4100003-verify-fix-result.json" << 'EOF'
+{"outputs":{"gate_result":"PASS","parent_report_file":"reports/4100001-random-audit-report.md"}}
+EOF
+
+    local audit_report msg
+    audit_report=$(_resolve_cycle_audit_report "$TEST_DIR/worker")
+    msg=$(_build_commit_msg "autofix-w2" "$audit_report")
+
+    assert_equals "$TEST_DIR/worker/reports/4100001-random-audit-report.md" "$audit_report" \
+        "Quality gate should use the audit report consumed by verify-fix"
+    assert_output_contains "$msg" "unchecked return values" \
+        "Commit message should come from verify-fix parent report"
+    assert_output_not_contains "$msg" "race conditions" \
+        "Commit message should not use a later random-audit report"
+}
+
+test_autofix_reserve_deduplicates_same_audit() {
+    export WIGGUM_STEP_ID="quality-gate"
+    export _AGENT_START_EPOCH="4200001"
+    export WIGGUM_AUTOFIX_REMOTE_DEDUPE=false
+
+    _load_quality_gate
+    _write_audit_report "$TEST_DIR/worker" "simulation/" "Unchecked return values from system calls or library functions"
+
+    local audit_report title first_rc second_rc fingerprint_count
+    audit_report=$(agent_find_latest_report "$TEST_DIR/worker" "random-audit")
+    title=$(_build_commit_msg "autofix-w2" "$audit_report")
+
+    first_rc=0
+    _autofix_reserve_audit "$audit_report" "$TEST_DIR/worker" "$TEST_DIR/project" "$title" || first_rc=$?
+    second_rc=0
+    _autofix_reserve_audit "$audit_report" "$TEST_DIR/worker" "$TEST_DIR/project" "$title" || second_rc=$?
+
+    fingerprint_count=$(jq '.audits | length' "$TEST_DIR/project/.ralph/autofix/dedupe.json")
+
+    assert_equals "0" "$first_rc" "First audit reservation should succeed"
+    assert_equals "2" "$second_rc" "Second identical audit reservation should be classified as duplicate"
+    assert_equals "1" "$fingerprint_count" "Dedupe ledger should contain one fingerprint"
+
+    unset WIGGUM_AUTOFIX_REMOTE_DEDUPE
+}
+
+test_duplicate_audit_pass_skips_pr_creation() {
+    export WIGGUM_STEP_ID="quality-gate"
+    export _AGENT_START_EPOCH="4300001"
+    export WIGGUM_AUTOFIX_REMOTE_DEDUPE=false
+
+    _load_quality_gate
+    _stub_md_agent "PASS"
+    _stub_gh
+    _dirty_workspace
+    _write_audit_report "$TEST_DIR/worker" "simulation/" "Unchecked return values from system calls or library functions"
+
+    local audit_report title reserve_rc
+    audit_report=$(agent_find_latest_report "$TEST_DIR/worker" "random-audit")
+    title=$(_build_commit_msg "autofix-w2" "$audit_report")
+    reserve_rc=0
+    _autofix_reserve_audit "$audit_report" "$TEST_DIR/worker" "$TEST_DIR/project" "$title" || reserve_rc=$?
+
+    agent_run "$TEST_DIR/worker" "$TEST_DIR/project"
+
+    _unstub_gh
+
+    local remote_branches dirty_after
+    remote_branches=$(git -C "$TEST_DIR/remote.git" branch --list 'autofix/*' 2>/dev/null)
+    dirty_after=$(git -C "$TEST_DIR/worker/workspace" status --porcelain)
+
+    assert_equals "0" "$reserve_rc" "Precondition reservation should succeed"
+    assert_equals "" "$remote_branches" "Duplicate audit should not create another autofix branch"
+    assert_equals "" "$dirty_after" "Duplicate audit should be discarded after quality gate reset"
+
+    unset WIGGUM_AUTOFIX_REMOTE_DEDUPE
+}
+
 # =============================================================================
 # Test: Artifact cleanup removes temp files before commit
 # =============================================================================
@@ -453,6 +555,9 @@ run_test test_commit_msg_includes_audit_scope
 run_test test_commit_msg_strips_issue_reference_from_concern
 run_test test_pr_body_strips_issue_reference_shorthand
 run_test test_commit_msg_fallback_no_report
+run_test test_resolve_cycle_audit_report_uses_verify_parent
+run_test test_autofix_reserve_deduplicates_same_audit
+run_test test_duplicate_audit_pass_skips_pr_creation
 run_test test_artifact_cleanup
 
 print_test_summary

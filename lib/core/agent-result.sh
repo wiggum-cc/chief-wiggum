@@ -450,6 +450,7 @@ agent_extract_and_write_result() {
     local valid_values="$5"
 
     local result="UNKNOWN"
+    local report_rel=""
 
     # Find the latest log file for this step (run-isolated via RALPH_RUN_ID)
     # RALPH_RUN_ID format: {step_id}-{epoch}, matching log dir naming
@@ -468,6 +469,10 @@ agent_extract_and_write_result() {
         if [ -n "$report_content" ]; then
             local report_path
             report_path=$(agent_write_report "$worker_dir" "$report_content")
+            report_rel="$report_path"
+            case "$report_path" in
+                "$worker_dir"/*) report_rel="${report_path#"$worker_dir"/}" ;;
+            esac
             log "${agent_name} report saved to $(basename "$report_path")"
         fi
 
@@ -500,11 +505,17 @@ agent_extract_and_write_result() {
         fi
     fi
 
-    # Build extra_outputs with session_id for downstream steps
-    local extra_outputs="{}"
-    if [ -n "$session_id" ]; then
-        extra_outputs="{\"session_id\":\"$session_id\"}"
-    fi
+    # Build extra_outputs for downstream steps. Keep report paths relative to
+    # worker_dir so markdown prompts can reference them from workspace via @../.
+    local extra_outputs
+    extra_outputs=$(jq -cn \
+        --arg session "$session_id" \
+        --arg report "$report_rel" \
+        --arg parent_report "${WIGGUM_PARENT_REPORT:-}" \
+        '{}
+         + (if $session != "" then {session_id: $session} else {} end)
+         + (if $report != "" then {report_file: $report} else {} end)
+         + (if $parent_report != "" then {parent_report_file: $parent_report} else {} end)')
 
     # Write epoch-named result JSON with gate_result and session_id
     agent_write_result "$worker_dir" "$result" "$extra_outputs"
