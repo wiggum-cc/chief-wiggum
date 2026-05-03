@@ -18,6 +18,26 @@ refactors, multi-file changes, and cross-module work. Don't shy away from scope.
 
 WORKSPACE: {{workspace}}
 
+## Diligent Sequential Workflow
+
+Before editing code, build a complete finding ledger from the audit report:
+
+- Include every finding raised by the auditor. Use the auditor's finding ID when
+  present; otherwise assign stable IDs like `F001`, `F002`, in report order.
+- Preserve severity, cited location, and the auditor's regression-test suggestion.
+- Process findings by severity (CRITICAL, HIGH, MEDIUM, LOW, INFO), preserving report
+  order within the same severity.
+- Keep each ledger item in exactly one state: Pending, Fixed, or Skipped.
+- Do not collapse multiple findings into a vague "covered by another fix" entry. If
+  one code change addresses multiple findings, still verify and report each finding
+  separately.
+
+Work strictly one ledger item at a time. For the current finding, complete the full
+verify -> TDD decision -> fix/skip -> focused verification cycle before starting the
+next finding. Do not stop after the first successful fix if other findings remain.
+Do not emit a final `<result>` while any finding is still Pending; let the continuation
+iteration resume from the first Pending item.
+
 ## How to Verify
 
 Don't trust the audit blindly. For each finding, go look at the code yourself:
@@ -64,7 +84,7 @@ import reordering, or any finding where a meaningful automated test isn't practi
 State "TDD: N/A — [reason]" in your report for each skipped case.
 
 **General fix rules**:
-- Work through findings one at a time — verify, red-green, then move on
+- Work through findings one at a time — verify, red-green, focused checks, then move on
 - Use the audit's suggested fix as a starting point, but improve on it if you see a
   better approach
 - Verify the build after each fix — a fix that breaks the build is not a fix
@@ -111,20 +131,29 @@ apply to autofix audit reports.
 
 ## Process
 
-1. **Read the audit report** — understand the scope, concern, and each finding
-2. **For each finding** (highest severity first):
-   a. Go to the cited location and read surrounding context
+1. **Read the audit report** — understand the scope, concern, and enumerate every finding
+   into a finding ledger before making edits.
+2. **For each Pending finding** (highest severity first, report order within a severity):
+   a. Go to the cited location and read surrounding context, including relevant callers and tests
    b. Determine if the finding is true
-   c. If true: fix it
-   d. If false: explain why and skip
-   e. Verify build after each fix
-3. **Run tests** after all fixes
-4. **Clean up** — remove any temporary files (`git status` to verify)
-5. **Report** results
+   c. If true: follow red-green TDD when feasible, then fix it
+   d. If false: explain why and mark it Skipped
+   e. Run focused verification for that finding before moving to the next one
+   f. Update the ledger entry to Fixed or Skipped
+3. **Confirm the ledger is complete** — every finding must be Fixed or Skipped before final output
+4. **Run tests** after all fixes
+5. **Clean up** — remove any temporary files (`git status` to verify)
+6. **Report** results
 
 ## Output Format
 
 <summary>
+
+## Finding Ledger
+
+| Finding | Severity | Location | State |
+|---------|----------|----------|-------|
+| [ID] | [sev] | path:line | Fixed/Skipped |
 
 ## Verification Results
 
@@ -152,9 +181,9 @@ apply to autofix audit reports.
 
 ## Result Criteria
 
-- **PASS**: At least one finding was verified and fixed, build passes
+- **PASS**: Every finding was processed, at least one finding was verified and fixed, build passes
 - **FAIL**: Fixes were attempted but broke the build or introduced regressions
-- **SKIP**: All findings turned out to be false positives or already addressed
+- **SKIP**: Every finding was processed and all findings turned out to be false positives or already addressed
 
 <result>PASS</result>
 OR
@@ -162,7 +191,7 @@ OR
 OR
 <result>SKIP</result>
 
-IMPORTANT: You MUST emit exactly one <result> tag as the very last thing in your response. The tag must contain exactly PASS, FAIL, or SKIP. Omitting this tag causes a pipeline failure.
+IMPORTANT: Once every finding is processed, you MUST emit exactly one <result> tag as the very last thing in your response. The tag must contain exactly PASS, FAIL, or SKIP. Omitting this tag from the final response causes a pipeline failure.
 </WIGGUM_USER_PROMPT>
 
 <WIGGUM_CONTINUATION_PROMPT>
@@ -170,8 +199,10 @@ CONTINUATION CONTEXT (Iteration {{iteration}}):
 
 Your previous work is summarized in @../summaries/{{run_id}}/{{step_id}}-{{prev_iteration}}-summary.txt.
 
-Continue verifying and fixing remaining findings from the audit report.
-Do NOT repeat work already completed. When all findings are processed, provide final <summary> and <result>.
+Reconstruct the finding ledger from the audit report and your previous summary. Identify
+which findings are already Fixed or Skipped, then resume at the first Pending finding.
+Do NOT repeat work already completed. Continue sequentially until every finding is
+Fixed or Skipped. When all findings are processed, provide final <summary> and <result>.
 
-IMPORTANT: You MUST emit exactly one <result> tag as the very last thing in your response. The tag must contain exactly PASS, FAIL, or SKIP. Omitting this tag causes a pipeline failure.
+IMPORTANT: Once every finding is processed, you MUST emit exactly one <result> tag as the very last thing in your response. The tag must contain exactly PASS, FAIL, or SKIP. Omitting this tag from the final response causes a pipeline failure.
 </WIGGUM_CONTINUATION_PROMPT>
