@@ -492,6 +492,28 @@ test_service_runner_worker_failures_can_be_tolerated() {
     assert_equals "1" "$rc" "No started workers should still fail service execution"
 }
 
+test_service_runner_pipeline_wait_enforces_timeout() {
+    source "$WIGGUM_HOME/lib/service/service-runner.sh"
+
+    export WIGGUM_SERVICE_TIMEOUT_KILL_AFTER=0
+
+    ( sleep 5 ) &
+    local pid=$!
+
+    _service_wait_pipeline_pids 1 "$pid"
+
+    assert_equals "true" "$_SERVICE_PIPELINE_WAIT_TIMED_OUT" \
+        "Pipeline wait helper should report timeout"
+    assert_equals "1" "$_SERVICE_PIPELINE_WAIT_FAILED_COUNT" \
+        "Timed-out process should count as a failed worker"
+
+    if kill -0 "$pid" 2>/dev/null; then
+        fail "Timed-out process should have been reaped"
+    fi
+
+    unset WIGGUM_SERVICE_TIMEOUT_KILL_AFTER
+}
+
 # =============================================================================
 # SERVICE-CORE.SH TESTS
 # =============================================================================
@@ -769,6 +791,7 @@ run_test test_service_runner_function_type_valid
 run_test test_service_runner_resolve_workspace_isolated
 run_test test_service_runner_resolve_workspace_lightweight
 run_test test_service_runner_worker_failures_can_be_tolerated
+run_test test_service_runner_pipeline_wait_enforces_timeout
 
 run_test test_service_core_init
 run_test test_service_can_run_checks_dependencies

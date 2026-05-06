@@ -11,6 +11,9 @@
       "on_result": {
         "PASS": {
           "jump": "random-audit"
+        },
+        "UNKNOWN": {
+          "jump": "random-audit"
         }
       }
     },
@@ -26,6 +29,9 @@
         },
         "SKIP": {
           "jump": "random-audit"
+        },
+        "UNKNOWN": {
+          "jump": "random-audit"
         }
       }
     },
@@ -39,6 +45,9 @@
           "jump": "random-audit"
         },
         "FAIL": {
+          "jump": "random-audit"
+        },
+        "UNKNOWN": {
           "jump": "random-audit"
         }
       }

@@ -994,6 +994,20 @@ test_autofix_verify_fail_jumps_to_random_audit() {
     assert_equals "0" "$_PIPELINE_NEXT_IDX" "autofix verify-fix FAIL should return to random-audit"
 }
 
+test_autofix_unknown_retries_random_audit() {
+    pipeline_load "$WIGGUM_HOME/config/pipelines/autofix.json" 2>/dev/null
+    _pipeline_runner_reset
+
+    _dispatch_on_result 0 "UNKNOWN" "$TEST_DIR/worker" "$TEST_DIR/project" "$TEST_DIR/worker/workspace"
+    assert_equals "0" "$_PIPELINE_NEXT_IDX" "autofix random-audit UNKNOWN should retry random-audit"
+
+    _dispatch_on_result 1 "UNKNOWN" "$TEST_DIR/worker" "$TEST_DIR/project" "$TEST_DIR/worker/workspace"
+    assert_equals "0" "$_PIPELINE_NEXT_IDX" "autofix verify-fix UNKNOWN should return to random-audit"
+
+    _dispatch_on_result 2 "UNKNOWN" "$TEST_DIR/worker" "$TEST_DIR/project" "$TEST_DIR/worker/workspace"
+    assert_equals "0" "$_PIPELINE_NEXT_IDX" "autofix quality-gate UNKNOWN should return to random-audit"
+}
+
 test_autofix_random_audit_unknown_aborts_before_verify() {
     run_sub_agent() {
         local agent_type="$1"
@@ -1073,6 +1087,7 @@ run_test test_pipeline_step_config_exported
 run_test test_pipeline_step_config_cleaned_between_steps
 run_test test_pipeline_backup_uses_log_session_when_result_missing
 run_test test_autofix_verify_fail_jumps_to_random_audit
+run_test test_autofix_unknown_retries_random_audit
 run_test test_autofix_random_audit_unknown_aborts_before_verify
 
 print_test_summary

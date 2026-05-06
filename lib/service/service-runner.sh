@@ -28,6 +28,7 @@
 [ -n "${_SERVICE_RUNNER_LOADED:-}" ] && return 0
 _SERVICE_RUNNER_LOADED=1
 [ -z "${_WIGGUM_SRC_PLATFORM_LOADED:-}" ] && source "$WIGGUM_HOME/lib/core/platform.sh"
+source "$WIGGUM_HOME/lib/worker/worker-lifecycle.sh"
 
 # Source dependencies (careful of circular deps - loader must be loaded first)
 # service-state.sh should already be loaded by scheduler
@@ -204,6 +205,93 @@ _exec_with_limits() {
 
     # Execute without eval
     "${cmd[@]}"
+}
+
+# Track the result of the most recent _service_wait_pipeline_pids call.
+_SERVICE_PIPELINE_WAIT_FAILED_COUNT=0
+_SERVICE_PIPELINE_WAIT_FIRST_FAILURE_RC=0
+_SERVICE_PIPELINE_WAIT_TIMED_OUT=false
+
+_service_pid_still_running() {
+    local pid="$1"
+    kill -0 "$pid" 2>/dev/null || return 1
+
+    local stat
+    stat=$(ps -o stat= -p "$pid" 2>/dev/null | tr -d '[:space:]') || true
+    [ -n "$stat" ] || return 1
+    [[ "$stat" != Z* ]]
+}
+
+_service_wait_pipeline_pids() {
+    local timeout="$1"
+    shift
+    local pids=("$@")
+
+    _SERVICE_PIPELINE_WAIT_FAILED_COUNT=0
+    _SERVICE_PIPELINE_WAIT_FIRST_FAILURE_RC=0
+    _SERVICE_PIPELINE_WAIT_TIMED_OUT=false
+
+    if [ "${#pids[@]}" -eq 0 ]; then
+        return 0
+    fi
+
+    if ! [[ "$timeout" =~ ^[0-9]+$ ]]; then
+        timeout=0
+    fi
+
+    local start_time
+    start_time=$(epoch_now)
+
+    while true; do
+        local any_running=false
+        local pid
+        for pid in "${pids[@]}"; do
+            if _service_pid_still_running "$pid"; then
+                any_running=true
+                break
+            fi
+        done
+
+        [ "$any_running" = true ] || break
+
+        if [ "$timeout" -gt 0 ]; then
+            local now
+            now=$(epoch_now)
+            if [ $((now - start_time)) -ge "$timeout" ]; then
+                _SERVICE_PIPELINE_WAIT_TIMED_OUT=true
+                for pid in "${pids[@]}"; do
+                    kill_process_tree "$pid" TERM
+                done
+
+                local kill_after="${WIGGUM_SERVICE_TIMEOUT_KILL_AFTER:-30}"
+                if ! [[ "$kill_after" =~ ^[0-9]+$ ]]; then
+                    kill_after=30
+                fi
+                if [ "$kill_after" -gt 0 ]; then
+                    sleep "$kill_after"
+                fi
+
+                for pid in "${pids[@]}"; do
+                    kill_process_tree "$pid" KILL
+                done
+                break
+            fi
+        fi
+
+        sleep 1
+    done
+
+    local pid rc
+    for pid in "${pids[@]}"; do
+        rc=0
+        wait "$pid" 2>/dev/null || rc=$?
+        if [ "$rc" -ne 0 ]; then
+            ((_SERVICE_PIPELINE_WAIT_FAILED_COUNT++)) || true
+            if [ "$_SERVICE_PIPELINE_WAIT_FIRST_FAILURE_RC" -eq 0 ]; then
+                _SERVICE_PIPELINE_WAIT_FIRST_FAILURE_RC="$rc"
+            fi
+        fi
+    done
 }
 
 # Run a command-type service
@@ -691,8 +779,22 @@ _run_service_pipeline() {
 
         (
             local worker_rc=0
+            local worker_pid
             _run_pipeline_worker "$id" "$pipeline_name" "$pipeline_config" "$worker_dir" \
-                "$workspace_path" "$use_git_worktree" "$start_time" 0 || worker_rc=$?
+                "$workspace_path" "$use_git_worktree" "$start_time" 0 &
+            worker_pid=$!
+
+            _service_wait_pipeline_pids "$timeout" "$worker_pid"
+
+            if [ "$_SERVICE_PIPELINE_WAIT_TIMED_OUT" = true ]; then
+                log_error "Service $id timed out after ${timeout}s"
+                exit 124
+            fi
+
+            if [ "$_SERVICE_PIPELINE_WAIT_FAILED_COUNT" -gt 0 ]; then
+                worker_rc="${_SERVICE_PIPELINE_WAIT_FIRST_FAILURE_RC:-1}"
+                [ "$worker_rc" -eq 0 ] && worker_rc=1
+            fi
 
             if [ "$worker_rc" -ne 0 ] && [ "$tolerate_worker_failures" = "true" ]; then
                 log_warn "Service $id: worker 0 failed with exit_code=$worker_rc; treating as non-fatal"
@@ -733,17 +835,15 @@ _run_service_pipeline() {
                 ((++w))
             done
 
-            # Wait for all workers, track failures
-            local failed_count=0
-            for pid in "${worker_pids[@]}"; do
-                local wrc=0
-                wait "$pid" 2>/dev/null || wrc=$?
-                if [ "$wrc" -ne 0 ]; then
-                    ((++failed_count))
-                fi
-            done
+            _service_wait_pipeline_pids "$timeout" "${worker_pids[@]}"
+
+            if [ "$_SERVICE_PIPELINE_WAIT_TIMED_OUT" = true ]; then
+                log_error "Service $id timed out after ${timeout}s"
+                exit 124
+            fi
 
             local spawned_count="${#worker_pids[@]}"
+            local failed_count="$_SERVICE_PIPELINE_WAIT_FAILED_COUNT"
             log "Service $id: workers completed (requested=$max_workers spawned=$spawned_count failed=$failed_count tolerate_worker_failures=$tolerate_worker_failures)"
 
             if [ "$failed_count" -gt 0 ] && [ "$tolerate_worker_failures" = "true" ]; then
@@ -1011,12 +1111,25 @@ service_run_sync() {
                         exit_code=1
                     else
                         local worker_rc=0
+                        local worker_pid
                         _run_pipeline_worker "$id" "$pipeline_name" "$pipeline_config" "$worker_dir" \
-                            "$workspace_path" "$use_git_worktree" "$start_time" 0 || worker_rc=$?
-                        if [ "$worker_rc" -ne 0 ] && [ "$tolerate_worker_failures" = "true" ]; then
+                            "$workspace_path" "$use_git_worktree" "$start_time" 0 &
+                        worker_pid=$!
+
+                        _service_wait_pipeline_pids "$timeout" "$worker_pid"
+
+                        if [ "$_SERVICE_PIPELINE_WAIT_TIMED_OUT" = true ]; then
+                            log_error "Service $id timed out after ${timeout}s"
+                            exit_code=124
+                        elif [ "$_SERVICE_PIPELINE_WAIT_FAILED_COUNT" -gt 0 ]; then
+                            worker_rc="${_SERVICE_PIPELINE_WAIT_FIRST_FAILURE_RC:-1}"
+                            [ "$worker_rc" -eq 0 ] && worker_rc=1
+                        fi
+
+                        if [ "$exit_code" -eq 0 ] && [ "$worker_rc" -ne 0 ] && [ "$tolerate_worker_failures" = "true" ]; then
                             log_warn "Service $id: worker 0 failed with exit_code=$worker_rc; treating as non-fatal"
                             exit_code=0
-                        else
+                        elif [ "$exit_code" -eq 0 ]; then
                             exit_code="$worker_rc"
                         fi
                     fi
@@ -1041,21 +1154,22 @@ service_run_sync() {
                         ((++w))
                     done
 
-                    local failed_count=0
-                    for pid in "${worker_pids[@]}"; do
-                        local wrc=0
-                        wait "$pid" 2>/dev/null || wrc=$?
-                        if [ "$wrc" -ne 0 ]; then
-                            ((++failed_count))
-                        fi
-                    done
+                    _service_wait_pipeline_pids "$timeout" "${worker_pids[@]}"
+
+                    if [ "$_SERVICE_PIPELINE_WAIT_TIMED_OUT" = true ]; then
+                        log_error "Service $id timed out after ${timeout}s"
+                        exit_code=124
+                    fi
 
                     local spawned_count="${#worker_pids[@]}"
+                    local failed_count="$_SERVICE_PIPELINE_WAIT_FAILED_COUNT"
                     log "Service $id: workers completed (requested=$max_workers spawned=$spawned_count failed=$failed_count tolerate_worker_failures=$tolerate_worker_failures)"
                     if [ "$failed_count" -gt 0 ] && [ "$tolerate_worker_failures" = "true" ]; then
                         log_warn "Service $id: treating $failed_count failed worker(s) as non-fatal"
                     fi
-                    _service_pipeline_workers_exit_code "$tolerate_worker_failures" "$spawned_count" "$failed_count" || exit_code=$?
+                    if [ "$exit_code" -eq 0 ]; then
+                        _service_pipeline_workers_exit_code "$tolerate_worker_failures" "$spawned_count" "$failed_count" || exit_code=$?
+                    fi
                 fi
             fi
             ;;
