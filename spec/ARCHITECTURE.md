@@ -2,217 +2,467 @@
 
 Status: Draft v2
 Target implementation: Elixir/OTP
-Compatibility target: new product architecture; no `.ralph` or v1 shell compatibility requirement
+Baseline: Chief Wiggum v1 architecture, pipeline, runtime, service scheduler, and TLA models
 
-## Purpose
+## Overview
 
-Indexer is a long-running agent orchestration system. It turns repository-owned work
-items into isolated agent workspaces, runs external coding agents against those
-workspaces, records their behavior, and lands acceptable changes using git.
+Indexer is the Elixir rewrite of the Chief Wiggum orchestration model. It keeps the
+core v1 ideas:
 
-Indexer is not an agent harness. It does not implement model reasoning, tool use, or
-interactive coding behavior. It prepares context, launches external agent runtimes,
-normalizes their events, runs deterministic hooks, and advances durable workflow state.
+- a task/work-item source,
+- isolated git worktrees,
+- workers that execute configurable pipelines,
+- agents that are invoked through a backend-agnostic runtime,
+- result-driven pipeline routing with fix loops,
+- a service scheduler that drives orchestration responsibilities,
+- crash-safe lifecycle transitions using an effect outbox.
 
-The design is influenced by the Symphony pattern: decouple work from individual agent
-sessions, let work items drive orchestration, and treat pull requests/sessions as
-implementation details rather than the core domain. Indexer differs by making git
-itself the collaboration substrate instead of depending on GitHub, Linear, or any
-hosted tracker.
+Indexer deliberately changes three platform assumptions:
 
-## Goals
+1. Durable orchestration state is append-only JSONL, not mutable shell globals
+   or ad hoc status files.
+2. The collaboration surface is a git control branch, not GitHub Issues or Pull
+   Requests.
+3. The implementation substrate is Elixir/OTP supervision, not bash process
+   sourcing and Python bridge processes.
 
-- Implement orchestration in Elixir/OTP with supervised services, process isolation,
-  restart recovery, and observable runtime state.
-- Use SQLite as the authoritative local runtime database.
-- Use a git control branch as the portable collaboration and audit surface.
-- Support external agents through adapter contracts for Codex, Claude Code, OpenCode,
-  Pi, and future runtimes.
-- Model agents as a nondeterministic objective plus deterministic hooks.
-- Model workflows as flexible pipelines that can express implementation, research,
-  validation, review, maintenance, and meta-work without baking in GitHub-specific
-  states.
-- Keep all important history visible in the repository through commits, work branches,
-  control-branch records, and merge commits.
+Indexer is not an agent harness. It prepares context, invokes external agent
+harnesses, normalizes their events, runs deterministic hooks, and advances workflow
+state. Codex, Claude, OpenCode, Pi, and future runtimes remain external.
 
-## Non-Goals
+## Preserved V1 Design Points
 
-- GitHub Issues, GitHub Pull Requests, GitHub Actions, or GitHub-specific review APIs
-  are not core dependencies.
-- The system does not preserve v1 `.ralph` file layouts, shell APIs, or JSON schemas.
-- The system is not a general-purpose distributed job scheduler.
-- The system does not prescribe one sandbox or approval posture for every agent.
-- The system does not assume every workflow produces code; analysis-only and planning
-  work are first-class.
+These v1 definitions remain part of the v2 design unless explicitly superseded:
 
-## System Overview
+- Pipeline as a bounded jump-based state machine.
+- Ordered `steps` array with `id`, `agent`, `max`, `on_max`, `on_result`,
+  `readonly`, `enabled_by`, `commit_after`, `config`, and `hooks`.
+- Result mappings with `status`, `exit_code`, and `default_jump`.
+- Standard gate results: `PASS`, `FAIL`, `FIX`, `SKIP`, plus `UNKNOWN` handling.
+- Inline agent handlers for remediation loops.
+- Markdown agents with frontmatter and tagged prompt sections.
+- Shell-style deterministic extensions, generalized to executable hooks.
+- Runtime backend interface: build exec args, build resume args, invoke, extract
+  text/session id, classify retryability, usage/rate-limit hooks.
+- Ralph-loop execution pattern: work phase, summary phase, optional supervisor
+  phase, continuation context.
+- Worker lifecycle states and events from `config/worker-lifecycle.json`.
+- Effect outbox ordering and replay semantics from `formal/EffectOutbox.tla`.
+- Scheduler priority terms from `formal/Scheduler.tla`.
+- Service scheduler phases, schedule types, execution types, conditions, circuit
+  breakers, health checks, and run modes.
 
-Indexer has five core layers:
+## Intentional Deviations
 
-1. **Control Plane**
-   - CLI and web/API surfaces.
-   - Work item creation, status changes, review comments, operator actions.
-   - Reads and writes SQLite.
-   - Syncs user-visible records to the git control branch.
+| Area | V1 | V2 |
+|------|----|----|
+| Persistence | Many files plus shell globals | Append-only JSONL ledgers plus disposable projections |
+| Runtime implementation | Bash sourcing/subprocesses | Elixir supervisors, GenServers, Tasks, Ports |
+| Collaboration | Kanban/GitHub Issues/GitHub PRs | JSONL work items and git-native change sets on `indexer/control` |
+| Agent deterministic code | Shell script override | Deterministic hook: Elixir module or executable command |
+| Git side effects | Often embedded in workflow agents | Declared effect outbox entries; workspace writes allowed only in work branch |
+| Hosted forge | GitHub-aware core | Git-only core; hosted forges are optional adapters |
 
-2. **Coordination Layer**
-   - OTP supervisors, service daemon, schedulers, worker registry, leases.
-   - Decides which work items are eligible, which workers to run, and which effects
-     need replay.
-   - Owns retries, backoff, cancellation, and reconciliation.
+## Directory Structure
 
-3. **Workflow Layer**
-   - Pipeline engine, node graph validation, dataflow, branch routing, gates.
-   - Executes agent objectives and deterministic hooks.
-   - Produces normalized outcomes and requested effects.
-
-4. **Execution Layer**
-   - Runtime adapters for external agent harnesses.
-   - Workspace manager, process supervision, stream normalization, approvals,
-     timeout handling, session persistence.
-
-5. **Repository Layer**
-   - Git workspaces, work branches, merge operations, and the control branch.
-   - No hosted forge is required.
-
-## Persistent State
-
-SQLite is the authoritative runtime store. All orchestration decisions must be
-recoverable from SQLite plus git.
-
-Minimum tables:
-
-- `work_items`: id, title, body, kind, status, priority, parent_id, target_ref,
-  created_by, timestamps.
-- `dependencies`: blocked_id, blocker_id, relation, status.
-- `workers`: id, work_item_id, workspace_path, branch_name, pid, status,
-  current_pipeline_run_id, lease_owner, timestamps.
-- `pipeline_runs`: id, workflow_id, work_item_id, worker_id, status, started_at,
-  completed_at, current_node_id.
-- `pipeline_node_runs`: id, pipeline_run_id, node_id, node_type, status, outcome,
-  visit_count, input_context_id, output_context_id, timestamps.
-- `agent_runs`: id, node_run_id, agent_id, runtime_adapter, runtime_session_id,
-  status, objective_digest, started_at, completed_at, exit_code.
-- `agent_events`: id, agent_run_id, sequence, event_type, normalized_payload,
-  raw_payload, timestamp.
-- `contexts`: id, scope, content_markdown, content_json, digest, created_at.
-- `artifacts`: id, owner_type, owner_id, kind, storage_uri, digest, metadata.
-- `change_sets`: id, work_item_id, worker_id, branch_name, base_ref, head_sha,
-  status, merge_strategy, metadata.
-- `reviews`: id, change_set_id, status, summary, decision, metadata.
-- `review_comments`: id, review_id, file_path, line, body, status, author_type.
-- `effects`: id, scope_type, scope_id, effect_type, payload, idempotency_key,
-  status, attempts, last_error, timestamps.
-- `services`: id, status, lease_owner, last_run_at, next_run_at, failure_count,
-  circuit_state.
-- `control_sync`: id, direction, control_ref, local_commit, status, last_error.
-
-SQLite stores raw and normalized logs. Files are optional artifacts, not the primary
-communication channel between Indexer and agents.
-
-## Git Control Branch
-
-Indexer uses a repository branch named `indexer/control` as its self-hosted forge.
-This branch is an orphan-style metadata branch and does not need to share the main
-source tree.
-
-The control branch is the durable collaboration record:
+The exact implementation layout may vary, but the logical structure is:
 
 ```text
-tasks/<work-item-id>.json
-tasks/<work-item-id>.md
-reviews/<review-id>/review.json
-reviews/<review-id>/summary.md
-reviews/<review-id>/comments/<comment-id>.md
-runs/<run-id>/summary.json
-runs/<run-id>/events.jsonl
-workflows/<workflow-id>.json
-snapshots/state.json
+indexer/
+├── bin/
+│   └── indexer                 # CLI entry point
+├── lib/
+│   ├── indexer/                # OTP application
+│   │   ├── agents/             # Agent definitions and renderer
+│   │   ├── runtime/            # Runtime adapter behaviours and implementations
+│   │   ├── pipeline/           # Pipeline loader, validator, engine
+│   │   ├── services/           # Service scheduler and service modules
+│   │   ├── workers/            # Worker lifecycle, registry, worktree manager
+│   │   ├── scheduler/          # Work queue, priority calculation, conflict checks
+│   │   ├── git/                # Git operations and change-set model
+│   │   ├── state/              # JSONL append, replay, projection
+│   │   ├── effects/            # Durable effect outbox and effect executors
+│   │   └── control_branch/     # Self-hosted forge records
+│   └── indexer_web/            # Optional web/API endpoint
+├── config/
+│   ├── agents/                 # Built-in agent definitions
+│   ├── pipelines/              # Built-in pipeline definitions
+│   ├── services/               # Service definitions
+│   └── schemas/                # JSON/YAML schemas
+├── formal/                     # TLA+ models carried forward and updated
+└── test/
 ```
 
-SQLite remains authoritative for local scheduling. The control branch is the
-portable audit log and synchronization medium between machines. Sync is performed
-by deterministic effects, not by nondeterministic agent turns.
-
-## Git-Native Change Model
-
-Indexer replaces pull requests with repository-native change sets.
-
-- A work item runs in an isolated git worktree.
-- A worker writes commits to a work branch such as
-  `indexer/work/<work-item-id>/<attempt>`.
-- A change set records base ref, head sha, author metadata, generated summary,
-  validation results, and review comments.
-- Review comments live in SQLite and are mirrored to `indexer/control`.
-- Merge workers use git operations directly: fast-forward, merge commit, rebase,
-  cherry-pick, or configured custom strategy.
-- Merge results are committed to the target branch and recorded in the control branch.
-
-Hosted forges may be adapters later, but the core product must work with any git
-remote.
-
-## Runtime Directory
-
-Indexer may use a local runtime directory named `.indexer/` for SQLite, sockets,
-temporary files, and worktrees:
+Runtime project state lives under `.indexer/` in the target repository:
 
 ```text
 .indexer/
-  indexer.sqlite3
-  logs/
-  sockets/
-  worktrees/
-  temp/
+├── state/
+│   ├── work_items.jsonl
+│   ├── dependencies.jsonl
+│   ├── workers.jsonl
+│   ├── pipeline_runs.jsonl
+│   ├── pipeline_node_runs.jsonl
+│   ├── agent_runs.jsonl
+│   ├── agent_events.jsonl
+│   ├── contexts.jsonl
+│   ├── artifacts.jsonl
+│   ├── change_sets.jsonl
+│   ├── reviews.jsonl
+│   ├── review_comments.jsonl
+│   ├── effects.jsonl
+│   ├── services.jsonl
+│   ├── control_sync.jsonl
+│   └── projections/
+├── worktrees/
+│   └── worker-<work-id>-<attempt>/
+├── services/
+├── sockets/
+├── logs/
+└── tmp/
 ```
 
-This directory is implementation-local and is not a compatibility contract. Durable
-project history belongs in normal git branches and `indexer/control`.
+Projection files are caches. They must be rebuildable from JSONL.
 
-## OTP Process Topology
+## Component Overview
 
-Recommended top-level supervision tree:
+### CLI and Web/API Control Plane
 
-- `Indexer.Application`
-  - `Indexer.Repo` for SQLite access.
-  - `Indexer.EventBus` for PubSub.
-  - `Indexer.ControlBranch.Supervisor`.
-  - `Indexer.ServiceSupervisor`.
-  - `Indexer.WorkerSupervisor`.
-  - `Indexer.RuntimeSupervisor`.
-  - `Indexer.EffectSupervisor`.
-  - `IndexerWeb.Endpoint` when web service is enabled.
+The control plane provides:
 
-Long-running responsibilities must be represented as supervised processes:
+- work item creation and edits,
+- worker start/stop/resume/fix/merge commands,
+- service status and manual service runs,
+- pipeline/agent inspection,
+- event/log streaming,
+- review comment and change-set views.
 
-- Scheduler.
-- Service daemon.
-- Worker registry.
-- Agent runtime sessions.
-- Control branch sync.
-- Effect outbox replay.
-- Git merge workers.
-- Web/API endpoint.
+CLI and web/API must read from the same JSONL-backed projections and append the
+same state events. There must not be separate CLI-only state.
+
+### Service Scheduler
+
+The service scheduler remains a first-class orchestration model. In Elixir, services
+are supervised processes or scheduled jobs rather than bash functions, but the v1
+schema concepts stay:
+
+- phases: `startup`, `pre`, `periodic`, `post`, `shutdown`,
+- schedule types: `tick`, `interval`, `cron`, `event`, `continuous`,
+- execution types: `function`, `command`, `pipeline`, `agent`,
+- conditions, groups, dependencies, concurrency, restart policy, circuit breaker,
+  health checks, limits, metrics.
+
+Tick-phase services run synchronously in scheduler order. Periodic/event/continuous
+services are supervised asynchronous jobs.
+
+### Scheduler
+
+The scheduler builds a unified work queue from JSONL work items and change-set
+events. It preserves the v1 priority model:
+
+- base priority,
+- plan bonus,
+- aging bonus,
+- dependency/dependent bonus,
+- sibling work-in-progress penalty,
+- resume bonus,
+- resume fail penalty,
+- skip cooldown with exponential backoff,
+- dependency cycle exclusion,
+- file conflict prevention.
+
+Scheduler output is not direct process mutation. It appends scheduling decisions
+and starts workers through the worker supervisor.
+
+### Workers
+
+Each worker has:
+
+- a work item,
+- an isolated git worktree,
+- a work branch,
+- a pipeline run,
+- a lifecycle state,
+- a lease,
+- append-only event records.
+
+Workers are isolated at the git/workspace boundary. They may share project-level
+read-only context and control-branch records, but writable code changes stay in
+their worktree and work branch.
+
+### Pipeline Engine
+
+The pipeline engine is the v1 jump-based state machine implemented in Elixir.
+
+It preserves:
+
+- ordered step list,
+- result mapping resolution,
+- inline handlers,
+- named jumps,
+- max visits,
+- on-max routing,
+- enabled-by skipping,
+- readonly checkpoint/restore,
+- commit-after behavior,
+- unknown-result backup extraction,
+- circuit breaker for repeated non-terminal results,
+- cost budget checks,
+- step timeout handling,
+- current-step persistence for resume.
+
+Pipeline state is appended to JSONL and projected into current state.
+
+### Agents
+
+Agents are still modular single-purpose units. The v2 model makes the existing
+markdown-plus-shell split explicit:
+
+- **Markdown objective**: nondeterministic model-facing instructions.
+- **Deterministic hooks**: Elixir module or external executable that prepares
+  context, validates output, extracts result tags, checks completion, commits
+  controlled effects, or performs non-model work.
+
+Shell remains allowed as a hook language. It is no longer the only extension
+mechanism.
+
+### Runtime Layer
+
+The runtime layer remains backend-agnostic. It hides Codex, Claude, OpenCode, Pi,
+and custom runtime differences from agents and pipelines.
+
+The runtime layer owns:
+
+- backend discovery,
+- command/session construction,
+- app-server/CLI process supervision,
+- retry and rate-limit logic,
+- session resume semantics,
+- prompt wrapping,
+- text/session extraction,
+- backend event normalization.
+
+### Git and Change Sets
+
+Indexer replaces GitHub Pull Requests with git-native change sets.
+
+A change set includes:
+
+- work item id,
+- worker id,
+- target ref,
+- base sha,
+- work branch,
+- head sha,
+- affected files,
+- validation results,
+- review records,
+- merge state,
+- conflict state.
+
+Change sets are stored in JSONL and mirrored to the `indexer/control` branch.
+Merges use normal git operations. Hosted forges may be optional adapters, not core
+state.
+
+### Control Branch
+
+The `indexer/control` branch is the self-hosted collaboration surface. It contains
+human-reviewable records and snapshots:
+
+```text
+work_items/<id>.md
+work_items/<id>.json
+change_sets/<id>/change_set.json
+change_sets/<id>/summary.md
+reviews/<id>/review.json
+reviews/<id>/comments/<comment-id>.md
+runs/<id>/summary.json
+runs/<id>/events.jsonl
+state/*.jsonl
+snapshots/*.json
+workflows/*.json
+agents/*.md
+```
+
+The local JSONL ledgers drive scheduling. The control branch is the portable
+history, sync surface, and review surface.
+
+## Persistent State
+
+### JSONL Record Envelope
+
+All ledgers use one newline-terminated JSON object per event:
+
+```json
+{
+  "id": "evt_01HZY...",
+  "stream": "pipeline_runs",
+  "aggregate_id": "run_01HZY...",
+  "type": "pipeline.step.completed",
+  "schema_version": 1,
+  "timestamp": "2026-05-07T12:00:00Z",
+  "actor": {"type": "service", "id": "pipeline-supervisor"},
+  "causation_id": "evt_...",
+  "correlation_id": "work_...",
+  "payload": {}
+}
+```
+
+Requirements:
+
+- Append-only.
+- Atomic single-record append under per-ledger lock.
+- Every record has stable id and timestamp.
+- Every state transition has an aggregate id.
+- No in-place edits.
+- Recovery truncates a ledger to the last complete newline if needed.
+- Projections are deterministic folds over ledgers.
+
+### Core Ledgers
+
+| Ledger | Purpose |
+|--------|---------|
+| `work_items.jsonl` | Work item lifecycle, title/body/status/priority/target ref changes |
+| `dependencies.jsonl` | Dependency graph and satisfaction state |
+| `workers.jsonl` | Worker leases, process state, workspace, lifecycle events |
+| `pipeline_runs.jsonl` | Pipeline run lifecycle and current step |
+| `pipeline_node_runs.jsonl` | Step visits, outcomes, routing decisions |
+| `agent_runs.jsonl` | Agent invocation lifecycle and extracted result |
+| `agent_events.jsonl` | Raw/normalized runtime stream events |
+| `contexts.jsonl` | Rendered prompts, context sections, summaries |
+| `artifacts.jsonl` | Artifact metadata, digests, storage refs |
+| `change_sets.jsonl` | Work branch and merge state |
+| `reviews.jsonl` | Review decisions and summaries |
+| `review_comments.jsonl` | Inline/general comments and resolution |
+| `effects.jsonl` | Pending/completed/failed side effects |
+| `services.jsonl` | Service state, metrics, circuit breakers, queues |
+| `control_sync.jsonl` | Control branch import/export records |
+
+### Disposable Projections
+
+Indexer may maintain:
+
+```text
+.indexer/state/projections/work_items.current.json
+.indexer/state/projections/workers.current.json
+.indexer/state/projections/services.current.json
+.indexer/state/projections/queue.current.json
+```
+
+Projection corruption is not fatal. Delete and replay ledgers.
+
+## Worker Lifecycle
+
+The worker lifecycle is carried forward from `config/worker-lifecycle.json` and
+`formal/WorkerLifecycle.tla`, with GitHub-specific effect names generalized.
+
+States:
+
+| State | Type | Meaning |
+|-------|------|---------|
+| `none` | initial | No active worker state |
+| `needs_fix` | waiting | Change set needs agent fix/review-comment handling |
+| `fixing` | running | Fix worker active |
+| `fix_completed` | transient | Fix completed, immediately advances |
+| `needs_merge` | waiting | Change set ready for merge attempt |
+| `merging` | running | Merge worker active |
+| `merge_conflict` | waiting | Merge conflict detected |
+| `needs_resolve` | waiting | Single change-set conflict resolution needed |
+| `needs_multi_resolve` | waiting | Multi-change-set conflict resolution needed |
+| `resolving` | running | Conflict resolver active |
+| `resolved` | transient | Resolution completed, immediately advances |
+| `merged` | terminal | Change set landed |
+| `failed` | terminal_recoverable | Manual or scheduled recovery may resume |
+
+Core event families:
+
+- `worker.spawned`
+- `fix.detected`, `fix.started`, `fix.pass`, `fix.partial`, `fix.skip`,
+  `fix.fail`, `fix.timeout`, `fix.already_merged`
+- `merge.start`, `merge.succeeded`, `merge.already_merged`, `merge.conflict`,
+  `merge.out_of_date`, `merge.transient_fail`, `merge.hard_fail`
+- `conflict.needs_resolve`, `conflict.needs_multi`
+- `resolve.started`, `resolve.succeeded`, `resolve.fail`, `resolve.timeout`,
+  `resolve.stuck_reset`, `resolve.already_merged`
+- `review.comments_detected`
+- `recovery.to_fix`, `recovery.to_resolve`
+- `startup.reset`
+- `change_set.merged`
+- `resume.abort`, `resume.retry`
+- `task.reclaim`
+- `task.pending_review`
+- `manual.start_merge`, `manual.start_fix`
+- `worker.completion`, `worker.failure`
+- `user.full_reset`, `user.reset_to_fix`, `user.reset_to_resolve`
+
+The v1 `kanban` marker is replaced by `work_item.status` and `change_set.status`
+events, but the state categories remain:
+
+| V1 Marker | V2 Status |
+|-----------|-----------|
+| `[ ]` | `pending` |
+| `[=]` | `in_progress` |
+| `[P]` | `pending_review` |
+| `[x]` | `merged` |
+| `[*]` | `failed` |
+| `[N]` | `not_planned` |
+
+Dependencies are satisfied only by `merged`, not by `pending_review`.
+
+## Effect Outbox
+
+The outbox pattern is mandatory. Lifecycle transitions record desired effects before
+executing them.
+
+Effect record shape:
+
+```json
+{
+  "id": "eff_01H...",
+  "batch_id": "batch_01H...",
+  "scope_type": "worker",
+  "scope_id": "worker-WI-001-1",
+  "effect_type": "git.merge_change_set",
+  "idempotency_key": "git.merge_change_set:cs_123:head_sha",
+  "status": "pending",
+  "attempts": 0,
+  "payload": {}
+}
+```
+
+Execution order follows the TLA model:
+
+1. Append state transition event.
+2. Append any work item/change-set status event.
+3. Append pending effect records.
+4. Execute each effect idempotently.
+5. Append effect completion or failure event.
+
+Cleanup effects must run after all other pending effects for the same scope have
+been applied or safely skipped.
 
 ## Data Flow
 
-1. A work item is created through CLI, web/API, control branch sync, or an optional
+1. Work item is created via CLI, web/API, control branch import, or optional
    external tracker adapter.
-2. Scheduler marks eligible work based on status, dependencies, concurrency, leases,
-   conflicts, and policy.
-3. Worker manager creates or resumes an isolated worktree and work branch.
-4. Pipeline engine creates a pipeline run and executes nodes.
-5. Agent nodes render objective/context records and invoke an external runtime adapter.
-6. Runtime adapter streams raw backend logs into SQLite and emits normalized events.
-7. Deterministic hooks validate, parse, transform, or apply effects.
-8. Pipeline emits requested effects, including git commit/merge/control-branch writes.
-9. Effect outbox executes idempotent effects and records completion.
-10. Control branch sync publishes durable summaries and collaboration records.
+2. Scheduler projects ledgers and selects eligible work.
+3. Worker supervisor creates worktree and work branch.
+4. Pipeline engine starts a pipeline run and writes current-step records.
+5. Agent step renders objective/context and invokes runtime adapter.
+6. Runtime adapter writes raw and normalized events to JSONL.
+7. Agent extraction hook writes gate result and artifacts.
+8. Pipeline routes using result mappings.
+9. Deterministic hooks and configured effect executors request outbox effects.
+10. Git effect executors create commits, change sets, reviews, merges, and control
+    branch records.
+11. Service scheduler keeps polling/reconciling until terminal state.
 
 ## Design Rules
 
-- Nondeterministic model output must not directly mutate orchestration state.
-- Agent backends are responsible for their own log formats; adapters normalize them.
-- Pipelines express workflow intent, not concrete GitHub or shell assumptions.
-- Side effects are declared, durable, replayable, and idempotent.
-- Git is a first-class platform boundary; GitHub is optional.
-- The control branch is the product’s built-in collaboration surface.
+- Preserve v1 contracts unless a v2 deviation is named in this spec.
+- Agent output is nondeterministic; state transitions are deterministic.
+- Every durable decision is append-only JSONL.
+- Every side effect is replayable or has an idempotency key.
+- GitHub is optional integration, never core state.
+- The git control branch is the portable collaboration layer.
+- Pipeline schema compatibility matters more than abstract workflow novelty.
