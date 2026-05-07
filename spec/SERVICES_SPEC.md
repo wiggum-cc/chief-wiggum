@@ -1,1211 +1,286 @@
 # Services Specification
 
-This document provides the complete specification for the Chief Wiggum service scheduler system.
+Status: Draft v2
+Target implementation: Elixir/OTP
 
-## Overview
+## Purpose
 
-The service scheduler (`lib/service/`) provides a systemd-like approach to orchestrator responsibilities. Periodic tasks are defined as declarative "services" with configurable schedules, execution types, and advanced features like circuit breakers and health checks.
+Indexer services are supervised runtime processes that keep orchestration moving.
+The v1 service daemon concept was correct; Elixir should implement it directly with
+OTP supervisors, GenServers, Tasks, timers, and PubSub instead of shell service
+runners.
 
-### Architecture
+Services are not pipeline nodes. Services operate the system. Pipelines operate work
+items.
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                      SERVICE SCHEDULER                          │
-│  ┌───────────────────────────────────────────────────────────┐  │
-│  │         config/services.json (declarative config)          │  │
-│  │              .ralph/services.json (overrides)              │  │
-│  └───────────────────────────────────────────────────────────┘  │
-│                              │                                   │
-│       ┌──────────────────────┼──────────────────────┐           │
-│       ▼                      ▼                      ▼           │
-│  service-loader.sh     service-scheduler.sh    service-runner.sh │
-│  (config parsing)      (timing/coordination)   (execution)       │
-│                              │                                   │
-│                      service-state.sh                            │
-│                    (persistence/recovery)                        │
-└─────────────────────────────────────────────────────────────────┘
-```
+## Service Model
 
-### Modules
+Each service has:
 
-| Module | Lines | Purpose |
-|--------|-------|---------|
-| `lib/service/service-loader.sh` | 982 | Load and validate service JSON configuration |
-| `lib/service/service-scheduler.sh` | 890 | Service timing, interval calculation, execution coordination |
-| `lib/service/service-runner.sh` | 800+ | Execute services by type (command, function, pipeline, agent) |
-| `lib/service/service-state.sh` | 870 | Persistent state management for scheduler recovery |
+- `id`
+- `kind`
+- `enabled`
+- `schedule`
+- `concurrency`
+- `dependencies`
+- `restart_policy`
+- `circuit_breaker`
+- `lease`
+- `telemetry`
 
----
+Canonical shape:
 
-## Configuration Schema
-
-Service configuration uses JSON Schema draft 2020-12. The full schema is at `config/schemas/service.schema.json`.
-
-### Root Structure
-
-```json
-{
-  "version": "2.0",
-  "defaults": { ... },
-  "groups": { ... },
-  "services": [ ... ]
-}
+```yaml
+id: scheduler
+kind: singleton
+module: Indexer.Services.Scheduler
+enabled: true
+schedule:
+  type: interval
+  every_ms: 5000
+restart_policy:
+  strategy: permanent
+  max_restarts: 10
+  max_seconds: 60
+concurrency:
+  max_instances: 1
+circuit_breaker:
+  enabled: true
+  failure_threshold: 5
+  cooldown_ms: 300000
 ```
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `version` | string | Yes | Schema version (`"1.0"`, `"1.1"`, or `"2.0"`) |
-| `defaults` | object | No | Default configuration applied to all services |
-| `groups` | object | No | Named groups for bulk operations |
-| `services` | array | Yes | Array of service definitions |
-
-### Defaults
-
-```json
-{
-  "defaults": {
-    "timeout": 300,
-    "restart_policy": {
-      "on_failure": "skip",
-      "max_retries": 2,
-      "backoff": {
-        "initial": 5,
-        "multiplier": 2,
-        "max": 300
-      }
-    },
-    "circuit_breaker": {
-      "enabled": false,
-      "threshold": 5,
-      "cooldown": 300,
-      "half_open_requests": 1
-    }
-  }
-}
-```
-
----
-
-## Service Definition
-
-Each service requires `id`, `execution`, and either `schedule` or `triggers`.
-
-### Required Fields
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `id` | string | Unique identifier (pattern: `^[a-z][a-z0-9_-]*$`) |
-| `schedule` | object | When to run the service (required unless `triggers` is set) |
-| `triggers` | object | Completion hooks from other services (alternative to `schedule`) |
-| `execution` | object | How to run the service |
-
-### Optional Fields
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `description` | string | - | Human-readable description |
-| `enabled` | boolean | `true` | Whether the service is enabled |
-| `phase` | string | `"periodic"` | Execution phase (v2.0): `startup`, `pre`, `periodic`, `post`, `shutdown` |
-| `order` | integer | `50` | Execution order within phase (lower = first, v2.0) |
-| `required` | boolean | `false` | Abort orchestrator on failure (startup/shutdown only, v2.0) |
-| `groups` | array | `[]` | Groups this service belongs to |
-| `depends_on` | array | `[]` | Services that must complete first |
-| `condition` | object | - | Conditions for execution |
-| `concurrency` | object | - | Concurrency control |
-| `timeout` | integer | `300` | Execution timeout in seconds |
-| `restart_policy` | object | - | Failure handling policy |
-| `circuit_breaker` | object | - | Circuit breaker configuration |
-| `health` | object | - | Health check configuration |
-| `limits` | object | - | Resource limits |
-| `metrics` | object | - | Metrics collection settings |
-
-### Phases (v2.0)
-
-Services are organized into five execution phases:
-
-| Phase | When | Execution Model |
-|-------|------|-----------------|
-| `startup` | Once, before main loop | Sequential by `order`, synchronous. Failure in `required` service aborts orchestrator. |
-| `pre` | Every tick, before periodic | Sequential by `order`, synchronous (direct function call). |
-| `periodic` | Interval/cron/event-based | Dispatched by service scheduler (subprocess, async). |
-| `post` | Every tick, after periodic | Sequential by `order`, synchronous (direct function call). |
-| `shutdown` | Once, on exit | Sequential by reverse `order`, synchronous. |
-
-**Pre/post tick services** run synchronously because they are file I/O operations completing in <10ms. The scheduler calls `svc_*` functions directly — no subprocess fork. Each function reads files, does work, writes files, with no shared in-process state.
-
-**Startup/shutdown** services run sequentially. A `required: true` startup service that fails aborts the orchestrator. Shutdown services run in reverse order.
-
-### Example Service
-
-```json
-{
-  "id": "pr-sync",
-  "description": "Sync PR statuses and detect new comments",
-  "enabled": true,
-  "groups": ["github", "sync"],
-  "schedule": {
-    "type": "interval",
-    "interval": 180,
-    "jitter": 10,
-    "run_on_startup": true
-  },
-  "execution": {
-    "type": "command",
-    "command": "wiggum-pr sync"
-  },
-  "concurrency": {
-    "max_instances": 1,
-    "if_running": "skip"
-  },
-  "timeout": 120,
-  "circuit_breaker": {
-    "enabled": true,
-    "threshold": 3,
-    "cooldown": 600
-  }
-}
-```
-
----
-
-## Schedule Types
-
-### Interval Schedule
-
-Run at fixed time intervals.
-
-```json
-{
-  "type": "interval",
-  "interval": 60,
-  "jitter": 5,
-  "run_on_startup": true
-}
-```
-
-| Field | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| `type` | const | Yes | - | Must be `"interval"` |
-| `interval` | integer | Yes | - | Interval in seconds between executions |
-| `jitter` | integer | No | `0` | Random jitter in seconds (prevents thundering herd) |
-| `run_on_startup` | boolean | No | `false` | Run immediately on scheduler startup |
-
-### Cron Schedule
-
-Run based on cron expressions.
-
-```json
-{
-  "type": "cron",
-  "cron": "0 */6 * * *",
-  "timezone": "America/New_York",
-  "run_on_startup": false
-}
-```
-
-| Field | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| `type` | const | Yes | - | Must be `"cron"` |
-| `cron` | string | Yes | - | Cron expression (minute hour day month weekday) |
-| `timezone` | string | No | `"UTC"` | Timezone for cron evaluation |
-| `run_on_startup` | boolean | No | `false` | Run immediately on startup |
-
-**Cron Expression Format**: `minute hour day month weekday`
-- Supports: `*`, ranges (`1-5`), lists (`1,3,5`), steps (`*/15`)
-- Pattern: `^[0-9*,/-]+\s+[0-9*,/-]+\s+[0-9*,/-]+\s+[0-9*,/-]+\s+[0-9*,/-]+$`
-
-### Event Schedule
-
-Run when a named event is triggered. Supports exact match, glob suffix patterns, and array triggers.
-
-```json
-{
-  "type": "event",
-  "trigger": "service.succeeded:memory-extract"
-}
-```
-
-Array form (any match triggers the service):
-
-```json
-{
-  "type": "event",
-  "trigger": ["service.succeeded:svc-a", "service.succeeded:svc-b"]
-}
-```
-
-Glob suffix matching:
-
-```json
-{
-  "type": "event",
-  "trigger": "service.completed:*"
-}
-```
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `type` | const | Yes | Must be `"event"` |
-| `trigger` | string or array | Yes | Event name/pattern or array of event names/patterns |
-
-**Trigger Matching Rules**:
-- Exact match: `"service.completed:foo"` matches only `"service.completed:foo"`
-- Glob suffix: `"service.completed:*"` matches any `"service.completed:..."` event
-- Array: `["event-a", "event-b"]` matches if any element matches
-
-**Common Events**:
-- `worker.completed` - A worker finished execution
-- `scheduling_event` - Scheduler tick occurred
-- `service.completed:{id}` - Service completed (success or failure)
-- `service.succeeded:{id}` - Service completed successfully (exit 0)
-- `service.failed:{id}` - Service failed (non-zero exit)
-- Custom events via `service_trigger_event()`
-
-### Continuous Schedule
-
-Run continuously, restarting after completion.
-
-```json
-{
-  "type": "continuous",
-  "restart_delay": 5
-}
-```
-
-| Field | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| `type` | const | Yes | - | Must be `"continuous"` |
-| `restart_delay` | integer | No | `5` | Delay in seconds before restarting |
-
-### Tick Schedule (v2.0)
-
-Run every orchestrator loop iteration (~1s cadence). Tick services execute synchronously as direct function calls (not subprocesses), completing in <10ms. Used for pre/post phase services that do file I/O.
-
-```json
-{
-  "type": "tick"
-}
-```
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `type` | const | Yes | Must be `"tick"` |
-
-No interval or jitter — runs every tick. Only valid with `phase: "pre"` or `phase: "post"`.
-
----
-
-## Execution Types
-
-### Command Execution
-
-Execute a shell command.
-
-```json
-{
-  "type": "command",
-  "command": "wiggum-pr sync",
-  "working_dir": "/path/to/dir"
-}
-```
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `type` | const | Yes | Must be `"command"` |
-| `command` | string | Yes | Shell command to execute |
-| `working_dir` | string | No | Working directory for execution |
-
-### Function Execution
-
-Call a Bash function.
-
-```json
-{
-  "type": "function",
-  "function": "svc_orch_spawn_fix_workers",
-  "args": ["--verbose", "--dry-run"]
-}
-```
-
-| Field | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| `type` | const | Yes | - | Must be `"function"` |
-| `function` | string | Yes | - | Bash function name |
-| `args` | array | No | `[]` | Arguments to pass |
-
-**Security Restriction**: Only functions with the `svc_*` prefix can be invoked via services. This is enforced by `service-runner.sh`.
-
-### Pipeline Execution
-
-Execute a named pipeline using `pipeline_load` + `pipeline_run_all`.
-
-```json
-{
-  "type": "pipeline",
-  "pipeline": "memory-extract",
-  "workspace": false,
-  "env": {
-    "MEMORY_DIR": ".ralph/memory"
-  }
-}
-```
-
-| Field | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| `type` | const | Yes | - | Must be `"pipeline"` |
-| `pipeline` | string | Yes | - | Pipeline name to execute |
-| `workspace` | boolean | No | `false` | Create isolated worker directory per run |
-| `git_worktree` | boolean | No | `false` | Create a git worktree (requires `workspace: true`). Provides real git isolation and a working `_commit_subagent_changes` so pipeline steps can commit between phases. |
-| `pull_before` | boolean | No | `false` | Pull latest main (fast-forward) before creating the workspace. Ensures the pipeline operates on the most recent codebase state. |
-| `env` | object | No | - | Environment variables to pass to pipeline subprocess |
-
-Pipeline config is resolved from (first match):
-1. `.ralph/pipelines/{name}.json`
-2. `config/pipelines/{name}.json`
-
-**Workspace modes for pipelines:**
-- `workspace: false` (default): Pipeline runs against the project directory directly. Read-only or analysis pipelines.
-- `workspace: true, git_worktree: false`: Isolated worker directory with plain `workspace/` subdirectory. Per-run artifacts without git isolation.
-- `workspace: true, git_worktree: true`: Full git worktree with task branch. For pipelines that modify code, create commits, and push PRs. The pipeline gets a real `_commit_subagent_changes` implementation (not a no-op).
-
-### Agent Execution
-
-Execute an agent directly via the agent registry.
-
-```json
-{
-  "type": "agent",
-  "agent": "engineering.security-audit",
-  "worker_dir": ".ralph/workers/audit-worker",
-  "max_iterations": 10,
-  "max_turns": 30,
-  "monitor_interval": 60
-}
-```
-
-| Field | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| `type` | const | Yes | - | Must be `"agent"` |
-| `agent` | string | Yes | - | Agent type (dotted name, e.g., `"system.task-worker"`) |
-| `worker_dir` | string | No | auto-generated | Worker directory for agent state |
-| `max_iterations` | integer | No | `20` | Maximum outer loop iterations |
-| `max_turns` | integer | No | `50` | Maximum turns per Claude session |
-| `monitor_interval` | integer | No | `30` | Violation monitor interval in seconds |
-
-**Worker Directory**: If not specified, a directory is auto-generated at `.ralph/workers/service-{id}-{timestamp}/`.
-
-**Example: Scheduled Security Audit**
-
-```json
-{
-  "id": "scheduled-audit",
-  "description": "Run security audit every 6 hours",
-  "schedule": {
-    "type": "cron",
-    "cron": "0 */6 * * *"
-  },
-  "execution": {
-    "type": "agent",
-    "agent": "engineering.security-audit",
-    "max_iterations": 5,
-    "max_turns": 20
-  },
-  "timeout": 1800,
-  "concurrency": {
-    "max_instances": 1,
-    "if_running": "skip"
-  }
-}
-```
-
----
-
-## Service Completion Events
-
-When an async (background/periodic) service finishes, the scheduler fires three event types:
-
-| Event | Fired When | Example |
-|-------|------------|---------|
-| `service.completed:{id}` | Always (success or failure) | `service.completed:memory-extract` |
-| `service.succeeded:{id}` | Exit code 0 only | `service.succeeded:memory-extract` |
-| `service.failed:{id}` | Non-zero exit code only | `service.failed:memory-extract` |
-
-**Only async services fire events.** Tick/pre/post services do not fire completion events, preventing unbounded chaining within a single tick.
-
-**Recursion safety**: Each triggered service starts as a background process and is detected on the next tick cycle, providing natural temporal bounding. Additionally, a depth counter (`_SERVICE_EVENT_DEPTH`, max 5) prevents event cascades.
-
----
-
-## Service Chaining with `triggers`
-
-The `triggers` field provides a convenience syntax for service-to-service completion hooks. It normalizes to `schedule.type=event` with the appropriate trigger array during loading.
-
-```json
-{
-  "id": "memory-analyze",
-  "triggers": {
-    "on_complete": ["memory-extract"],
-    "on_failure": ["error-handler"],
-    "on_finish": ["cleanup"]
-  },
-  "execution": { "type": "pipeline", "pipeline": "memory-extract" }
-}
-```
-
-### Trigger Types
-
-| Field | Maps To | Description |
-|-------|---------|-------------|
-| `on_complete` | `service.succeeded:{id}` | Triggered when upstream completes successfully |
-| `on_failure` | `service.failed:{id}` | Triggered when upstream fails |
-| `on_finish` | `service.completed:{id}` | Triggered on any completion (success or failure) |
-
-Each field accepts an array of service IDs. Multiple IDs means "trigger on any of these".
-
-### Example: Three-Service Chain
-
-```json
-[
-  {
-    "id": "extract",
-    "schedule": { "type": "interval", "interval": 300 },
-    "execution": { "type": "function", "function": "svc_extract" }
-  },
-  {
-    "id": "analyze",
-    "triggers": { "on_complete": ["extract"] },
-    "condition": { "file_exists": ".ralph/context.json" },
-    "execution": { "type": "pipeline", "pipeline": "analyze" }
-  },
-  {
-    "id": "cleanup",
-    "triggers": { "on_finish": ["analyze"] },
-    "execution": { "type": "function", "function": "svc_cleanup" }
-  }
-]
-```
-
-Flow: `extract` (interval) -> `analyze` (on extract success + condition) -> `cleanup` (always after analyze)
-
-### Validation
-
-- `triggers` is only valid when `schedule` is absent
-- `triggers` and `schedule` are mutually exclusive in the service definition
-- During loading, `triggers` is normalized to `schedule.type=event` + `schedule.trigger=[...]` and removed
-
----
-
-## Service Workspace Modes
-
-Services can operate in two workspace modes, controlled by the `execution.workspace` flag:
-
-### Lightweight Mode (default, `workspace: false`)
-
-```
-.ralph/services/{id}/
-├── logs/
-└── output/
-```
-
-- Persistent directory shared across runs
-- Created once, reused for all invocations
-- Pipeline workspace path = project directory (read-only pattern)
-- For analysis, monitoring, or read-only services
-
-### Isolated Workspace Mode (`workspace: true`)
-
-```
-.ralph/workers/service-{id}-{timestamp}/
-├── workspace/      (plain directory or git worktree)
-├── logs/
-├── results/
-└── output/
-```
-
-- New directory per run (epoch-named to prevent collisions)
-- Same pattern as task worker directories
-- For services that produce per-run artifacts or need isolation
-
-### Git Worktree Mode (`workspace: true, git_worktree: true`)
-
-```
-.ralph/workers/service-{id}-{timestamp}/
-├── workspace/      (git worktree on task/service-{id}-{epoch} branch)
-├── logs/
-├── results/
-└── output/
-```
-
-- Full git worktree with dedicated branch (avoids branch contention)
-- Real `_commit_subagent_changes` — pipeline steps can commit between phases
-- Combined with `pull_before: true` to ensure workspace starts from latest main
-- For pipelines that modify code, create commits, and push PRs (e.g., autofix)
-
-### Configuration
-
-```json
-{
-  "execution": {
-    "type": "pipeline",
-    "pipeline": "autofix",
-    "workspace": true,
-    "git_worktree": true,
-    "pull_before": true
-  }
-}
-```
-
-Both pipeline and agent execution types respect the `workspace` flag. Function and command types are unaffected.
-
----
-
-## Pipeline Services
-
-Pipeline services run multi-step agent pipelines defined in JSON config files. This is the recommended pattern for AI-powered services (memory analysis, pattern extraction, etc.).
-
-### Defining a Pipeline Service
-
-```json
-{
-  "id": "memory-analyze",
-  "triggers": { "on_complete": ["memory-extract"] },
-  "condition": { "file_exists": ".ralph/memory/.current-analysis.json" },
-  "execution": {
-    "type": "pipeline",
-    "pipeline": "memory-extract",
-    "workspace": false
-  },
-  "timeout": 600
-}
-```
-
-### Pipeline Config
-
-Pipeline configs live in `config/pipelines/` or `.ralph/pipelines/`:
-
-```json
-{
-  "name": "memory-extract",
-  "description": "Analyze a completed worker and extract patterns",
-  "steps": [
-    {
-      "id": "analyze",
-      "agent": "system.memory-analyst",
-      "max": 1,
-      "config": { "max_iterations": 1, "max_turns": 20 }
-    }
-  ]
-}
-```
-
-### Pipeline-First Pattern
-
-For services that need AI reasoning, prefer the pipeline pattern over direct agent execution:
-
-1. **Dispatch service** (function, interval): Prepares context, writes input file
-2. **Pipeline service** (pipeline, triggered): Runs agent(s) to process context
-3. **Completion service** (function, triggered): Post-processes results, rebuilds indexes
-
-This pattern provides:
-- Declarative agent configuration via pipeline JSON
-- Natural service chaining via completion events
-- Condition-gated execution (skip pipeline if no input)
-- Separation of dispatch, execution, and cleanup
-
----
-
-## Advanced Features
-
-### Concurrency Control
-
-Control how many instances can run and what to do when already running.
-
-```json
-{
-  "concurrency": {
-    "max_instances": 1,
-    "if_running": "queue",
-    "queue_max": 10,
-    "priority": "high"
-  }
-}
-```
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `max_instances` | integer | `1` | Maximum concurrent instances |
-| `if_running` | string | `"skip"` | Action when running: `skip`, `queue`, `kill` |
-| `queue_max` | integer | `10` | Max queued executions (when `if_running=queue`) |
-| `priority` | string | `"normal"` | Queue priority: `low`, `normal`, `high`, `critical` |
-
-**`if_running` Actions**:
-- `skip` - Don't start, wait for next scheduled time
-- `queue` - Add to execution queue
-- `kill` - Stop the running instance and start new
-
-### Circuit Breaker
-
-Automatically disable services that fail repeatedly.
-
-```json
-{
-  "circuit_breaker": {
-    "enabled": true,
-    "threshold": 5,
-    "cooldown": 300,
-    "half_open_requests": 1
-  }
-}
-```
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `enabled` | boolean | `false` | Enable circuit breaker |
-| `threshold` | integer | `5` | Consecutive failures before opening |
-| `cooldown` | integer | `300` | Seconds before attempting recovery |
-| `half_open_requests` | integer | `1` | Test requests in half-open state |
-
-**Circuit States**:
-- `closed` - Normal operation
-- `open` - Service disabled due to failures
-- `half-open` - Testing if service recovered
-
-### Restart Policy
-
-Configure failure handling behavior.
-
-```json
-{
-  "restart_policy": {
-    "on_failure": "retry",
-    "max_retries": 3,
-    "backoff": {
-      "initial": 5,
-      "multiplier": 2,
-      "max": 300
-    }
-  }
-}
-```
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `on_failure` | string | `"skip"` | Action on failure: `retry`, `skip`, `abort` |
-| `max_retries` | integer | `2` | Maximum retry attempts |
-| `backoff` | object | - | Exponential backoff configuration |
-
-**Backoff Configuration**:
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `initial` | integer | `5` | Initial delay in seconds |
-| `multiplier` | number | `2` | Multiplier per retry |
-| `max` | integer | `300` | Maximum delay in seconds |
-
-### Conditional Execution
-
-Only run when conditions are met.
-
-```json
-{
-  "condition": {
-    "file_exists": ".ralph/workers/worker-*",
-    "env_set": "GITHUB_TOKEN",
-    "env_equals": {
-      "WIGGUM_MODE": "production"
-    },
-    "env_not_equals": {
-      "WIGGUM_RUN_MODE": "merge-only"
-    },
-    "command": "git status --porcelain | grep -q ."
-  }
-}
-```
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `file_exists` | string | Glob pattern - run only if matches exist |
-| `file_not_exists` | string | Glob pattern - run only if no matches |
-| `env_set` | string | Environment variable must be set |
-| `env_equals` | object | Environment variables must equal values |
-| `env_not_equals` | object | Environment variables must NOT equal values (v2.0) |
-| `command` | string | Shell command must exit 0 |
-
-All specified conditions must pass for the service to run.
-
-### Health Checks
-
-Monitor service health and detect stuck processes.
-
-```json
-{
-  "health": {
-    "type": "file",
-    "path": ".ralph/services/heartbeat",
-    "max_age": 60,
-    "interval": 30,
-    "on_unhealthy": "restart"
-  }
-}
-```
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `type` | string | - | Check type: `file`, `command`, `heartbeat` |
-| `path` | string | - | File path for `file` type |
-| `command` | string | - | Command for `command` type |
-| `max_age` | integer | `60` | Max age in seconds before unhealthy |
-| `interval` | integer | `30` | How often to check (seconds) |
-| `on_unhealthy` | string | `"log"` | Action: `restart`, `kill`, `log` |
-
-**Health Check Types**:
-- `file` - Check file modification time
-- `command` - Run command, expect exit 0
-- `heartbeat` - Service must call heartbeat function
-
-### Resource Limits
-
-Constrain service resource usage.
-
-```json
-{
-  "limits": {
-    "memory": "512M",
-    "cpu": 50,
-    "nice": 10,
-    "timeout_kill": true
-  }
-}
-```
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `memory` | string | - | Memory limit (e.g., `512M`, `1G`) |
-| `cpu` | number | - | CPU limit as percentage (0.1-100) |
-| `nice` | integer | `0` | Process niceness (-20 to 19) |
-| `timeout_kill` | boolean | `true` | Kill process if timeout exceeded |
-
-### Metrics Configuration
-
-Control metrics collection.
-
-```json
-{
-  "metrics": {
-    "enabled": true,
-    "emit_to": "both",
-    "include_output": false
-  }
-}
-```
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `enabled` | boolean | `true` | Enable metrics collection |
-| `emit_to` | string | `"activity"` | Destination: `activity`, `metrics`, `both` |
-| `include_output` | boolean | `false` | Include service output in metrics |
-
----
-
-## Service Groups
-
-Define named groups for bulk operations.
-
-### Group Definition
-
-```json
-{
-  "groups": {
-    "github": {
-      "description": "GitHub-related services",
-      "enabled": true
-    },
-    "cleanup": {
-      "description": "Worker cleanup services",
-      "enabled": true
-    }
-  }
-}
-```
-
-### Assigning Services to Groups
-
-```json
-{
-  "id": "pr-sync",
-  "groups": ["github", "sync"],
-  ...
-}
-```
-
-### Group Operations
-
-```bash
-# Disable all services in a group
-wiggum service disable-group github
-
-# Enable all services in a group
-wiggum service enable-group github
-```
-
----
-
-## Dependencies
-
-Services can depend on other services.
-
-```json
-{
-  "id": "task-spawner",
-  "depends_on": ["pr-sync", "usage-tracker"],
-  ...
-}
-```
-
-A service will only run after all dependencies have completed successfully in the current scheduler tick.
-
----
-
-## State Management
-
-Service state is persisted to `.ralph/services/state.json`.
-
-### State Structure
-
-```json
-{
-  "saved_at": "2024-01-27T12:00:00Z",
-  "services": {
-    "pr-sync": {
-      "last_run": 1706356800,
-      "status": "stopped",
-      "run_count": 42,
-      "fail_count": 1,
-      "consecutive_failures": 0,
-      "circuit_state": "closed",
-      "metrics": {
-        "total_duration": 3600,
-        "success_count": 41,
-        "min_duration": 45,
-        "max_duration": 120
-      }
-    }
-  },
-  "queues": {
-    "pr-optimizer": [
-      {"priority": "high", "args": [], "queued_at": 1706356800}
-    ]
-  },
-  "backoff": {
-    "pr-sync": {
-      "attempts": 0,
-      "next_allowed": 0
-    }
-  }
-}
-```
-
-### Tracked State Per Service
-
-| Field | Description |
-|-------|-------------|
-| `last_run` | Unix timestamp of last execution |
-| `status` | Current status: `stopped`, `running`, `failed`, `skipped` |
-| `run_count` | Total successful executions |
-| `fail_count` | Total failed executions |
-| `consecutive_failures` | Failures since last success |
-| `circuit_state` | Circuit breaker state |
-| `metrics` | Execution metrics |
-
----
-
-## Project Overrides
-
-Projects can override or add services via `.ralph/services.json`.
-
-### Override Example
-
-```json
-{
-  "version": "2.0",
-  "services": [
-    {
-      "id": "pr-sync",
-      "schedule": {
-        "type": "interval",
-        "interval": 300
-      }
-    },
-    {
-      "id": "custom-service",
-      "enabled": true,
-      "phase": "periodic",
-      "schedule": {
-        "type": "interval",
-        "interval": 120
-      },
-      "execution": {
-        "type": "command",
-        "command": "./scripts/custom-task.sh"
-      }
-    }
-  ]
-}
-```
-
-Override rules:
-- Existing services: fields are merged (override replaces individual fields)
-- New services: added to the service list
-- Use `"enabled": false` to disable a default service
-
----
-
-## CLI Reference
-
-Manage services via `wiggum service`:
-
-### List Services
-
-```bash
-wiggum service list
-```
-
-Output shows all configured services with intervals and status.
-
-### Service Status
-
-```bash
-# Status of all services
-wiggum service status
-
-# Status of specific service
-wiggum service status pr-sync
-
-# JSON output
-wiggum service status --json
-```
-
-### Run Service
-
-```bash
-# Trigger service (async)
-wiggum service run pr-sync
-
-# Trigger and wait for completion
-wiggum service run pr-sync --sync
-```
-
-### Stop Service
-
-```bash
-wiggum service stop pr-sync
-```
-
-### View Configuration
-
-```bash
-# Single service config
-wiggum service config pr-sync
-
-# All services as JSON
-wiggum service config --json
-```
-
----
-
-## Security Model
-
-### Function Execution Restriction
-
-The service runner enforces a `svc_*` prefix requirement for function execution:
-
-1. Functions referenced in `execution.function` must start with `svc_`
-2. Handler functions are defined in `lib/service-handlers/*.sh`
-3. Handlers wrap internal functions, providing a security boundary
-
-### Handler Pattern
-
-```bash
-# lib/service-handlers/orchestrator-handlers.sh
-
-# Thin wrapper around internal function
-svc_orch_spawn_fix_workers() {
-    orch_spawn_fix_workers "$@"
-}
-```
-
-This pattern:
-- Creates an explicit allowlist of callable functions
-- Prevents arbitrary function execution via configuration
-- Centralizes all service entry points
-
-### Adding New Handlers
-
-1. Create handler in `lib/service-handlers/*.sh` with `svc_*` prefix
-2. Implement as thin wrapper around internal function
-3. Reference in service configuration
-
----
-
-## Default Services
-
-The default `config/services.json` defines services organized by phase:
-
-### Startup Phase (run once, sequential)
-
-| ID | Order | Description |
-|----|-------|-------------|
-| `validate-kanban` | 10 | Validate kanban format |
-| `init-scheduler` | 20 | Initialize scheduler, detect dependency cycles |
-| `preflight-git` | 30 | Check clean git state, pull main |
-| `preflight-ssh` | 40 | Test SSH connection |
-| `preflight-gh` | 50 | Test GitHub CLI auth |
-| `restore-workers` | 60 | Restore worker pool from worker directories |
-| `init-terminal` | 80 | Initialize terminal header |
-
-### Pre Phase (every tick, sequential)
-
-| ID | Order | Description |
-|----|-------|-------------|
-| `pool-ingest` | 10 | Read pool-pending, merge into pool.json |
-| `resume-poll` | 20 | Check pending-resumes.json for finished PIDs |
-| `worker-cleanup` | 30 | Reap finished workers, update pool.json |
-
-### Periodic Phase (interval/cron/event-based)
-
-| ID | Interval | Description |
-|----|----------|-------------|
-| `pr-sync` | 180s | Sync PR statuses and detect new comments |
-| `usage-tracker` | 180s | Update shared usage data for rate limiting |
-| `orphan-workspace` | 180s | Create workspaces for orphaned PRs |
-| `pr-optimizer` | 900s | Optimize and execute PR merges |
-| `multi-pr-planner` | 900s | Check for conflict batches |
-| `fix-workers` | 60s | Spawn fix workers for PR comment issues |
-| `resume-workers` | 300s | Resume stopped WIP workers |
-| `resolve-workers` | 60s | Spawn resolve workers for merge conflicts |
-| `pr-optimizer-check` | 60s | Check for completed PR optimizer |
-
-### Post Phase (every tick, sequential)
-
-| ID | Order | Description |
-|----|-------|-------------|
-| `completion-check` | 10 | Write should-exit file if all tasks done |
-| `rate-limit-guard` | 20 | Check rate limits, write pause file if needed |
-| `scheduler-tick` | 30 | Parse kanban, write scheduler-state.json |
-| `task-spawner` | 40 | Read scheduler state, spawn workers |
-| `skip-decay` | 50 | Decay skip-tasks.json (every 180 ticks) |
-| `orphan-detection` | 60 | Detect orphan workers (every 60 ticks) |
-| `aging-update` | 70 | Update task-ready-since aging |
-| `status-display` | 80 | Update terminal header |
-| `state-save` | 90 | Persist service state.json |
-
-### Shutdown Phase (run once, reverse order)
-
-| ID | Order | Description |
-|----|-------|-------------|
-| `final-state-save` | 10 | Final service state persistence |
-| `terminal-cleanup` | 20 | Clean up terminal header |
-| `lock-cleanup` | 30 | Remove orchestrator.pid |
-
----
-
-## Run Modes
-
-The orchestrator supports run modes that restrict which services are active. Modes are mutually exclusive with each other, with `plan`, and with `--smart`.
-
-| Mode | Flag | Services Disabled | Behavior |
-|------|------|-------------------|----------|
-| `default` | *(none)* | *(none)* | Full orchestration: spawn, fix, resolve, merge |
-| `fix-only` | `--fix-only` | `task-spawner` (via condition) | Fix existing PRs and merge them |
-| `merge-only` | `--merge-only` | `task-spawner` (via condition), `fix-workers`, `multi-pr-planner` | Only merge ready PRs and resolve conflicts |
-| `resume-only` | `--resume-only` | `task-spawner` (via condition), `fix-workers`, `resolve-workers`, `multi-pr-planner`, `orphan-workspace` | Only resume previously stopped workers |
-
-In all non-default modes, `task-spawner` is automatically disabled by its `condition.env_equals` check (`WIGGUM_RUN_MODE` must equal `"default"`). Additional services are disabled programmatically in `wiggum-run`.
-
----
-
-## API Reference
-
-### Loader Functions (`service-loader.sh`)
-
-| Function | Description |
-|----------|-------------|
-| `service_load(file)` | Load and validate service configuration |
-| `service_load_override(file)` | Merge project-level overrides |
-| `service_get_enabled()` | List enabled service IDs |
-| `service_get_by_id(id)` | Get service definition as JSON |
-| `service_get_schedule(id)` | Get schedule configuration |
-| `service_get_execution(id)` | Get execution configuration |
-| `service_get_dependencies(id)` | Get service dependencies |
-| `service_get_condition(id)` | Get conditional execution rules |
-| `service_get_health_check(id)` | Get health check configuration |
-| `service_get_limits(id)` | Get resource limits |
-| `service_get_circuit_breaker(id)` | Get circuit breaker configuration |
-| `service_get_groups(id)` | Get groups service belongs to |
-| `service_get_jitter(id)` | Get jitter for interval scheduling |
-| `service_get_backoff(id)` | Get backoff configuration |
-| `service_cron_matches_now(expr, tz)` | Check if cron expression matches now |
-
-### Scheduler Functions (`service-scheduler.sh`)
-
-| Function | Description |
-|----------|-------------|
-| `service_scheduler_init(ralph_dir, project_dir)` | Initialize scheduler, load services |
-| `service_scheduler_tick()` | Check and run due periodic services |
-| `service_scheduler_run_phase(phase)` | Run all services for a phase (startup/pre/periodic/post/shutdown) |
-| `service_is_due(id)` | Check if service should run |
-| `service_trigger_event(event, args...)` | Trigger event-based services |
-| `service_scheduler_status()` | Get scheduler status summary |
-| `service_scheduler_service_status(id)` | Get specific service status |
-| `service_scheduler_set_group_enabled(group, enabled)` | Enable/disable groups |
-
-### Runner Functions (`service-runner.sh`)
-
-| Function | Description |
-|----------|-------------|
-| `service_run(id, args...)` | Execute a service asynchronously |
-| `service_run_sync(id, args...)` | Execute service synchronously |
-| `service_run_command(cmd, timeout, dir, limits, args)` | Run shell command |
-| `service_run_function(func, timeout, args, limits, extra)` | Call bash function |
-| `service_wait(id, timeout)` | Wait for background service |
-| `service_stop(id, signal)` | Stop a running service |
-| `service_stop_all()` | Stop all running services |
-
-### State Functions (`service-state.sh`)
-
-| Function | Description |
-|----------|-------------|
-| `service_state_init(ralph_dir)` | Initialize state tracking |
-| `service_state_save()` | Persist state to disk |
-| `service_state_restore()` | Load state from disk |
-| `service_state_get_last_run(id)` | Get last run timestamp |
-| `service_state_mark_started(id, pid)` | Mark service as started |
-| `service_state_mark_completed(id)` | Mark service as completed |
-| `service_state_mark_failed(id)` | Mark service as failed |
-| `service_state_record_execution(id, duration, exit)` | Record execution metrics |
-| `service_state_get_metrics(id)` | Get execution metrics |
-| `service_state_queue_add(id, priority, args)` | Add to execution queue |
-| `service_state_queue_pop(id)` | Pop from execution queue |
-| `service_state_set_circuit_state(id, state)` | Set circuit breaker state |
-
----
-
-## Debugging
-
-```bash
-# View service state
-cat .ralph/services/state.json | jq .
-
-# Check which services are due
-wiggum service status --json | jq '.[] | select(.status != "running")'
-
-# View service configuration
-wiggum service config --json | jq '.[] | {id, interval: .schedule.interval}'
-
-# Enable debug logging
-WIGGUM_LOG_LEVEL=debug wiggum run
-
-# Manually trigger with verbose output
-wiggum service run pr-sync --sync --verbose
-```
+## Service Kinds
 
+### `singleton`
+
+A long-running GenServer. Exactly one instance per Indexer node.
+
+Examples:
+
+- scheduler,
+- worker registry,
+- control branch sync,
+- event compactor,
+- web presence tracker.
+
+### `periodic`
+
+A supervised job triggered on interval or cron-like schedule.
+
+Examples:
+
+- retry stale effects,
+- publish control branch snapshot,
+- prune old log blobs,
+- reconcile git branches.
+
+### `pool`
+
+A supervised worker pool with bounded concurrency.
+
+Examples:
+
+- agent runtime pool,
+- git merge pool,
+- hook execution pool,
+- control branch import pool.
+
+### `watcher`
+
+A process that subscribes to OS, git, database, or web events and emits Indexer
+events.
+
+Examples:
+
+- file/worktree watcher,
+- remote git ref watcher,
+- runtime socket watcher.
+
+### `endpoint`
+
+Web/API service. Usually Phoenix endpoint or Plug-based HTTP service.
+
+## Core Services
+
+### Scheduler
+
+Selects eligible work items and starts worker pipelines.
+
+Inputs:
+
+- work items,
+- dependencies,
+- leases,
+- worker capacity,
+- repository conflict hints,
+- service mode.
+
+Outputs:
+
+- worker start requests,
+- deferred/retry state,
+- scheduling events.
+
+### Worker Registry
+
+Tracks live workers and reconciles database state with OS processes.
+
+Responsibilities:
+
+- maintain leases,
+- detect dead processes,
+- resume or mark interrupted workers,
+- route cancellation,
+- expose status to CLI/web.
+
+### Pipeline Supervisor
+
+Starts and supervises pipeline runs for workers.
+
+Responsibilities:
+
+- validate workflow graph,
+- execute nodes,
+- persist node state,
+- route terminal outcomes,
+- emit pipeline events.
+
+### Runtime Supervisor
+
+Owns external agent runtime processes.
+
+Responsibilities:
+
+- start app-server/CLI processes,
+- stream logs,
+- cancel turns,
+- kill process trees,
+- restart only when policy allows.
+
+### Effect Outbox
+
+Executes durable side effects.
+
+Responsibilities:
+
+- poll pending effects,
+- enforce idempotency,
+- retry with backoff,
+- mark completion,
+- surface permanent failures.
+
+### Git Merge Service
+
+Executes git-native change-set operations.
+
+Responsibilities:
+
+- create work branches,
+- rebase,
+- merge,
+- detect conflicts,
+- record merge metadata,
+- update control branch records.
+
+### Control Branch Sync
+
+Synchronizes SQLite state with `indexer/control`.
+
+Responsibilities:
+
+- import new work items and comments,
+- publish local snapshots and records,
+- resolve control branch conflicts deterministically,
+- commit sync results.
+
+### Web/API Endpoint
+
+Provides status and control surfaces.
+
+Responsibilities:
+
+- task/work item CRUD,
+- worker status,
+- pipeline run inspection,
+- log/event streaming,
+- review comments,
+- operator actions.
+
+## Scheduling
+
+Supported schedules:
+
+- `always`: run as supervised process.
+- `interval`: run every N milliseconds.
+- `cron`: optional later extension.
+- `event`: run when matching Indexer event appears.
+- `manual`: only via CLI/API.
+
+Event schedules match normalized events, not backend-specific raw logs.
+
+## Leases And Multi-Node
+
+SQLite supports single-node operation by default. Multi-node operation is possible
+when machines share a database or coordinate through the git control branch, but v2
+does not require full distributed consensus.
+
+Every service or worker that mutates state must hold a lease:
+
+- lease owner,
+- acquired_at,
+- expires_at,
+- heartbeat_at.
+
+Expired leases are recoverable by reconciliation services.
+
+## Circuit Breakers
+
+Services and effect types may define circuit breakers:
+
+- failure threshold,
+- cooldown,
+- half-open attempt count,
+- reset on success.
+
+Circuit breaker state is stored in SQLite so restarts do not erase failure history.
+
+## Observability
+
+All services emit telemetry events:
+
+- start,
+- stop,
+- tick,
+- job_started,
+- job_completed,
+- job_failed,
+- circuit_opened,
+- circuit_closed,
+- lease_acquired,
+- lease_lost.
+
+Web and CLI surfaces consume the same event stream.
+
+## Validation Rules
+
+A service config is valid only if:
+
+- `id` is unique.
+- module exists.
+- schedule is valid.
+- dependencies exist.
+- pool sizes are positive.
+- restart policy is compatible with service kind.
+- services that mutate state declare lease behavior.
+
+## Relationship To Pipelines
+
+Services may start pipelines, cancel pipelines, or reconcile pipeline state. Services
+must not encode workflow-specific business logic that belongs in a pipeline.
+
+For example:
+
+- The Scheduler may start `default-implementation` for a work item.
+- The Pipeline decides whether to implement, validate, review, or merge.
+- The Effect Outbox executes the merge effect requested by the pipeline.

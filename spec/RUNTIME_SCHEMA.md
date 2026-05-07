@@ -1,411 +1,246 @@
-# Runtime Schema
+# Runtime Adapter Specification
 
-## Overview
+Status: Draft v2
 
-The runtime module (`lib/runtime/`) provides a backend-agnostic execution layer for Chief Wiggum. It abstracts the CLI invocation, retry strategy, session management, and output parsing behind a defined interface, allowing the system to support multiple backends (Claude Code, OpenCode, etc.) without agents knowing which backend is active.
+## Purpose
 
-## Architecture
+Runtime adapters connect Indexer to external agent harnesses. Each harness has its
+own invocation style, session model, log stream, approval behavior, and output shape.
+The adapter layer owns those differences.
 
-```
-lib/runtime/
-  backend-interface.sh    # Backend contract: all functions a backend must implement
-  runtime.sh              # Backend loader + public API facade
-  runtime-loop.sh         # Ralph loop (generic orchestration, delegates to backend)
-  runtime-retry.sh        # Generic retry with backoff (delegates error classification)
+Supported v2 adapter targets:
 
-lib/backend/
-  claude/
-    claude-backend.sh     # Implements backend-interface.sh for Claude Code
-    usage-tracker.sh      # Claude-specific usage tracking
-  opencode/
-    opencode-backend.sh   # Skeleton stub with documented TODOs
-```
+- `codex`
+- `claude`
+- `opencode`
+- `pi`
+- `custom`
 
-## Backend Selection
+## Adapter Responsibilities
 
-The runtime discovers which backend to use at initialization. Priority order (highest first):
+Every adapter must implement:
 
-| Priority | Source | Example |
-|----------|--------|---------|
-| 1 | `WIGGUM_RUNTIME_BACKEND` env var | `WIGGUM_RUNTIME_BACKEND=opencode` |
-| 2 | `.ralph/config.json` → `.runtime.backend` | `{"runtime": {"backend": "opencode"}}` |
-| 3 | `config/config.json` → `.runtime.backend` | `{"runtime": {"backend": "claude"}}` |
-| 4 | Default | `"claude"` |
+- Validate runtime availability and authentication.
+- Convert an `AgentInvocation` record into a process, app-server, SDK, or command.
+- Stream raw runtime output into SQLite.
+- Normalize backend-specific events into `agent_events`.
+- Track sessions, turns, approvals, tool calls, usage, and terminal status.
+- Classify retryable vs permanent runtime failures.
+- Support cancellation and timeout.
+- Expose runtime capabilities to agent and pipeline validation.
 
-## Public API
+## Adapter Behaviour
 
-### `runtime_init()`
+Elixir behaviour shape:
 
-Initialize the runtime. Discovers and loads the backend. Safe to call multiple times (idempotent). Automatically called when `runtime.sh` is sourced.
-
-### `run_agent_once(workspace, system_prompt, user_prompt, output_file, max_turns, session_id)`
-
-Single-shot execution. Validates parameters, changes to workspace, builds CLI arguments via the backend, and executes with retry.
-
-| Arg | Type | Description |
-|-----|------|-------------|
-| workspace | string | Directory to run in |
-| system_prompt | string | System prompt for context |
-| user_prompt | string | User prompt (the task) |
-| output_file | string | Where to save output |
-| max_turns | int | Max turns (default: 3) |
-| session_id | string | Optional session ID for resume |
-
-**Returns:** Exit code from backend.
-
-### `run_agent_once_with_session(workspace, system_prompt, user_prompt, output_file, max_turns, session_id)`
-
-Creates a new named session. Uses `--session-id` (not `--resume`) to create a session with a specific UUID. Used by live mode for initial session creation.
-
-**Returns:** Exit code from backend.
-
-### `run_agent_resume(session_id, prompt, output_file, max_turns)`
-
-Resume an existing session with a new prompt. Used for generating summaries or continuing a conversation after the main work loop completes.
-
-| Arg | Type | Description |
-|-----|------|-------------|
-| session_id | string | The session ID to resume |
-| prompt | string | The prompt to send |
-| output_file | string | Where to save output |
-| max_turns | int | Maximum turns (default: 3) |
-
-**Returns:** Exit code from backend.
-
-### `run_ralph_loop(...)`
-
-Iterative execution loop with optional supervision. See [Execution Patterns](#iterative-loop-ralph-loop) below.
-
-### `run_ralph_loop_supervised(...)`
-
-Backward-compatibility alias for `run_ralph_loop` with `supervisor_interval` defaulting to 2.
-
-### `runtime_exec_with_retry(args...)`
-
-Retry-wrapped backend invocation. Wraps `runtime_backend_invoke` with exponential backoff. Error classification is delegated to the backend via `runtime_backend_is_retryable()`.
-
-**Backward-compat alias:** `run_claude_with_retry(args...)`
-
-## Backend Interface
-
-### Required Functions
-
-Every backend **must** implement these functions. The interface file (`backend-interface.sh`) provides error-returning defaults.
-
-#### `runtime_backend_init()`
-
-Initialize the backend. Called once during `runtime_init()`. Load config, set env vars, validate binary exists.
-
-#### `runtime_backend_invoke(args...)`
-
-Raw CLI invocation primitive. No retry, no parsing. All CLI arguments passed as array elements. Returns exit code from the CLI.
-
-#### `runtime_backend_build_exec_args(_out_args, workspace, system_prompt, user_prompt, output_file, max_turns, session_id)`
-
-Build CLI arguments for single-shot execution using the nameref array pattern. Populates the caller's array by reference to avoid word-splitting issues.
-
-```bash
-local -a cli_args=()
-runtime_backend_build_exec_args cli_args "$workspace" "$prompt" ...
-runtime_exec_with_retry "${cli_args[@]}"
+```elixir
+@callback validate_config(map()) :: :ok | {:error, term()}
+@callback capabilities(map()) :: map()
+@callback start_session(AgentInvocation.t()) :: {:ok, RuntimeSession.t()} | {:error, term()}
+@callback start_turn(RuntimeSession.t(), AgentInvocation.t()) :: {:ok, TurnRef.t()} | {:error, term()}
+@callback stream(RuntimeSession.t(), function()) :: :ok | {:error, term()}
+@callback cancel(RuntimeSession.t()) :: :ok | {:error, term()}
+@callback classify_error(term()) :: :retryable | :permanent | :operator_required
+@callback normalize_event(term()) :: {:ok, NormalizedEvent.t()} | :ignore | {:error, term()}
 ```
 
-#### `runtime_backend_build_resume_args(_out_args, session_id, prompt, output_file, max_turns)`
+Adapters may implement a simpler one-shot mode if the runtime has no persistent
+session protocol.
 
-Build CLI arguments for session resume using the nameref array pattern.
+## Runtime Modes
 
-#### `runtime_backend_is_retryable(exit_code, stderr_file)`
+### `app_server`
 
-Classify whether an error is retryable. Returns 0 if retryable, 1 if not.
+A persistent subprocess speaks a structured line-delimited protocol over stdio.
+Codex App Server is the reference target for this mode.
 
-#### `runtime_backend_extract_text(log_file)`
+Properties:
 
-Extract plain text from backend-specific output format. Echoes the extracted text content.
+- Starts one long-lived runtime process per worker or session pool.
+- Sends initialize/thread/turn messages.
+- Streams structured events.
+- Supports continuation turns in the same thread when available.
+- Can expose dynamic tools without leaking host secrets to the model runtime.
 
-#### `runtime_backend_extract_session_id(log_file)`
+### `cli_json_stream`
 
-Extract session ID from backend output log. Echoes the session ID string (or empty if not supported).
+A command emits JSON or JSONL events for a single run.
 
-### Optional Functions
+Properties:
 
-Default implementations are provided in `backend-interface.sh`. Override as needed.
+- Process-per-turn or process-per-agent-run.
+- Session resume may be supported through CLI flags.
+- Adapter parses JSON stream and maps backend fields to normalized events.
 
-| Function | Default | Description |
-|----------|---------|-------------|
-| `runtime_backend_supports_sessions()` | `return 1` (no) | Whether backend supports session resumption |
-| `runtime_backend_usage_update(ralph_dir)` | no-op | Update usage statistics |
-| `runtime_backend_rate_limit_check(ralph_dir)` | `return 1` (OK) | Check if rate limited |
-| `runtime_backend_rate_limit_wait()` | `sleep 60` | Wait for rate limit window to reset |
-| `runtime_backend_generate_session_id()` | `uuidgen` | Generate a new unique session ID |
-| `runtime_backend_name()` | `"unknown"` | Backend name for logging/config |
+### `cli_text`
 
-## Execution Patterns
+A command emits mostly text logs.
 
-### Single-Shot
+Properties:
 
-```
-Caller
-  → run_agent_once()
-    → runtime_backend_build_exec_args()  (populate CLI args array)
-    → runtime_exec_with_retry()
-      → runtime_backend_invoke()          (raw CLI call)
-      → runtime_backend_is_retryable()    (on failure: retry or give up)
-```
+- Adapter stores raw stdout/stderr.
+- Result extraction relies on deterministic hooks or structured output files.
+- Lower fidelity than structured modes.
 
-### Iterative Loop (Ralph Loop)
+### `sdk`
 
-```
-run_ralph_loop()
-  ├─ runtime_backend_rate_limit_check()
-  ├─ completion_check_fn()
-  ├─ runtime_backend_generate_session_id()
-  ├─ WORK PHASE
-  │   ├─ runtime_backend_build_exec_args()
-  │   └─ runtime_exec_with_retry()
-  ├─ SUMMARY PHASE
-  │   ├─ [sessions] runtime_backend_build_resume_args()
-  │   ├─ [no sessions] runtime_backend_build_exec_args() with context
-  │   └─ runtime_exec_with_retry()
-  ├─ SUPERVISOR PHASE (every N iterations)
-  │   ├─ runtime_backend_build_exec_args()
-  │   └─ runtime_exec_with_retry()
-  └─ sleep 2
-```
+An adapter calls a language SDK directly from Elixir through a port, NIF boundary,
+or service process. This is allowed only if process supervision and cancellation
+semantics remain explicit.
 
-**Session-less backends:** If `runtime_backend_supports_sessions()` returns 1 (no sessions), the summary phase runs a fresh invocation with the previous output included in the prompt context, instead of resuming the work session.
-
-### Session Resume
-
-```
-Caller
-  → run_agent_resume()
-    → runtime_backend_build_resume_args()
-    → runtime_exec_with_retry()
-```
-
-If the backend does not support sessions, `run_agent_resume` will fail. Callers should check `runtime_backend_supports_sessions()` first.
-
-## Retry Strategy
-
-Exponential backoff with configurable limits. Error classification is delegated to the backend.
-
-### Backoff Formula
-
-```
-delay = min(initial_backoff * multiplier^attempt, max_backoff)
-```
-
-### Configuration Resolution
-
-| Priority | Source | Key |
-|----------|--------|-----|
-| 1 | Env var | `WIGGUM_RUNTIME_MAX_RETRIES` |
-| 2 | Env var (compat) | `WIGGUM_CLAUDE_MAX_RETRIES` |
-| 3 | Config | `.runtime.backends.<backend>.max_retries` |
-| 4 | Config (compat) | `.claude.max_retries` |
-| 5 | Default | `3` |
-
-### Default Retry Parameters
-
-| Parameter | Default | Env Var |
-|-----------|---------|---------|
-| Max retries | 3 | `WIGGUM_RUNTIME_MAX_RETRIES` |
-| Initial backoff | 5s | `WIGGUM_RUNTIME_INITIAL_BACKOFF` |
-| Max backoff | 60s | `WIGGUM_RUNTIME_MAX_BACKOFF` |
-| Backoff multiplier | 2 | `WIGGUM_RUNTIME_BACKOFF_MULTIPLIER` |
-
-## Usage & Rate Limiting
-
-The runtime provides a generic framework for usage tracking and rate limiting. Backend-specific implementations provide the actual data.
-
-| Function | Claude Implementation | Default |
-|----------|----------------------|---------|
-| `runtime_backend_usage_update(ralph_dir)` | Parses `~/.claude/projects/` JSONL logs | no-op |
-| `runtime_backend_rate_limit_check(ralph_dir)` | Checks 5-hour cycle prompt count vs threshold | never limited |
-| `runtime_backend_rate_limit_wait()` | Waits for 5-hour cycle to reset | sleep 60 |
-
-## Configuration
-
-### `config/config.json`
+## AgentInvocation
 
 ```json
 {
-  "runtime": {
-    "backend": "claude",
-    "backends": {
-      "claude": {
-        "binary": "claude",
-        "max_retries": 3,
-        "initial_backoff": 5,
-        "max_backoff": 60,
-        "backoff_multiplier": 2
-      }
-    }
+  "agent_run_id": "ar_123",
+  "agent_id": "engineering.implementation",
+  "runtime": "codex",
+  "mode": "app_server",
+  "workspace_path": "/repo/.indexer/worktrees/TASK-001",
+  "objective": {
+    "system": "...",
+    "user": "...",
+    "continuation": null,
+    "output_schema": null
   },
-  "claude": {
-    "max_retries": 3,
-    "initial_backoff_seconds": 5,
-    "max_backoff_seconds": 60,
-    "backoff_multiplier": 2
-  }
+  "session": {
+    "resume": false,
+    "runtime_session_id": null
+  },
+  "policy": {
+    "approval_policy": "unless_trusted",
+    "sandbox": "workspace_write",
+    "writable_roots": [],
+    "network": false,
+    "timeout_seconds": 10800
+  },
+  "runtime_config": {}
 }
 ```
 
-The `claude` section is retained for backward compatibility. New configuration should use `runtime.backends.<name>`.
-
-### `.ralph/config.json` (Project Override)
+## Normalized RuntimeSession
 
 ```json
 {
-  "runtime": {
-    "backend": "opencode"
-  }
+  "runtime": "codex",
+  "mode": "app_server",
+  "pid": 12345,
+  "runtime_session_id": "thread-1",
+  "current_turn_id": "turn-1",
+  "status": "running",
+  "started_at": "2026-05-07T12:00:00Z"
 }
 ```
 
-### Environment Variable Override
+## Codex Adapter
 
-`WIGGUM_RUNTIME_BACKEND=opencode` takes highest priority.
+Preferred mode: `app_server`.
 
-## Writing a New Backend
+The Codex adapter should use Codex App Server when available because it provides
+structured thread/turn control and streamable events. The adapter must tolerate
+compatible payload shape changes by mapping logical fields rather than relying on
+incidental field ordering.
 
-1. Create `lib/backend/<name>/<name>-backend.sh`
-2. Source `backend-interface.sh` is already done by `runtime.sh` before your file loads
-3. Implement all **required** functions (see [Required Functions](#required-functions))
-4. Override any **optional** functions as needed
-5. Test with: `WIGGUM_RUNTIME_BACKEND=<name> wiggum run`
+Required logical fields:
 
-### Skeleton Example
+- thread/session id,
+- turn id,
+- turn status,
+- assistant message deltas,
+- tool call start/completion,
+- approval requests,
+- usage,
+- terminal error.
 
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
+Fallback mode: Codex CLI non-interactive execution with JSON stream.
 
-[ -n "${_MYBACKEND_LOADED:-}" ] && return 0
-_MYBACKEND_LOADED=1
+## Claude Adapter
 
-source "$WIGGUM_HOME/lib/core/logger.sh"
+Preferred mode: structured CLI stream if available.
 
-runtime_backend_name() { echo "mybackend"; }
+The Claude adapter owns:
 
-runtime_backend_init() {
-    MYBACKEND="${MYBACKEND:-mybackend}"
-    log_debug "MyBackend initialized"
-}
+- command construction,
+- session/resume flags,
+- stream-json parsing,
+- text extraction,
+- usage extraction,
+- retry classification,
+- approval/sandbox flags.
 
-runtime_backend_invoke() {
-    "$MYBACKEND" "$@"
-}
+Claude-specific event fields must remain behind the adapter boundary.
 
-runtime_backend_build_exec_args() {
-    local -n _args="$1"
-    local workspace="$2" system_prompt="$3" user_prompt="$4"
-    local output_file="$5" max_turns="$6" session_id="${7:-}"
-    _args=(--workspace "$workspace" --prompt "$user_prompt")
-}
+## OpenCode Adapter
 
-runtime_backend_build_resume_args() {
-    local -n _args="$1"
-    _args=(--resume "$2" --prompt "$3")
-}
+OpenCode support follows the same contract:
 
-runtime_backend_is_retryable() {
-    [[ "$1" -eq 5 ]] && return 0
-    return 1
-}
+- discover executable,
+- choose best structured stream mode available,
+- normalize sessions and messages,
+- classify retryable failures,
+- expose declared capabilities.
 
-runtime_backend_extract_text() {
-    cat "$1"  # Adjust for actual output format
-}
+If OpenCode lacks a session feature, the adapter reports `supports_sessions: false`
+and Indexer uses context compaction plus fresh invocations.
 
-runtime_backend_extract_session_id() {
-    echo ""
-}
-```
+## Pi Adapter
 
-## Prompt Wrappers
+Pi support is defined through the generic adapter contract. The implementation must
+document:
 
-The runtime supports configurable pre/post wrappers for system and user prompts. These are applied to **work phase** invocations only (not summary or supervisor phases).
+- executable or API entrypoint,
+- session model,
+- stream format,
+- result extraction method,
+- approval/sandbox behavior,
+- retryable error patterns.
 
-### Configuration
+Until a structured Pi stream is available, use `cli_text` plus deterministic
+`extract_result` hooks.
 
-Defined per backend in `config/config.json` under `runtime.backends.<backend>.prompts`:
+## Logging
 
-```json
-{
-  "runtime": {
-    "backends": {
-      "claude": {
-        "prompts": {
-          "pre_system": "",
-          "post_system": "",
-          "pre_user": "",
-          "post_user": ""
-        }
-      }
-    }
-  }
-}
-```
+Runtime logs are not files as protocol. They are database events.
 
-### Resolution Priority
+The adapter records:
 
-| Priority | Source | Example |
-|----------|--------|---------|
-| 1 | Environment variable | `WIGGUM_PROMPT_PRE_SYSTEM="[prefix]"` |
-| 2 | `.ralph/config.json` | `runtime.backends.claude.prompts.pre_system` |
-| 3 | `config/config.json` | `runtime.backends.claude.prompts.pre_system` |
-| 4 | Default | Empty string (no wrapping) |
+- raw chunks,
+- normalized events,
+- stderr diagnostics,
+- process exit,
+- token/cost usage,
+- approval requests,
+- tool calls,
+- session metadata.
 
-### Environment Variables
+Optional artifact files may be written for large log exports, but SQLite metadata
+must remain complete.
 
-| Variable | Prompt Key |
-|----------|------------|
-| `WIGGUM_PROMPT_PRE_SYSTEM` | `pre_system` |
-| `WIGGUM_PROMPT_POST_SYSTEM` | `post_system` |
-| `WIGGUM_PROMPT_PRE_USER` | `pre_user` |
-| `WIGGUM_PROMPT_POST_USER` | `post_user` |
+## Cancellation
 
-### File References
+Cancellation must be cooperative first and forceful second:
 
-Values starting with `@` are treated as file paths relative to `$WIGGUM_HOME`:
+1. Ask runtime to cancel active turn if supported.
+2. Terminate subprocess.
+3. Kill process tree after timeout.
+4. Mark runtime session cancelled.
+5. Let pipeline route from `operator_cancelled` or policy cancellation.
 
-```json
-{
-  "pre_system": "@config/prompts/pre-system.md",
-  "post_user": "@config/prompts/post-user.md"
-}
-```
+## Retry Classification
 
-If the referenced file does not exist, a warning is logged and the wrapper resolves to an empty string.
+Adapters classify runtime failures as:
 
-### Wrapping Scope
+- `retryable`: transient network, rate limit, process timeout, temporary service
+  errors.
+- `permanent`: invalid config, missing executable, authentication failure, unsupported
+  runtime mode.
+- `operator_required`: approval needed, policy conflict, exhausted quota, unknown
+  authentication state.
 
-| Function | System Wrapped | User Wrapped |
-|----------|---------------|--------------|
-| `run_agent_once()` | Yes | Yes |
-| `run_agent_once_with_session()` | Yes | Yes |
-| `run_agent_resume()` | No | Yes |
-| `run_ralph_loop()` work phase | Yes (once at entry) | Yes (per iteration) |
-| `run_ralph_loop()` summary phase | No | No |
-| `run_ralph_loop()` supervisor phase | No | No |
+Pipeline retry policy decides whether to retry.
 
-### Module API
+## Security Boundary
 
-| Function | Description |
-|----------|-------------|
-| `runtime_prompts_init(backend)` | Load and cache prompt config for the active backend. Called automatically by `runtime_init()`. |
-| `runtime_wrap_system(prompt)` | Return system prompt with pre/post wrappers (newline-separated) |
-| `runtime_wrap_user(prompt)` | Return user prompt with pre/post wrappers (newline-separated) |
-
-## Backend Capabilities Matrix
-
-| Capability | Claude | OpenCode |
-|------------|--------|----------|
-| Session support | Yes | TBD |
-| Session resume | Yes | TBD |
-| Usage tracking | Yes | No |
-| Rate limiting | Yes | No |
-| Output format | stream-JSON | TBD |
-| Auth scoping | `ANTHROPIC_AUTH_TOKEN` | TBD |
-
+Adapters are responsible for translating Indexer policy into runtime-specific
+approval and sandbox settings. The adapter must not silently widen permissions.
+If a runtime cannot satisfy a requested policy, invocation fails before launching.

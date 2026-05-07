@@ -1,550 +1,286 @@
 # Pipeline Schema Specification
 
-## Overview
+Status: Draft v2
 
-The pipeline is an ordered array of steps. Steps execute sequentially by default.
-Each step can optionally define result-based handlers (`on_result`) that override
-the default control flow. The system is a bounded state machine where unhandled
-results default to `PASS -> jump:next, FIX -> jump:prev , FAIL -> abort, SKIP -> jump:next`.
+## Purpose
 
-## Schema
+Pipelines describe how Indexer moves a work item through objectives, deterministic
+steps, gates, reviews, and effects. A pipeline is a workflow graph, not a hardcoded
+engineering lifecycle.
 
-```json
-{
-  "name": "<pipeline-name>",
-  "steps": [ <step>, ... ]
-}
+The v1 model of ordered steps with result-based jumps was useful, but too much policy
+was embedded in fixed agent roles and GitHub PR assumptions. The v2 model keeps the
+good parts: bounded state machines, explicit routing, remediation loops, and
+declarative configuration. It removes baked-in side effects and lets workflows define
+their own node types, outcomes, and gates.
+
+## Top-Level Shape
+
+```yaml
+id: default-implementation
+version: 2
+description: Implement, validate, review, and merge a work item.
+
+inputs:
+  - work_item
+  - repository
+
+nodes:
+  - id: implement
+    type: agent
+    agent: engineering.implementation
+    max_visits: 3
+    routes:
+      succeeded: validate
+      needs_work: implement
+      blocked: stop_blocked
+      failed: fail
+
+  - id: validate
+    type: hook
+    hook:
+      kind: module
+      module: Indexer.Hooks.RunRepositoryValidation
+    routes:
+      succeeded: review
+      needs_work: implement
+      failed: fail
+
+  - id: review
+    type: agent
+    agent: engineering.review
+    routes:
+      approved: record_change_set
+      changes_requested: implement
+      failed: fail
+
+  - id: record_change_set
+    type: effect
+    effect: git.record_change_set
+    routes:
+      succeeded: merge
+      failed: fail
+
+  - id: merge
+    type: effect
+    effect: git.merge_change_set
+    routes:
+      succeeded: done
+      conflict: resolve_conflict
+      failed: fail
+
+terminal:
+  succeeded: done
+  failed: fail
+  blocked: stop_blocked
 ```
 
-### Step
+## Node Types
 
-```json
-{
-  "id": "<unique-step-id>",
-  "agent": "<agent-type>",
-  "max": <uint>,
-  "on_max": "<jump-target>",
-  "on_result": { <result-handlers> },
-  "readonly": <bool>,
-  "enabled_by": "<env-var>",
-  "commit_after": <bool>,
-  "config": { <agent-config> },
-  "hooks": { "pre": [...], "post": [...] }
-}
+### `agent`
+
+Runs a nondeterministic objective through an external runtime adapter.
+
+Required:
+
+- `agent`
+
+Optional:
+
+- `runtime_overrides`
+- `context`
+- `max_visits`
+- `timeout_seconds`
+- `capabilities`
+- `routes`
+
+### `hook`
+
+Runs deterministic logic. Hooks may parse output, validate a workspace, generate
+context, compute routing data, or request effects.
+
+Required:
+
+- `hook`
+
+Hooks may be pure or side-effecting. Side-effecting hooks must declare idempotency
+keys and permissions.
+
+### `gate`
+
+Evaluates an expression against pipeline data and routes without launching an agent
+or external command.
+
+```yaml
+- id: check_complexity
+  type: gate
+  when: "work_item.complexity == 'high'"
+  routes:
+    true: architecture_review
+    false: implement
 ```
 
-| Field | Required | Default | Description |
-|-------|----------|---------|-------------|
-| `id` | yes | — | Unique step identifier |
-| `agent` | yes | — | Agent type to execute |
-| `max` | no | 0 (unlimited) | Max times this step can be visited |
-| `on_max` | no | `next` | Jump target when `max` is exceeded |
-| `on_result` | no | `{}` | Per-result handlers (see below) |
-| `readonly` | no | `false` | Git checkpoint before, restore after |
-| `enabled_by` | no | — | Env var that must be `"true"` for step to run |
-| `commit_after` | no | `false` | Auto-commit workspace changes after step |
-| `config` | no | `{}` | Agent-specific configuration passed via pipeline-config.json |
-| `hooks` | no | `{}` | Pre/post hook functions |
+### `effect`
 
-### on_result
+Requests or executes a durable side effect through the effect outbox.
 
-Maps gate result values to handlers. Unhandled results use the `default_jump` from result_mappings.
+Effects include:
 
-```json
-"on_result": {
-  "<RESULT_VALUE>": <handler>,
-  ...
-}
+- `git.create_work_branch`
+- `git.record_change_set`
+- `git.merge_change_set`
+- `git.rebase_change_set`
+- `git.write_control_branch`
+- `control.create_work_item`
+- `control.add_review_comment`
+- `workspace.cleanup`
+
+Pipeline nodes request effects; the effect engine executes them idempotently.
+
+### `subpipeline`
+
+Runs another pipeline with scoped inputs and returns its terminal outcome.
+
+### `wait`
+
+Waits for an external condition or event, such as operator review, CI-like workflow
+completion, or another work item completing.
+
+## Routing
+
+Routes map node outcomes to next node ids or terminal statuses.
+
+```yaml
+routes:
+  succeeded: next_node
+  needs_work: implement
+  failed: fail
+  "*": fail
 ```
 
-A handler is one of:
+Outcome names are strings. They are not globally hardcoded. Standard outcome names
+are recommended:
 
-#### Jump Handler
+- `succeeded`
+- `approved`
+- `changes_requested`
+- `needs_work`
+- `blocked`
+- `conflict`
+- `failed`
+- `skipped`
+- `inconclusive`
 
-```json
-{ "jump": "<target>" }
+If no route matches, the pipeline fails validation unless a wildcard route exists.
+
+## Dataflow
+
+Nodes read immutable inputs from:
+
+- work item fields,
+- repository metadata,
+- prior node outputs,
+- contexts,
+- artifacts,
+- runtime events,
+- effect results.
+
+Nodes write:
+
+- node output JSON,
+- context records,
+- artifacts,
+- requested effects,
+- terminal outcome.
+
+No node mutates prior node output.
+
+## Side-Effect Boundary
+
+Side effects must be explicit. Pipelines must not hide git operations inside
+agent-specific assumptions.
+
+Allowed side-effect paths:
+
+1. A deterministic hook declares and performs a side effect with an idempotency key.
+2. A node requests an effect and the effect engine executes it.
+3. An external agent modifies only its assigned workspace/work branch under its
+   declared runtime capabilities.
+
+Global project state changes, target branch merges, control branch writes, and
+workspace cleanup must go through the effect engine.
+
+## Retry And Bounds
+
+Each node may define:
+
+- `max_visits`
+- `retry_policy`
+- `timeout_seconds`
+- `circuit_breaker`
+- `on_max`
+
+```yaml
+retry_policy:
+  max_attempts: 3
+  backoff:
+    initial_ms: 10000
+    multiplier: 2
+    max_ms: 300000
 ```
 
-#### Inline Agent Handler
+Every cycle in the graph must contain at least one bounded node or an explicit wait
+for operator/external input. Pipeline validation rejects unbounded automatic cycles.
 
-```json
-{
-  "id": "<handler-step-id>",
-  "agent": "<agent-type>",
-  "max": <uint>,
-  "on_max": "<jump-target>",
-  "on_result": { <result-handlers> },
-  "readonly": <bool>,
-  "commit_after": <bool>,
-  "config": { <agent-config> }
-}
+## Terminal States
+
+Pipelines define their own terminal states. Recommended terminal states:
+
+- `done`
+- `failed`
+- `blocked`
+- `cancelled`
+- `abandoned`
+- `draft`
+
+Terminal state changes update SQLite and may request control branch publication.
+
+## Validation Rules
+
+A pipeline is valid only if:
+
+- All node ids are unique.
+- All route targets exist or refer to declared terminal states.
+- All automatic cycles are bounded.
+- All agents and hooks resolve.
+- Effect types resolve.
+- Required capabilities are compatible with agent and pipeline policy.
+- Wait nodes name resumable conditions.
+- Side-effecting hooks or effects define idempotency keys.
+
+## Example: Research Workflow
+
+```yaml
+id: research-only
+version: 2
+nodes:
+  - id: investigate
+    type: agent
+    agent: general.researcher
+    routes:
+      succeeded: summarize
+      inconclusive: summarize
+      failed: fail
+  - id: summarize
+    type: hook
+    hook:
+      kind: module
+      module: Indexer.Hooks.PublishResearchSummary
+    routes:
+      succeeded: done
+terminal:
+  succeeded: done
+  failed: fail
 ```
 
-An inline agent handler runs a sub-step. After the inline agent completes:
-- If the inline handler has its own `on_result`, dispatch on the inline agent's result.
-- If no matching handler exists, default to re-running the parent step (implicit `jump:prev`
-  since the handler was triggered by a result that needed remediation).
-
-The `max` on an inline handler bounds how many times that handler can fire (global for workflow).
-
-### Jump Targets
-
-| Target | Meaning |
-|--------|---------|
-| `self` | Re-run the current step |
-| `prev` | Jump to the previous step in array order |
-| `next` | Continue to the next step |
-| `<id>` | Jump to step with matching `id` |
-| `abort` | Halt pipeline with failure |
-
-### Max Visits
-
-The `max` field on a step bounds total visits across the pipeline run. When a step
-has been visited `max` times and control would transfer to it again, the pipeline
-jumps to the `on_max` target (default: `next`).
-
-```json
-{ "id": "audit", "agent": "...", "max": 3, "on_max": "next" }
-```
-
-| `on_max` value | Behavior when max exceeded |
-|----------------|---------------------------|
-| `next` | Give up on this step, continue pipeline (default) |
-| `abort` | Halt pipeline with failure |
-| `<id>` | Jump to a specific step |
-
-Without `max`, a step can be visited unboundedly (not recommended — use `max` on
-any step that participates in loops).
-
-## Control Flow Rules
-
-1. Steps execute in array order by default.
-2. After a step completes, check `on_result` for the agent's gate result.
-3. If a handler exists for the result, execute it (jump or inline agent).
-4. If no handler exists, use `default_jump` from result_mappings (see below).
-5. If `max` is exceeded on any step, jump to `on_max` target (default: `next`).
-6. If control reaches past the last step, pipeline succeeds.
-7. `abort` halts the pipeline immediately with failure status.
-
-## Gate Result Values
-
-Agents produce a `gate_result` in their output JSON. Standard values:
-
-| Value | Typical Meaning |
-|-------|-----------------|
-| `PASS` | Quality check passed |
-| `FAIL` | Quality check failed |
-| `FIX` | Fixable issues found |
-| `SKIP` | Not applicable |
-
-Any string is valid as a gate result — agents and handlers are not limited to
-these values. The pipeline dispatches on exact string match against `on_result` keys.
-
-## Result Mappings
-
-Result mappings define the behavior for each gate result value, including:
-- **status**: Category for result JSON (success, failure, partial, unknown)
-- **exit_code**: Process exit code when this result is produced
-- **default_jump**: Default control flow when no `on_result` handler matches
-
-### Per-Agent Result Mappings
-
-Each agent defines its own `result_mappings` in `config/agents.json`. This ensures agents
-only declare the results they can actually produce:
-
-```json
-{
-  "agents": {
-    "engineering.security-audit": {
-      "max_iterations": 8,
-      "result_mappings": {
-        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
-        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" },
-        "FIX":  { "status": "partial", "exit_code": 0, "default_jump": "prev" }
-      }
-    },
-    "engineering.test-coverage": {
-      "result_mappings": {
-        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
-        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" },
-        "FIX":  { "status": "partial", "exit_code": 0, "default_jump": "prev" },
-        "SKIP": { "status": "success", "exit_code": 0, "default_jump": "next" }
-      }
-    }
-  },
-  "defaults": {
-    "result_mappings": {
-      "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
-      "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" },
-      "FIX":  { "status": "partial", "exit_code": 0, "default_jump": "prev" },
-      "SKIP": { "status": "success", "exit_code": 0, "default_jump": "next" }
-    }
-  }
-}
-```
-
-### Default Mappings
-
-The `defaults.result_mappings` in `config/agents.json` provides fallback mappings:
-
-```json
-{
-  "defaults": {
-    "result_mappings": {
-      "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
-      "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" },
-      "FIX":  { "status": "partial", "exit_code": 0, "default_jump": "prev" },
-      "SKIP": { "status": "success", "exit_code": 0, "default_jump": "next" }
-    }
-  }
-}
-```
-
-Agents inherit these mappings and can override or extend them with additional results.
-
-### Pipeline-Level Overrides
-
-Pipelines can override agent mappings for specific results:
-
-```json
-{
-  "name": "my-pipeline",
-  "result_mappings": {
-    "REVIEW": { "status": "pending", "exit_code": 0, "default_jump": "self" },
-    "FAIL":   { "status": "failure", "exit_code": 10, "default_jump": "next" }
-  },
-  "steps": [...]
-}
-```
-
-Resolution order: pipeline `result_mappings` → agent `result_mappings` → `defaults.result_mappings`.
-
-### Result Mapping Fields
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `status` | string | One of: `success`, `failure`, `partial`, `unknown` |
-| `exit_code` | integer | Process exit code (0 = success, 10 = FAIL, 11 = STOP, etc.) |
-| `default_jump` | string | Jump target when no `on_result` handler matches |
-
-Unknown results (not defined in any result_mappings) trigger pipeline abort.
-
-## Execution Semantics
-
-### Default Behavior (no on_result)
-
-```json
-{ "id": "test", "agent": "engineering.test-coverage" }
-```
-
-Agent runs. Regardless of result, continue to next step.
-
-### Jump on Failure
-
-```json
-{
-  "id": "test",
-  "agent": "engineering.test-coverage",
-  "on_result": {
-    "FAIL": { "jump": "abort" }
-  }
-}
-```
-
-FAIL aborts. All other results continue to next.
-
-### Fix Loop (Inline Agent)
-
-```json
-{
-  "id": "audit",
-  "agent": "engineering.security-audit",
-  "max": 3,
-  "on_result": {
-    "FIX": {
-      "id": "audit-fix",
-      "agent": "engineering.security-fix",
-      "commit_after": true,
-      "max": 2
-    },
-    "FAIL": { "jump": "abort" }
-  }
-}
-```
-
-Execution:
-1. Run `security-audit`.
-2. Result is FIX → run inline `security-fix`.
-3. After fix, re-run `security-audit` (parent step, implicit `jump:prev`).
-4. If audit returns PASS → `jump:next` (unhandled = default).
-5. If audit returns FIX again → run fix again (if within `max`).
-6. If `max` on audit (3) or fix (2) exceeded → `on_max` target (default: `next`).
-
-### Inline Agent with its own on_result
-
-```json
-{
-  "id": "audit",
-  "agent": "engineering.security-audit",
-  "max": 3,
-  "on_result": {
-    "FIX": {
-      "id": "audit-fix",
-      "agent": "engineering.security-fix",
-      "max": 2,
-      "on_result": {
-        "PASS": { "jump": "self" },
-        "FAIL": { "jump": "abort" }
-      }
-    }
-  }
-}
-```
-
-Here the fix agent's result controls flow:
-- Fix returns PASS → `jump:self` (re-run parent audit to verify).
-- Fix returns FAIL → abort.
-- Fix returns FIX → unhandled in fix's on_result, so default = re-run parent (implicit `jump:prev`).
-
-### Backward Jump
-
-```json
-{
-  "id": "validation",
-  "agent": "engineering.validation-review",
-  "on_result": {
-    "FAIL": { "jump": "execution" }
-  }
-}
-```
-
-Validation failure jumps back to execution step. Must have `max` on either
-step to prevent infinite loops.
-
-### Multi-Way Branch
-
-```json
-{
-  "id": "triage",
-  "agent": "system.triage",
-  "on_result": {
-    "SECURITY": { "jump": "audit" },
-    "QUALITY":  { "jump": "review" },
-    "TESTS":    { "jump": "test" },
-    "PASS":     { "jump": "next" }
-  }
-}
-```
-
-Agent-computed multi-way dispatch. The agent acts as a router.
-
-## Flattening Inline Agents
-
-Inline agent handlers are syntactic sugar. Any inline handler can be flattened
-into a top-level step with explicit jumps:
-
-**Nested:**
-```json
-{
-  "id": "audit",
-  "agent": "engineering.security-audit",
-  "max": 3,
-  "on_result": {
-    "FIX": { "id": "fix", "agent": "engineering.security-fix", "max": 2, "commit_after": true }
-  }
-}
-```
-
-**Flattened equivalent:**
-```json
-[
-  {
-    "id": "audit",
-    "agent": "engineering.security-audit",
-    "max": 3,
-    "on_result": {
-      "FIX": { "jump": "fix" }
-    }
-  },
-  {
-    "id": "fix",
-    "agent": "engineering.security-fix",
-    "max": 2,
-    "commit_after": true,
-    "on_result": {
-      "PASS": { "jump": "audit" }
-    }
-  }
-]
-```
-
-The inline form is preferred when the handler step is only reachable from one parent.
-
-## Termination Guarantee
-
-The pipeline guarantees termination if and only if every cycle in the step graph
-has at least one step with a finite `max` whose `on_max` target breaks the cycle
-(i.e., jumps forward or aborts). An `on_max` that jumps backward into the same
-cycle does not guarantee termination unless the target also has a bounded `max`.
-
-Recommended: set `max` on any step that can be the target of a backward jump
-or self-reference. The default `on_max: "next"` degrades gracefully; use
-`on_max: "abort"` to fail fast.
-
-## Legacy Compatibility
-
-The previous schema fields map to this model:
-
-| Legacy Field | Equivalent |
-|-------------|------------|
-| `"blocking": true` | `"on_result": { "FAIL": {"jump":"abort"} }` |
-| `"blocking": false` | (default — no on_result for FAIL) |
-| `"fix": {...}` | `"on_result": { "FIX": { <inline-agent> } }` |
-| `"depends_on": "X"` | Step X has `"on_result": { "FAIL": {"jump":"<skip-past-dependents>"} }` |
-
-## Example: Full Pipeline
-
-```json
-{
-  "name": "default",
-  "steps": [
-    {
-      "id": "planning",
-      "agent": "product.plan-mode",
-      "readonly": true,
-      "enabled_by": "WIGGUM_PLAN_MODE"
-    },
-    {
-      "id": "execution",
-      "agent": "engineering.software-engineer",
-      "max": 3,
-      "commit_after": true,
-      "config": { "max_iterations": 20, "max_turns": 50, "supervisor_interval": 2 }
-    },
-    {
-      "id": "summary",
-      "agent": "general.task-summarizer",
-      "readonly": true
-    },
-    {
-      "id": "audit",
-      "agent": "engineering.security-audit",
-      "max": 3,
-      "readonly": true,
-      "on_result": {
-        "FIX": {
-          "id": "audit-fix",
-          "agent": "engineering.security-fix",
-          "max": 2,
-          "commit_after": true
-        }
-      }
-    },
-    {
-      "id": "test",
-      "agent": "engineering.test-coverage",
-      "max": 2,
-      "commit_after": true,
-      "on_result": {
-        "FIX": {
-          "id": "test-fix",
-          "agent": "engineering.generic-fix",
-          "max": 2,
-          "commit_after": true
-        }
-      }
-    },
-    {
-      "id": "docs",
-      "agent": "general.documentation-writer",
-      "commit_after": true
-    },
-    {
-      "id": "validation",
-      "agent": "engineering.validation-review",
-      "readonly": true
-    }
-  ]
-}
-```
-
-## Hooks
-
-Steps can define `pre` and `post` hooks that run before and after agent execution.
-
-```json
-{
-  "id": "test",
-  "agent": "engineering.test-coverage",
-  "hooks": {
-    "pre": ["setup_test_env"],
-    "post": ["cleanup_artifacts", "notify_complete"]
-  }
-}
-```
-
-Hooks are **function names**, not shell commands. The function must be defined and
-available (typically via `declare -F`). Each hook receives environment variables:
-
-| Variable | Description |
-|----------|-------------|
-| `PIPELINE_WORKER_DIR` | Worker directory path |
-| `PIPELINE_PROJECT_DIR` | Project root directory |
-| `PIPELINE_WORKSPACE` | Git worktree workspace |
-| `PIPELINE_STEP_ID` | Current step ID |
-
-Hook failures are logged but do not abort the pipeline.
-
-## Step Context Variables
-
-The pipeline runner exports context variables for each step, enabling agents to
-access upstream outputs via markdown templates (`{{parent.step_id}}`).
-
-### Parent Step Context
-
-| Variable | Description |
-|----------|-------------|
-| `WIGGUM_PARENT_STEP_ID` | Previous step's ID |
-| `WIGGUM_PARENT_RUN_ID` | Previous step's run ID (epoch-based) |
-| `WIGGUM_PARENT_SESSION_ID` | Previous step's Claude session ID |
-| `WIGGUM_PARENT_RESULT` | Previous step's gate result |
-| `WIGGUM_PARENT_REPORT` | Path to previous step's report file |
-| `WIGGUM_PARENT_OUTPUT_DIR` | Previous step's output directory |
-
-### Next Step Context
-
-| Variable | Description |
-|----------|-------------|
-| `WIGGUM_NEXT_STEP_ID` | Next step's ID (if any) |
-
-These variables are cleared after each step completes.
-
-## Runtime State
-
-The pipeline runner creates `pipeline-config.json` in the worker directory at
-pipeline start. This file is used by `wiggum inspect` and the scheduler for
-resume logic.
-
-```json
-{
-  "pipeline": {
-    "name": "default",
-    "source": "/path/to/pipeline.json"
-  },
-  "runtime": {
-    "plan_file": "/path/to/plan.md",
-    "resume_instructions": ""
-  },
-  "current": {
-    "step_idx": 2,
-    "step_id": "summary"
-  },
-  "steps": {
-    "planning": { "agent": "product.plan-mode", "config": {} },
-    "execution": { "agent": "engineering.software-engineer", "config": {...} }
-  }
-}
-```
-
-The `current` field is updated atomically as each step runs, enabling resume
-from the last active step after interruption.
+This workflow produces no code branch and no merge. That must be valid.

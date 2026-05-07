@@ -1,358 +1,196 @@
-# Inter-Agent Communication Protocol
+# Agent Communication Protocol
 
-This document describes how agents communicate and share information in Chief Wiggum.
+Status: Draft v2
 
-## Overview
+## Purpose
 
-Chief Wiggum agents operate in isolated worker directories but need to share state, results, and context. This protocol defines the communication patterns and file-based interfaces.
+This protocol defines how Indexer communicates with external agent runtimes and
+deterministic hooks. It replaces the v1 convention where agents communicated mostly
+through files in worker directories.
 
-## Inter-Agent Data Passing
+SQLite is the primary communication and persistence channel. Files may still exist
+as workspace content or artifacts, but they are no longer the orchestration contract.
 
-Agents can pass state and data through two scopes: **sequential** (to the next pipeline step) and **arbitrary** (to any agent regardless of order).
+## Communication Scopes
 
-### Sequential: Next Agent in Pipeline (5 mechanisms)
+Indexer has four communication scopes:
 
-| # | Mechanism | How It Works | Key Location |
-|---|-----------|-------------|--------------|
-| 1 | **Gate result files** | Each agent writes `outputs.gate_result` (PASS/FAIL/FIX/SKIP) to its epoch-named result JSON. The pipeline runner reads this to decide whether to continue, skip, or trigger a fix loop. | `lib/pipeline/pipeline-runner.sh:444` |
-| 2 | **Step enablement (`enabled_by`)** | A pipeline step declares `"enabled_by": "ENV_VAR"` in `config/pipelines/default.json`. The step is skipped if the environment variable is not set or empty. | `lib/pipeline/pipeline-runner.sh:390-399` |
-| 3 | **Environment variable inheritance** | Parent exports context vars (`PIPELINE_PLAN_FILE`, `PIPELINE_RESUME_INSTRUCTIONS`, `WIGGUM_STEP_ID`, etc.) that sub-agents inherit via `run_sub_agent()`. | `lib/agents/system/task-worker.sh`, `lib/pipeline/pipeline-runner.sh` |
-| 4 | **Git state globals** | Git operations set shell globals (`GIT_COMMIT_BRANCH`, `GIT_PR_URL`, `GIT_SAFETY_CHECKPOINT_SHA`) consumed by subsequent steps in the same process. | `lib/git/git-operations.sh:72,209,287` |
-| 5 | **Fix-retry loop** | When an agent returns `FIX`, the pipeline invokes a nested fix agent, then re-runs the original agent to verify. State flows: audit result → fix agent → re-audit. | `lib/pipeline/pipeline-runner.sh:247+` (`_run_inline_agent`) |
+1. **Runtime stream**
+   - Raw stdout/stderr/app-server messages from an external agent runtime.
+   - Stored in `agent_events.raw_payload`.
+   - Normalized by runtime adapters.
 
-### Arbitrary: Any Agent to Any Agent (7 mechanisms)
+2. **Normalized event stream**
+   - Backend-independent agent events.
+   - Stored in `agent_events.normalized_payload`.
+   - Consumed by hooks, web UI, metrics, and pipeline gates.
 
-| # | Mechanism | How It Works | Key Location |
-|---|-----------|-------------|--------------|
-| 1 | **`agent_comm_*` interface** | Unified lookup API. Any agent calls `agent_comm_path(worker_dir, type)` to resolve paths to another agent's result, report, summary, comments, prd, or workspace. | `lib/core/agent-base.sh:943-970` |
-| 2 | **Result file reads by agent name** | `agent_read_subagent_result(worker_dir, agent_name)` and `agent_find_latest_result()` let any agent read any other agent's epoch-named result JSON. | `lib/core/agent-base.sh:1169-1187,687-693` |
-| 3 | **Shared workspace** | All agents in a task share `worker_dir/workspace/` (a git worktree). Code changes committed by one agent are visible to all subsequent agents. | `lib/worker/agent-registry.sh:376-387` |
-| 4 | **Activity log (JSONL)** | Append-only stream at `.ralph/logs/activity.jsonl`. Any agent can log events via `activity_log(event, worker_id, task_id, extra...)` and query with `jq` by type/task/worker. | `lib/utils/activity-log.sh` |
-| 5 | **Checkpoint files** | Structured JSON at `checkpoints/checkpoint-N.json` containing `files_modified`, `completed_tasks`, `next_steps`, and `prose_summary`. Readable by any agent in the worker. | `lib/core/checkpoint.sh:115-138` |
-| 6 | **Kanban status** | Shared `.ralph/kanban.md` with file-locked status markers (`[=]`, `[x]`, `[*]`, `[P]`, `[N]`). Any agent can read task status set by any other agent. | `lib/core/file-lock.sh` (writes), `lib/tasks/task-parser.sh` (reads) |
-| 7 | **Reports, summaries, and logs** | Markdown reports (`reports/`), iteration summaries (`summaries/`), and conversation logs (`logs/`) in the shared worker directory are readable by any agent. | worker directory convention |
+3. **Context store**
+   - Rendered prompts, summaries, reports, structured inputs, and extracted outputs.
+   - Stored in `contexts` and `artifacts`.
 
-### Architectural Notes
+4. **Effect outbox**
+   - Durable requested side effects.
+   - Stored in `effects`.
+   - Executed by Indexer effect workers.
 
-- **No message broker.** All communication is file-based (POSIX filesystem + `flock` for atomicity).
-- **Worker directory = shared memory.** The worker dir is the namespace boundary for inter-agent state.
-- **Epoch naming prevents collisions.** Multiple runs of the same agent produce distinct result files.
-- **Read-only agents are safe.** `readonly: true` agents get a git checkpoint that is restored after they exit, preventing unintended state leakage.
+## Normalized Runtime Events
 
-## Worker Directory Structure
+Each runtime adapter must convert backend-specific logs into normalized events.
 
-```
-.ralph/workers/worker-TASK-001-1234567890/
-├── prd.md                    # Input: Product Requirements Document
-├── workspace/                # Git worktree for isolated work
-├── agent.pid                 # PID of running agent
-├── results/
-│   ├── 1705312200-engineering.security-audit-result.json   # Gate decision + metadata
-│   ├── 1705312500-engineering.security-fix-result.json     # Gate decision + metadata
-│   ├── 1705312800-engineering.validation-review-result.json
-│   └── 1705313100-system.task-worker-result.json
-├── reports/
-│   ├── 1705312200-engineering.security-audit-report.md     # Analysis output
-│   ├── 1705312500-engineering.security-fix-report.md       # Status output
-│   └── 1705312800-engineering.validation-review-report.md
-├── logs/
-│   ├── iteration-0.log       # Claude conversation log (iteration 0)
-│   ├── iteration-1.log       # Claude conversation log (iteration 1)
-│   └── ...
-├── summaries/
-│   ├── iteration-0-summary.txt  # Progress summary (iteration 0)
-│   ├── iteration-1-summary.txt  # Progress summary (iteration 1)
-│   └── summary.txt              # Final summary (work complete)
-├── checkpoints/              # Structured checkpoint data
-│   ├── checkpoint-0.json
-│   └── checkpoint-1.json
-└── (agent-specific files)
-```
+Common event types:
 
-**Naming Convention:** `results/<epoch>-<agent-type>-result.json` and `reports/<epoch>-<agent-type>-report.md` where epoch is the unix timestamp at agent start.
+- `session.started`
+- `session.resumed`
+- `turn.started`
+- `turn.completed`
+- `turn.failed`
+- `message.delta`
+- `message.completed`
+- `tool.started`
+- `tool.delta`
+- `tool.completed`
+- `tool.failed`
+- `approval.requested`
+- `approval.resolved`
+- `usage.updated`
+- `rate_limit.detected`
+- `runtime.stderr`
+- `runtime.stdout`
+- `runtime.exited`
 
-## Result Communication
-
-### Epoch-Named Result Files
-
-All agent results are written to epoch-named JSON files in `results/`:
+Event envelope:
 
 ```json
 {
-  "agent_type": "engineering.security-audit",
-  "status": "success",
-  "exit_code": 0,
-  "started_at": "2024-01-15T10:30:00Z",
-  "completed_at": "2024-01-15T10:45:00Z",
-  "duration_seconds": 900,
-  "task_id": "TASK-001",
-  "worker_id": "worker-TASK-001-abc123",
-  "iterations_completed": 3,
-  "outputs": {
-    "gate_result": "PASS"
+  "event_type": "tool.completed",
+  "timestamp": "2026-05-07T12:00:00Z",
+  "agent_run_id": "ar_123",
+  "runtime": "codex",
+  "session_id": "thread-1:turn-2",
+  "sequence": 42,
+  "payload": {},
+  "usage": {},
+  "raw_ref": "raw-event-id"
+}
+```
+
+Adapters may emit runtime-specific payload fields, but dashboards and pipelines must
+depend only on the normalized event envelope unless they explicitly opt into a
+backend-specific contract.
+
+## Runtime Invocation Input
+
+Before launching an agent runtime, Indexer creates an invocation record:
+
+```json
+{
+  "agent_run_id": "ar_123",
+  "runtime": "codex",
+  "mode": "app_server",
+  "workspace": {
+    "path": "/repo/.indexer/worktrees/TASK-001"
   },
-  "errors": [],
-  "metadata": {}
+  "objective": {
+    "system_context_id": "ctx_sys",
+    "user_context_id": "ctx_user",
+    "rendered_text": "..."
+  },
+  "session": {
+    "resume_session_id": null
+  },
+  "policy": {
+    "approval_policy": "unless_trusted",
+    "sandbox": "workspace_write",
+    "network": false,
+    "timeout_seconds": 10800
+  },
+  "runtime_config": {}
 }
 ```
 
-The `outputs.gate_result` field contains the standardized gate decision (PASS/FAIL/FIX/SKIP).
-
-### Writing Results
-
-```bash
-# Write result with gate_result (status/exit_code are derived automatically)
-agent_write_result "$worker_dir" "PASS"  # success, exit_code=0
-agent_write_result "$worker_dir" "FAIL"  # failure, exit_code=10
-agent_write_result "$worker_dir" "FIX"   # partial, exit_code=0
-agent_write_result "$worker_dir" "SKIP"  # success, exit_code=0
-
-# Write result with additional output fields
-local extra_outputs='{"pr_url":"https://github.com/..."}'
-agent_write_result "$worker_dir" "PASS" "$extra_outputs"
-
-# Write a report (analysis/status markdown)
-agent_write_report "$worker_dir" "$report_content"
-```
-
-### Reading Results
-
-```bash
-# Read gate_result from a sub-agent (2-arg signature)
-result=$(agent_read_subagent_result "$worker_dir" "engineering.security-audit")
-
-# Find the latest result file for an agent type
-result_file=$(agent_find_latest_result "$worker_dir" "engineering.security-audit")
-
-# Find the latest report file for an agent type
-report_file=$(agent_find_latest_report "$worker_dir" "engineering.security-audit")
-```
-
-### Gate Result Values
-
-All gate agents produce a `gate_result` field. Default values include PASS, FIX, FAIL, and SKIP. But an agent may define its own value set.
-
-| Agent | gate_result Values |
-|-------|-------------------|
-| engineering.validation-review | PASS, FAIL |
-| engineering.security-audit | PASS, FIX, FAIL |
-| engineering.code-review | PASS, FAIL, FIX |
-| engineering.test-coverage | PASS, FAIL, SKIP |
-| product.documentation-writer | PASS, SKIP |
-| engineering.security-fix | PASS, FIX, FAIL |
-| engineering.git-conflict-resolver | PASS, FAIL, SKIP |
-| engineering.pr-comment-fix | PASS, FIX, FAIL, SKIP |
-| product.plan-mode | PASS, FAIL |
-| system.resume-decide | PASS, FAIL |
-
-## Progress Communication
-
-### Iteration Summaries
-
-Each iteration writes a summary to `summaries/<run_id>/<prefix>-N-summary.txt`:
-
-```markdown
-## Iteration 3 Summary
-
-### Completed
-- Implemented user authentication endpoint
-- Added password hashing with bcrypt
-
-### In Progress
-- Writing unit tests for auth module
+The adapter converts this record into the backend-specific process, app-server, or
+SDK call.
 
-### Blocked
-- Waiting for database schema from DBA
+## Runtime Completion
 
-### Next Steps
-1. Complete unit tests
-2. Add integration tests
-3. Update API documentation
-```
+Runtime completion does not equal agent success. A runtime may finish cleanly while
+the agent outcome is `needs_work`, `blocked`, or `inconclusive`.
 
-### Structured Checkpoints
+The adapter records:
 
-JSON checkpoints at `checkpoints/checkpoint-N.json`:
+- process exit status,
+- terminal runtime event,
+- session/thread/turn ids,
+- token or cost usage when available,
+- raw logs,
+- any backend error classification.
 
-```json
-{
-  "version": "1.0",
-  "iteration": 3,
-  "session_id": "abc123",
-  "timestamp": "2024-01-15T10:30:00Z",
-  "status": "in_progress",
-  "files_modified": [
-    "src/auth/handler.ts",
-    "src/auth/middleware.ts"
-  ],
-  "completed_tasks": [
-    "Implement auth endpoint",
-    "Add password hashing"
-  ],
-  "next_steps": [
-    "Write unit tests",
-    "Add integration tests"
-  ],
-  "prose_summary": "..."
-}
-```
+The agent's `extract_result` hook then creates the semantic `AgentResult`.
 
-## Sub-Agent Invocation
+## Deterministic Hook Protocol
 
-### Pattern: Parent → Sub-Agent
+Hooks use JSON stdin/stdout. Hook processes must write diagnostics to stderr and
+machine-readable output to stdout.
 
-```bash
-# Parent agent (system/task-worker.sh)
-agent_run() {
-    local worker_dir="$1"
-    local project_dir="$2"
+Hook output must be parseable JSON. Invalid JSON is a hard hook failure.
 
-    # ... main work ...
+Hooks must not write directly to Indexer SQLite unless implemented as trusted Elixir
+modules. External executable hooks communicate only through their output envelope.
 
-    # Invoke validation as sub-agent
-    run_sub_agent "engineering.validation-review" "$worker_dir" "$project_dir"
+## Artifacts
 
-    # Read sub-agent gate_result (2-arg signature)
-    local result
-    result=$(agent_read_subagent_result "$worker_dir" "engineering.validation-review")
+Artifacts are durable records linked to a work item, pipeline node, agent run, or
+review. Supported storage kinds:
 
-    if [ "$result" = "PASS" ]; then
-        # Proceed with commit/PR
-    else
-        # Handle failure
-    fi
-}
-```
+- `sqlite_text`
+- `sqlite_json`
+- `sqlite_blob`
+- `workspace_file`
+- `control_branch_file`
+- `external_uri`
 
-### Sub-Agent Constraints
+Artifacts have digests. Large raw logs may be stored compressed in SQLite or an
+artifact file, but their index metadata remains in SQLite.
 
-- Sub-agents do NOT manage PID files
-- Sub-agents do NOT set up signal handlers
-- Sub-agents share the parent's workspace
-- Sub-agents write to the same worker directory
+## Context Passing
 
-## Event Communication
+Pipeline nodes pass data by writing context records and artifact references.
 
-### Event Log Format
+Context records are immutable. A later node may create a new context derived from
+earlier contexts, but must not mutate prior records.
 
-Events written to `.ralph/logs/events.jsonl`:
+Common context scopes:
 
-```json
-{"timestamp":"2024-01-15T10:30:00Z","event_type":"task.started","worker_id":"worker-TASK-001-123","task_id":"TASK-001"}
-{"timestamp":"2024-01-15T10:35:00Z","event_type":"iteration.completed","worker_id":"worker-TASK-001-123","iteration":1,"exit_code":0}
-{"timestamp":"2024-01-15T10:40:00Z","event_type":"error","worker_id":"worker-TASK-001-123","error_type":"timeout","message":"API call exceeded 30s"}
-{"timestamp":"2024-01-15T10:45:00Z","event_type":"task.completed","worker_id":"worker-TASK-001-123","task_id":"TASK-001","result":"PASS"}
-```
+- `work_item`
+- `pipeline`
+- `node`
+- `agent`
+- `review`
+- `repository`
+- `control_branch`
 
-### Emitting Events
+## Follow-Up Work
 
-```bash
-source "$WIGGUM_HOME/lib/utils/activity-log.sh"
+Agents may propose follow-up work in `AgentResult.follow_up_work`. Indexer does not
+blindly schedule it. A deterministic hook or operator policy decides whether to:
 
-activity_log "task.started" "$worker_id" "$task_id"
-activity_log "task.completed" "$worker_id" "$task_id" "result=PASS"
-activity_log "error" "$worker_id" "" "error_type=timeout" "message=API call exceeded 30s"
-```
+- discard,
+- record as draft,
+- create a new work item,
+- attach as review comment,
+- append to a backlog file on the control branch.
 
-### Querying Events
+## Error Handling
 
-```bash
-# All events for a task
-jq 'select(.task_id == "TASK-001")' .ralph/logs/activity.jsonl
+All failures are classified into one of:
 
-# All errors
-jq 'select(.event == "error")' .ralph/logs/activity.jsonl
+- `runtime_error`: external agent process/protocol failed.
+- `model_error`: model completed but did not satisfy output contract.
+- `hook_error`: deterministic hook failed.
+- `policy_error`: approval/capability/sandbox violation.
+- `workspace_error`: git or filesystem workspace failed.
+- `effect_error`: requested effect failed.
+- `operator_cancelled`: run cancelled by user or service policy.
 
-# Events in time range
-jq 'select(.ts >= "2024-01-15T10:00:00Z")' .ralph/logs/activity.jsonl
-```
-
-## Kanban State Communication
-
-### Status Updates
-
-Agents update task status in `.ralph/kanban.md`:
-
-| Marker | Status | Set By | Behavior |
-|--------|--------|--------|----------|
-| `[ ]` | TODO | Initial state | Eligible for scheduling |
-| `[=]` | In Progress | system.task-worker start | Currently being worked on |
-| `[x]` | Complete | post-PR merge | Satisfies dependencies |
-| `[P]` | Pending Approval | PR created | Awaiting review (does NOT satisfy dependencies) |
-| `[*]` | Failed | validation failed | Needs manual intervention |
-| `[N]` | Not Planned | manual | Ignored by `wiggum run`; never scheduled |
-
-### Status Update Functions
-
-```bash
-source "$WIGGUM_HOME/lib/core/file-lock.sh"
-
-update_kanban_status "$kanban_file" "$task_id" "="   # In progress [=]
-update_kanban_pending_approval "$kanban_file" "$task_id"  # [P]
-update_kanban "$kanban_file" "$task_id"             # [x] Complete
-update_kanban_failed "$kanban_file" "$task_id"      # [*] Failed
-update_kanban_not_planned "$kanban_file" "$task_id" # [N] Not Planned
-```
-
-## File Locking
-
-### Concurrent Access
-
-Use file locks for shared resource access:
-
-```bash
-source "$WIGGUM_HOME/lib/core/file-lock.sh"
-
-# Lock kanban.md during update (timeout in seconds as 2nd arg)
-with_file_lock "$kanban_file.lock" 5 \
-    update_kanban_status "$kanban_file" "$task_id" "="
-
-# Lock with longer timeout for operations that may take more time
-with_file_lock "$pid_file.lock" 10 \
-    register_pid "$pid_file" "$$"
-```
-
-### Lock Files
-
-Existence of a file with .lock extension marks the underlying file locked and cannot be written to.
-
-| Resource | Lock File |
-|----------|-----------|
-| kanban.md | `.ralph/kanban.md.lock` |
-| PID operations | `.ralph/orchestrator/pid-ops.lock` |
-| Events log | `.ralph/logs/events.jsonl.lock` |
-
-## Workspace Boundary Protocol
-
-### Violation Detection
-
-The violation monitor checks for:
-- Edit operations outside `$worker_dir/workspace`
-- Destructive git commands in main repo
-- File modifications in `.ralph/` from agents
-
-### On Violation
-
-1. Agent process terminated (SIGTERM)
-2. `violation_status.txt` created with `WORKSPACE_VIOLATION`
-3. Violation logged to `.ralph/logs/violations.log`
-4. Task marked as failed in kanban
-
-### Recovery
-
-```bash
-# Review violation
-cat .ralph/logs/violations.log
-
-# Force resume after manual fix
-wiggum worker resume TASK-001 -f
-```
-
-## Best Practices
-
-1. **Always use epoch-named results** - Use `agent_write_result` which writes to `results/<epoch>-<type>-result.json`
-2. **Write checkpoints regularly** - Enables resume after interruption
-3. **Emit events for observability** - Makes debugging easier
-4. **Use file locks for shared resources** - Prevents race conditions
-5. **Respect workspace boundaries** - Never modify files outside workspace
-6. **Read before assuming** - Check if result file exists before reading
+Pipelines route on error class, outcome, and node metadata.
