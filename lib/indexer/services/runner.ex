@@ -27,6 +27,9 @@ defmodule Indexer.Services.Runner do
       not Conditions.met?(Map.get(service, "condition"), context) ->
         {:ok, skip(project_root, service, "condition_false", context)}
 
+      circuit_blocks_run?(project_root, service) ->
+        {:ok, skip(project_root, service, "circuit_open", context)}
+
       blocked_by_concurrency?(project_root, service) ->
         handle_running(project_root, service, context)
 
@@ -36,12 +39,48 @@ defmodule Indexer.Services.Runner do
   end
 
   defp do_run(project_root, service, context, opts) do
-    run_id = new_run_id(service["id"])
+    parent_run_id = new_run_id(service["id"])
+    policy = restart_policy(service)
+
+    result =
+      run_attempts(project_root, service, context, opts, policy, parent_run_id, 0)
+
+    if result["status"] == "success", do: {:ok, result}, else: {:error, result}
+  end
+
+  defp run_attempts(project_root, service, context, opts, policy, parent_run_id, attempt) do
+    result = run_attempt(project_root, service, context, opts, parent_run_id, attempt)
+
+    if retry_service?(result, policy, attempt) do
+      delay_seconds = retry_delay_seconds(policy, attempt)
+
+      append_service_event(project_root, "service.retry_scheduled", service, %{
+        "run_id" => result["run_id"],
+        "parent_run_id" => parent_run_id,
+        "attempt" => attempt,
+        "next_attempt" => attempt + 1,
+        "delay_seconds" => delay_seconds,
+        "reason" => "restart_policy"
+      })
+
+      sleep = Keyword.get(opts, :sleep_fun, &Process.sleep/1)
+      sleep.(delay_seconds * 1_000)
+
+      run_attempts(project_root, service, context, opts, policy, parent_run_id, attempt + 1)
+    else
+      result
+    end
+  end
+
+  defp run_attempt(project_root, service, context, opts, parent_run_id, attempt) do
+    run_id = attempt_run_id(parent_run_id, attempt)
     started_at = timestamp()
     started_mono = System.monotonic_time(:millisecond)
 
     append_service_event(project_root, "service.started", service, %{
       "run_id" => run_id,
+      "parent_run_id" => parent_run_id,
+      "attempt" => attempt,
       "started_at" => started_at,
       "effective_config" => service
     })
@@ -58,6 +97,8 @@ defmodule Indexer.Services.Runner do
 
     append_service_event(project_root, "service.completed", service, %{
       "run_id" => run_id,
+      "parent_run_id" => parent_run_id,
+      "attempt" => attempt,
       "status" => status,
       "exit_code" => exit_code,
       "duration_ms" => duration_ms,
@@ -69,8 +110,10 @@ defmodule Indexer.Services.Runner do
 
     maybe_open_circuit(project_root, service, status)
 
-    result = %{
+    %{
       "run_id" => run_id,
+      "parent_run_id" => parent_run_id,
+      "attempt" => attempt,
       "service_id" => service["id"],
       "status" => status,
       "exit_code" => exit_code,
@@ -78,8 +121,6 @@ defmodule Indexer.Services.Runner do
       "output" => output,
       "errors" => errors
     }
-
-    if status == "success", do: {:ok, result}, else: {:error, result}
   end
 
   defp execute(%{"type" => "function"} = execution, project_root, service, context, opts) do
@@ -108,7 +149,7 @@ defmodule Indexer.Services.Runner do
         runner.(project_root, execution, service, context)
 
       _ ->
-        pipeline = Indexer.Pipeline.Loader.load_file!(pipeline_path(execution))
+        pipeline = Indexer.Pipeline.Loader.load_file!(pipeline_path(project_root, execution))
         agent_runner = Indexer.Agents.Runner.runner(project_root, opts)
         Indexer.Pipeline.Run.run(project_root, pipeline, agent_runner)
     end
@@ -121,6 +162,64 @@ defmodule Indexer.Services.Runner do
 
   defp execute(execution, _project_root, _service, _context, _opts),
     do: {:error, {:unsupported_execution, execution}}
+
+  defp retry_service?(%{"status" => "success"}, _policy, _attempt), do: false
+
+  defp retry_service?(_result, %{"on_failure" => "retry", "max_retries" => max_retries}, attempt) do
+    attempt < max_retries
+  end
+
+  defp retry_service?(_result, _policy, _attempt), do: false
+
+  defp retry_delay_seconds(policy, attempt) do
+    backoff = Map.get(policy, "backoff", %{})
+    initial = Map.get(backoff, "initial", 5)
+    multiplier = Map.get(backoff, "multiplier", 2)
+    max_delay = Map.get(backoff, "max", 300)
+
+    initial
+    |> multiply_backoff(multiplier, attempt)
+    |> min(max_delay)
+    |> trunc()
+  end
+
+  defp multiply_backoff(initial, _multiplier, 0), do: initial
+
+  defp multiply_backoff(initial, multiplier, attempt) do
+    initial * :math.pow(multiplier, attempt)
+  end
+
+  defp restart_policy(service) do
+    case Map.get(service, "restart_policy", %{}) do
+      %{} = policy -> normalize_restart_policy(policy)
+      _other -> normalize_restart_policy(%{})
+    end
+  end
+
+  defp normalize_restart_policy(policy) do
+    %{
+      "on_failure" => Map.get(policy, "on_failure", "skip"),
+      "max_retries" => non_negative_integer(Map.get(policy, "max_retries", 2)),
+      "backoff" => normalize_backoff(Map.get(policy, "backoff", %{}))
+    }
+  end
+
+  defp normalize_backoff(backoff) do
+    %{
+      "initial" => non_negative_number(Map.get(backoff, "initial", 5)),
+      "multiplier" => positive_number(Map.get(backoff, "multiplier", 2)),
+      "max" => non_negative_number(Map.get(backoff, "max", 300))
+    }
+  end
+
+  defp non_negative_integer(value) when is_integer(value) and value >= 0, do: value
+  defp non_negative_integer(_value), do: 0
+
+  defp non_negative_number(value) when is_number(value) and value >= 0, do: value
+  defp non_negative_number(_value), do: 0
+
+  defp positive_number(value) when is_number(value) and value > 0, do: value
+  defp positive_number(_value), do: 1
 
   defp run_function(execution, _project_root, service, context) do
     with {:ok, module} <- allowlisted_module(Map.get(execution, "module")),
@@ -174,6 +273,34 @@ defmodule Indexer.Services.Runner do
     concurrency = Map.get(service, "concurrency", %{})
     max_instances = Map.get(concurrency, "max_instances", 1)
     max_instances <= 1 and State.running?(project_root, service["id"])
+  end
+
+  defp circuit_blocks_run?(project_root, service) do
+    breaker = Map.get(service, "circuit_breaker", %{})
+
+    if Map.get(breaker, "enabled", false) do
+      state = State.get(project_root, service["id"])
+
+      state["circuit_state"] == "open" and
+        not maybe_half_open_circuit(project_root, service, state, breaker)
+    else
+      false
+    end
+  end
+
+  defp maybe_half_open_circuit(project_root, service, state, breaker) do
+    cooldown = Map.get(breaker, "cooldown", 300)
+
+    if cooldown_elapsed?(state["circuit_opened_at"], cooldown) do
+      append_service_event(project_root, "service.circuit_half_opened", service, %{
+        "opened_at" => timestamp(),
+        "cooldown" => cooldown
+      })
+
+      true
+    else
+      false
+    end
   end
 
   defp handle_running(project_root, service, context) do
@@ -297,13 +424,18 @@ defmodule Indexer.Services.Runner do
     Enum.map(env, fn {key, value} -> {to_string(key), to_string(value)} end)
   end
 
-  defp pipeline_path(execution) do
+  defp pipeline_path(project_root, execution) do
     name = Map.fetch!(execution, "pipeline")
 
-    if Path.extname(name) == ".json" do
-      name
-    else
-      Path.expand("config/pipelines/#{name}.json", File.cwd!())
+    cond do
+      Path.type(name) == :absolute ->
+        name
+
+      Path.extname(name) == ".json" ->
+        Path.expand(name, project_root)
+
+      true ->
+        Path.expand("config/pipelines/#{name}.json", project_root)
     end
   end
 
@@ -346,7 +478,20 @@ defmodule Indexer.Services.Runner do
     |> DateTime.to_iso8601()
   end
 
+  defp cooldown_elapsed?(nil, _cooldown), do: false
+
+  defp cooldown_elapsed?(opened_at, cooldown) do
+    with {:ok, opened, _} <- DateTime.from_iso8601(opened_at) do
+      DateTime.diff(DateTime.utc_now(), opened, :second) >= cooldown
+    else
+      _error -> false
+    end
+  end
+
   defp new_run_id(service_id) do
     "service_run_#{service_id}_#{System.unique_integer([:positive, :monotonic])}"
   end
+
+  defp attempt_run_id(parent_run_id, 0), do: parent_run_id
+  defp attempt_run_id(parent_run_id, attempt), do: "#{parent_run_id}_retry_#{attempt}"
 end

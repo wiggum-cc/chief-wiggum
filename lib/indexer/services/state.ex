@@ -85,6 +85,12 @@ defmodule Indexer.Services.State do
     |> Map.put("circuit_opened_at", payload["opened_at"])
   end
 
+  defp apply_service_event(entry, "service.circuit_half_opened", payload) do
+    entry
+    |> Map.put("circuit_state", "half-open")
+    |> Map.put("circuit_half_opened_at", payload["opened_at"])
+  end
+
   defp apply_service_event(entry, "service.circuit_closed", payload) do
     entry
     |> Map.put("circuit_state", "closed")

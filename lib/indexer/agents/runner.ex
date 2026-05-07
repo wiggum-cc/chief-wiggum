@@ -7,7 +7,7 @@ defmodule Indexer.Agents.Runner do
   result extraction, and normalized output returned to the pipeline engine.
   """
 
-  alias Indexer.Agents.{Registry, Result}
+  alias Indexer.Agents.{CompletionCheck, Registry, Result}
   alias Indexer.Pipeline.ResultMappings
   alias Indexer.Runtime.Invocation
   alias Indexer.State.{Event, Jsonl}
@@ -130,7 +130,6 @@ defmodule Indexer.Agents.Runner do
                context,
                hook_runner
              ),
-           objective <- render_objective(resolved, prepared_context),
            {:ok, checked_context, checked_artifacts} <-
              run_agent_hooks(
                project_root,
@@ -140,46 +139,338 @@ defmodule Indexer.Agents.Runner do
                prepared_context,
                hook_runner
              ),
-           invocation <-
-             build_invocation(project_root, resolved, checked_context, objective, agent_run_id),
-           {:ok, runtime_result} <- runtime_invoke(project_root, invocation, opts),
-           {:ok, output_context, validation_artifacts} <-
-             validate_output(
+           {:ok, output} <-
+             execute_agent_mode(
                project_root,
                resolved,
-               agent_run_id,
-               runtime_result,
                checked_context,
+               agent_run_id,
+               opts,
                hook_runner
              ) do
-        text = runtime_result.text
-
-        gate_result =
-          Map.get(output_context, "gate_result") ||
-            Result.extract_gate_result(text, resolved.definition)
-
-        report = Result.extract_report(text, resolved.definition)
-
-        {:ok,
-         %{
-           "agent_run_id" => agent_run_id,
-           "outputs" => %{
-             "gate_result" => gate_result,
-             "report" => report,
-             "text" => text
-           },
-           "artifacts" => prepared_artifacts ++ checked_artifacts ++ validation_artifacts,
-           "effects" => [],
-           "errors" => result_errors(gate_result, resolved.definition.valid_results),
-           "metadata" => %{
-             "runtime" => invocation.runtime,
-             "runtime_session_id" => runtime_result.session.runtime_session_id,
-             "events_count" => length(runtime_result.events)
-           }
-         }}
+        {:ok, Map.update!(output, "artifacts", &(prepared_artifacts ++ checked_artifacts ++ &1))}
       end
     after
       run_agent_hooks(project_root, resolved, agent_run_id, "cleanup", context, hook_runner)
+    end
+  end
+
+  defp execute_agent_mode(project_root, resolved, context, agent_run_id, opts, hook_runner) do
+    case resolved.definition.mode do
+      "ralph_loop" ->
+        execute_ralph_loop(project_root, resolved, context, agent_run_id, opts, hook_runner)
+
+      _other ->
+        execute_turn(project_root, resolved, context, agent_run_id, opts, hook_runner, nil)
+    end
+  end
+
+  defp execute_ralph_loop(project_root, resolved, context, agent_run_id, opts, hook_runner) do
+    max_iterations = max_iterations(resolved, context)
+
+    Enum.reduce_while(0..(max_iterations - 1), {:ok, nil, context, []}, fn iteration,
+                                                                           {:ok, previous_output,
+                                                                            loop_context,
+                                                                            artifacts} ->
+      turn_context = iteration_context(loop_context, iteration)
+
+      case completion_decision(
+             project_root,
+             resolved,
+             agent_run_id,
+             turn_context,
+             hook_runner,
+             iteration,
+             max_iterations,
+             artifacts,
+             previous_output
+           ) do
+        {:halt, output} ->
+          {:halt, {:ok, output}}
+
+        {:cont, artifacts} ->
+          execute_ralph_iteration(
+            project_root,
+            resolved,
+            turn_context,
+            agent_run_id,
+            opts,
+            hook_runner,
+            iteration,
+            max_iterations,
+            artifacts
+          )
+
+        {:error, reason} ->
+          {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, nil, _context, _artifacts} ->
+        {:error, :no_iterations}
+
+      {:ok, output, _context, artifacts} ->
+        append_agent_event(project_root, "agent.loop.max_iterations_exceeded", agent_run_id, %{
+          "agent_run_id" => agent_run_id,
+          "agent_type" => resolved.type,
+          "max_iterations" => max_iterations,
+          "gate_result" => get_in(output, ["outputs", "gate_result"])
+        })
+
+        {:ok,
+         output
+         |> loop_output(max_iterations, max_iterations, artifacts)
+         |> add_loop_error("max_iterations_exceeded", %{"max_iterations" => max_iterations})}
+
+      other ->
+        other
+    end
+  end
+
+  defp execute_ralph_iteration(
+         project_root,
+         resolved,
+         turn_context,
+         agent_run_id,
+         opts,
+         hook_runner,
+         iteration,
+         max_iterations,
+         artifacts
+       ) do
+    case execute_turn(
+           project_root,
+           resolved,
+           turn_context,
+           agent_run_id,
+           opts,
+           hook_runner,
+           iteration
+         ) do
+      {:ok, output} ->
+        gate_result = get_in(output, ["outputs", "gate_result"])
+        artifacts = artifacts ++ output["artifacts"]
+        output = loop_output(output, iteration + 1, max_iterations, artifacts)
+
+        append_agent_event(project_root, "agent.iteration.completed", agent_run_id, %{
+          "agent_run_id" => agent_run_id,
+          "agent_type" => resolved.type,
+          "iteration" => iteration,
+          "gate_result" => gate_result,
+          "runtime_session_id" => get_in(output, ["metadata", "runtime_session_id"])
+        })
+
+        cond do
+          terminal_gate_result?(gate_result, resolved.definition) ->
+            {:halt, {:ok, output}}
+
+          true ->
+            case completion_decision(
+                   project_root,
+                   resolved,
+                   agent_run_id,
+                   turn_context,
+                   hook_runner,
+                   iteration + 1,
+                   max_iterations,
+                   artifacts,
+                   output
+                 ) do
+              {:halt, output} ->
+                {:halt, {:ok, output}}
+
+              {:cont, artifacts} ->
+                case supervisor_decision(
+                       project_root,
+                       resolved,
+                       agent_run_id,
+                       next_loop_context(turn_context, output),
+                       hook_runner,
+                       iteration + 1,
+                       max_iterations,
+                       artifacts,
+                       output
+                     ) do
+                  {:halt, output} ->
+                    {:halt, {:ok, output}}
+
+                  {:cont, output, next_context, artifacts} ->
+                    {:cont, {:ok, output, next_context, artifacts}}
+
+                  {:error, reason} ->
+                    {:halt, {:error, reason}}
+                end
+
+              {:error, reason} ->
+                {:halt, {:error, reason}}
+            end
+        end
+
+      {:error, reason} ->
+        {:halt, {:error, reason}}
+    end
+  end
+
+  defp completion_decision(
+         project_root,
+         resolved,
+         agent_run_id,
+         context,
+         hook_runner,
+         iterations_completed,
+         max_iterations,
+         artifacts,
+         output
+       ) do
+    with {:ok, check, check_artifacts} <-
+           evaluate_completion_check(project_root, resolved, agent_run_id, context, hook_runner) do
+      artifacts = artifacts ++ check_artifacts
+
+      if check["complete"] do
+        output =
+          (output || completion_output(agent_run_id))
+          |> apply_completion_check(check, resolved.definition)
+          |> loop_output(iterations_completed, max_iterations, artifacts)
+
+        append_agent_event(project_root, "agent.completion_check.completed", agent_run_id, %{
+          "agent_run_id" => agent_run_id,
+          "agent_type" => resolved.type,
+          "iterations_completed" => iterations_completed,
+          "completion_check" => check,
+          "gate_result" => get_in(output, ["outputs", "gate_result"])
+        })
+
+        {:halt, output}
+      else
+        {:cont, artifacts}
+      end
+    end
+  end
+
+  defp evaluate_completion_check(project_root, resolved, agent_run_id, context, hook_runner) do
+    case resolved.definition.completion_check do
+      "hook:" <> hook_name ->
+        hook_name = String.trim(hook_name)
+
+        with {:ok, checked_context, artifacts} <-
+               run_agent_hooks(
+                 project_root,
+                 resolved,
+                 agent_run_id,
+                 hook_name,
+                 context,
+                 hook_runner
+               ) do
+          gate_result = Map.get(checked_context, "gate_result")
+
+          {:ok,
+           %{
+             "type" => "hook",
+             "hook" => hook_name,
+             "complete" =>
+               truthy?(Map.get(checked_context, "complete")) ||
+                 terminal_gate_result?(gate_result, resolved.definition),
+             "gate_result" => gate_result,
+             "diagnostics" => Map.get(checked_context, "diagnostics", [])
+           }, artifacts}
+        end
+
+      _other ->
+        {:ok, CompletionCheck.evaluate(project_root, resolved.definition, context), []}
+    end
+  end
+
+  defp supervisor_decision(
+         project_root,
+         resolved,
+         agent_run_id,
+         context,
+         hook_runner,
+         iterations_completed,
+         max_iterations,
+         artifacts,
+         output
+       ) do
+    interval = resolved.definition.supervisor_interval
+
+    if interval > 0 and rem(iterations_completed, interval) == 0 do
+      with {:ok, supervisor_context, supervisor_artifacts} <-
+             run_agent_hooks(
+               project_root,
+               resolved,
+               agent_run_id,
+               "supervisor",
+               Map.put(context, "output", output),
+               hook_runner
+             ) do
+        artifacts = artifacts ++ supervisor_artifacts
+        decision = supervisor_decision_value(supervisor_context)
+        feedback = supervisor_feedback(supervisor_context)
+
+        append_agent_event(project_root, "agent.supervisor.completed", agent_run_id, %{
+          "agent_run_id" => agent_run_id,
+          "agent_type" => resolved.type,
+          "iterations_completed" => iterations_completed,
+          "decision" => decision,
+          "feedback" => feedback
+        })
+
+        case decision do
+          "STOP" ->
+            {:halt,
+             output
+             |> apply_supervisor_stop(supervisor_context, resolved.definition)
+             |> loop_output(iterations_completed, max_iterations, artifacts)}
+
+          "RESTART" ->
+            {:cont, output, restart_loop_context(context, feedback), artifacts}
+
+          _continue ->
+            {:cont, output, maybe_put(context, "supervisor_feedback", feedback), artifacts}
+        end
+      end
+    else
+      {:cont, output, context, artifacts}
+    end
+  end
+
+  defp execute_turn(project_root, resolved, context, agent_run_id, opts, hook_runner, iteration) do
+    objective = render_objective_for_turn(resolved, context, iteration)
+    invocation = build_invocation(project_root, resolved, context, objective, agent_run_id)
+
+    with {:ok, runtime_result} <- runtime_invoke(project_root, invocation, opts),
+         {:ok, output_context, validation_artifacts} <-
+           validate_output(
+             project_root,
+             resolved,
+             agent_run_id,
+             runtime_result,
+             context,
+             hook_runner
+           ) do
+      text = runtime_result.text
+
+      gate_result =
+        Map.get(output_context, "gate_result") ||
+          Result.extract_gate_result(text, resolved.definition)
+
+      report = Result.extract_report(text, resolved.definition)
+
+      {:ok,
+       %{
+         "agent_run_id" => agent_run_id,
+         "outputs" => %{
+           "gate_result" => gate_result,
+           "report" => report,
+           "text" => text
+         },
+         "artifacts" => validation_artifacts,
+         "effects" => [],
+         "errors" => result_errors(gate_result, resolved.definition.valid_results),
+         "metadata" =>
+           turn_metadata(invocation, runtime_result)
+           |> maybe_put_iteration(iteration)
+       }}
     end
   end
 
@@ -190,6 +481,29 @@ defmodule Indexer.Agents.Runner do
       nil -> Indexer.Runtime.invoke(project_root, invocation, runtime_opts)
       runner when is_function(runner, 3) -> runner.(project_root, invocation, runtime_opts)
     end
+  end
+
+  defp render_objective_for_turn(resolved, context, nil) do
+    objective = render_objective(resolved, context)
+
+    if resolved.definition.mode == "once" do
+      Map.put(objective, "continuation", nil)
+    else
+      objective
+    end
+  end
+
+  defp render_objective_for_turn(resolved, context, iteration) when is_integer(iteration) do
+    objective = render_objective(resolved, context)
+
+    continuation =
+      if iteration > 0 do
+        objective["continuation"]
+      end
+
+    objective
+    |> Map.put("continuation", continuation)
+    |> maybe_append_continuation(continuation)
   end
 
   defp render_objective(%{markdown: nil, definition: definition}, context) do
@@ -283,7 +597,18 @@ defmodule Indexer.Agents.Runner do
           })
 
           status = Map.get(result, "status", "ok")
-          next_context = Registry.deep_merge(acc_context, Map.get(result, "context", %{}))
+
+          result_context =
+            result
+            |> Map.take([
+              "complete",
+              "gate_result",
+              "supervisor_decision",
+              "supervisor_feedback"
+            ])
+            |> Map.merge(Map.get(result, "context", %{}))
+
+          next_context = Registry.deep_merge(acc_context, result_context)
           artifacts = acc_artifacts ++ Map.get(result, "artifacts", [])
 
           if status == "hard_fail" do
@@ -367,6 +692,204 @@ defmodule Indexer.Agents.Runner do
       [%{"reason" => "invalid_gate_result", "gate_result" => gate_result}]
     end
   end
+
+  defp completion_output(agent_run_id) do
+    %{
+      "agent_run_id" => agent_run_id,
+      "outputs" => %{
+        "gate_result" => "UNKNOWN",
+        "report" => nil,
+        "text" => ""
+      },
+      "artifacts" => [],
+      "effects" => [],
+      "errors" => [],
+      "metadata" => %{}
+    }
+  end
+
+  defp apply_completion_check(output, check, definition) do
+    gate_result =
+      check["gate_result"] ||
+        get_in(output, ["outputs", "gate_result"]) ||
+        completion_success_result(definition)
+
+    gate_result =
+      if check["complete"] and gate_result == "UNKNOWN" do
+        completion_success_result(definition)
+      else
+        gate_result
+      end
+
+    report = get_in(output, ["outputs", "report"]) || completion_report(check)
+
+    output
+    |> put_in(["outputs", "gate_result"], gate_result)
+    |> put_in(["outputs", "report"], report)
+    |> Map.put("errors", result_errors(gate_result, definition.valid_results))
+    |> update_in(["metadata"], &Map.put(&1, "completion_check", check))
+  end
+
+  defp completion_success_result(definition) do
+    cond do
+      "PASS" in definition.valid_results -> "PASS"
+      definition.valid_results != [] -> hd(definition.valid_results)
+      true -> "UNKNOWN"
+    end
+  end
+
+  defp completion_report(check) do
+    check
+    |> Map.get("diagnostics", [])
+    |> Enum.map_join("\n", fn diagnostic ->
+      Map.get(diagnostic, "message", inspect(diagnostic))
+    end)
+  end
+
+  defp supervisor_decision_value(context) do
+    context
+    |> Map.get("supervisor_decision", Map.get(context, "decision", "CONTINUE"))
+    |> to_string()
+    |> String.upcase()
+  end
+
+  defp supervisor_feedback(context) do
+    Map.get(context, "supervisor_feedback") || Map.get(context, "feedback")
+  end
+
+  defp apply_supervisor_stop(output, supervisor_context, definition) do
+    gate_result =
+      Map.get(supervisor_context, "gate_result") ||
+        get_in(output, ["outputs", "gate_result"])
+
+    output
+    |> put_in(["outputs", "gate_result"], gate_result)
+    |> Map.put("errors", result_errors(gate_result, definition.valid_results))
+    |> update_in(["metadata"], fn metadata ->
+      metadata
+      |> Map.put("supervisor_decision", "STOP")
+      |> maybe_put("supervisor_feedback", supervisor_feedback(supervisor_context))
+    end)
+  end
+
+  defp restart_loop_context(context, feedback) do
+    context
+    |> Map.drop([
+      "previous_gate_result",
+      "previous_report",
+      "previous_text",
+      "previous_summary",
+      "runtime_session_id"
+    ])
+    |> Map.put("supervisor_restart", true)
+    |> maybe_put("supervisor_feedback", feedback)
+  end
+
+  defp truthy?(value), do: value in [true, "true", 1, "1", "yes"]
+
+  defp max_iterations(resolved, context) do
+    value =
+      resolved.max_iterations ||
+        get_in(context, ["policy", "max_iterations"]) ||
+        1
+
+    case value do
+      integer when is_integer(integer) and integer > 0 -> integer
+      binary when is_binary(binary) -> binary_max_iterations(binary)
+      _other -> 1
+    end
+  end
+
+  defp binary_max_iterations(value) do
+    case Integer.parse(value) do
+      {integer, ""} when integer > 0 -> integer
+      _other -> 1
+    end
+  end
+
+  defp iteration_context(context, 0), do: Map.put(context, "iteration", 0)
+
+  defp iteration_context(context, iteration) do
+    Map.merge(context, %{
+      "iteration" => iteration,
+      "previous_iteration" => iteration - 1
+    })
+  end
+
+  defp next_loop_context(context, output) do
+    runtime_session_id = get_in(output, ["metadata", "runtime_session_id"])
+
+    context
+    |> maybe_put("runtime_session_id", runtime_session_id)
+    |> Map.put("previous_gate_result", get_in(output, ["outputs", "gate_result"]))
+    |> Map.put("previous_report", get_in(output, ["outputs", "report"]))
+    |> Map.put("previous_text", get_in(output, ["outputs", "text"]))
+    |> Map.put("previous_summary", compact_summary(output))
+  end
+
+  defp terminal_gate_result?(gate_result, definition) do
+    gate_result != "UNKNOWN" and gate_result in definition.valid_results
+  end
+
+  defp loop_output(output, iterations_completed, max_iterations, artifacts) do
+    output
+    |> Map.put("artifacts", artifacts)
+    |> update_in(["metadata"], fn metadata ->
+      metadata
+      |> Map.put("iterations_completed", iterations_completed)
+      |> Map.put("max_iterations", max_iterations)
+    end)
+  end
+
+  defp add_loop_error(output, reason, details) do
+    error = Map.put(details, "reason", reason)
+
+    output
+    |> update_in(["errors"], &(&1 ++ [error]))
+    |> update_in(["metadata"], &Map.put(&1, "loop_status", reason))
+  end
+
+  defp turn_metadata(invocation, runtime_result) do
+    %{
+      "runtime" => invocation.runtime,
+      "runtime_session_id" => runtime_result.session.runtime_session_id,
+      "events_count" => length(runtime_result.events)
+    }
+  end
+
+  defp maybe_put_iteration(metadata, nil), do: metadata
+  defp maybe_put_iteration(metadata, iteration), do: Map.put(metadata, "iteration", iteration)
+
+  defp maybe_append_continuation(objective, continuation) when continuation in [nil, ""],
+    do: objective
+
+  defp maybe_append_continuation(objective, continuation) do
+    Map.update(objective, "user", continuation, fn
+      nil -> continuation
+      "" -> continuation
+      user -> user <> "\n\n" <> continuation
+    end)
+  end
+
+  defp compact_summary(output) do
+    get_in(output, ["outputs", "report"]) ||
+      output
+      |> get_in(["outputs", "text"])
+      |> compact_text()
+  end
+
+  defp compact_text(nil), do: nil
+
+  defp compact_text(text) when is_binary(text) do
+    if String.length(text) > 4_000 do
+      String.slice(text, 0, 4_000)
+    else
+      text
+    end
+  end
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
   defp append_agent_event(project_root, type, agent_run_id, payload) do
     event =

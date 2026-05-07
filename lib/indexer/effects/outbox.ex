@@ -2,8 +2,8 @@ defmodule Indexer.Effects.Outbox do
   @moduledoc """
   JSONL-backed effect outbox helpers.
 
-  The runner/executor is not implemented yet. This module starts the durable
-  record protocol required by the specs and TLA model.
+  The outbox stores pending, retry, completion, and failure records in the
+  durable protocol required by the specs and TLA model.
   """
 
   alias Indexer.Effects.Effect
@@ -36,10 +36,19 @@ defmodule Indexer.Effects.Outbox do
   """
   @spec pending(Path.t()) :: [map()]
   def pending(project_root) when is_binary(project_root) do
+    ready(project_root, :infinity)
+  end
+
+  @doc """
+  Returns pending effects that still have retry budget.
+  """
+  @spec ready(Path.t(), pos_integer() | :infinity) :: [map()]
+  def ready(project_root, max_attempts) when is_binary(project_root) do
     project_root
     |> current()
     |> Map.values()
     |> Enum.filter(&(&1["status"] == "pending"))
+    |> Enum.filter(&within_attempt_budget?(&1, max_attempts))
     |> Enum.sort_by(& &1["id"])
   end
 
@@ -66,6 +75,15 @@ defmodule Indexer.Effects.Outbox do
     append_effect_event!(project_root, "effect.failed", failed, error, opts)
   end
 
+  @doc """
+  Keeps a failed effect pending for a later drain attempt.
+  """
+  @spec mark_retry!(Path.t(), Effect.t(), map(), keyword()) :: map()
+  def mark_retry!(project_root, %Effect{} = effect, error, opts \\ []) when is_map(error) do
+    retry = %{effect | status: "pending", attempts: effect.attempts + 1}
+    append_effect_event!(project_root, "effect.retry_scheduled", retry, error, opts)
+  end
+
   defp append_effect_event!(project_root, type, effect, extra_payload, opts) do
     payload =
       Map.merge(%{"effect" => Effect.to_map(effect)}, Indexer.State.Json.normalize(extra_payload))
@@ -85,7 +103,7 @@ defmodule Indexer.Effects.Outbox do
   end
 
   defp fold_effect_event(%{"type" => type, "payload" => %{"effect" => effect} = payload}, acc)
-       when type in ["effect.completed", "effect.failed"] do
+       when type in ["effect.completed", "effect.failed", "effect.retry_scheduled"] do
     id = effect["id"]
 
     Map.update(acc, id, effect, fn existing ->
@@ -96,4 +114,10 @@ defmodule Indexer.Effects.Outbox do
   end
 
   defp fold_effect_event(_event, acc), do: acc
+
+  defp within_attempt_budget?(_effect, :infinity), do: true
+
+  defp within_attempt_budget?(effect, max_attempts) do
+    Map.get(effect, "attempts", 0) < max_attempts
+  end
 end

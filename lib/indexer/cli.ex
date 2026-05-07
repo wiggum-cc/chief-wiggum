@@ -99,6 +99,24 @@ defmodule Indexer.CLI do
     root |> Indexer.ControlBranch.Exporter.export!() |> JSON.encode!() |> IO.puts()
   end
 
+  def main(["control", "publish" | rest]) do
+    root = List.first(rest) || File.cwd!()
+
+    case Indexer.ControlBranch.Publisher.publish!(root) do
+      {:ok, result} ->
+        result |> JSON.encode!() |> IO.puts()
+
+      {:error, error} ->
+        error |> JSON.encode!() |> IO.puts()
+        System.halt(1)
+    end
+  end
+
+  def main(["control", "import" | rest]) do
+    root = List.first(rest) || File.cwd!()
+    root |> Indexer.ControlBranch.Importer.import!() |> JSON.encode!() |> IO.puts()
+  end
+
   def main(["projection", "rebuild" | rest]) do
     root = List.first(rest) || File.cwd!()
     root |> Indexer.State.Projections.rebuild!() |> JSON.encode!() |> IO.puts()
@@ -121,6 +139,8 @@ defmodule Indexer.CLI do
       change-set list [PROJECT_ROOT]
       change-set merge-plan [PROJECT_ROOT]
       control export [PROJECT_ROOT]
+      control publish [PROJECT_ROOT]
+      control import [PROJECT_ROOT]
       projection rebuild [PROJECT_ROOT]
     """)
   end

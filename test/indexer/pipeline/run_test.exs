@@ -1,6 +1,7 @@
 defmodule Indexer.Pipeline.RunTest do
   use ExUnit.Case, async: true
 
+  alias Indexer.Effects.Outbox
   alias Indexer.Pipeline.Run
   alias Indexer.State.Jsonl
 
@@ -157,6 +158,67 @@ defmodule Indexer.Pipeline.RunTest do
     assert Enum.count(node_events, &(&1["type"] == "pipeline.hook.completed")) == 2
   end
 
+  test "commit_after records a git commit effect for successful writable steps" do
+    root = tmp_dir()
+
+    pipeline = %{
+      name: "commit-after",
+      steps: [
+        %{id: "work", agent: "test.pass", commit_after: true}
+      ]
+    }
+
+    runner = fn _agent, _context ->
+      %{"outputs" => %{"gate_result" => "PASS", "report" => "implemented change"}}
+    end
+
+    assert {:ok, result} = Run.run(root, pipeline, runner, context: %{"workspace" => root})
+    assert result.status == "completed"
+
+    assert [
+             %{
+               "effect_type" => "git.commit_workspace",
+               "scope_type" => "node_run",
+               "status" => "pending",
+               "payload" => payload
+             }
+           ] = root |> Outbox.current() |> Map.values()
+
+    assert payload["workspace_path"] == root
+    assert payload["step_id"] == "work"
+    assert payload["message"] =~ "implemented change"
+
+    node_events = root |> Jsonl.ledger_path("pipeline_node_runs") |> Jsonl.read!()
+    assert Enum.any?(node_events, &(&1["type"] == "pipeline.node.effect_requested"))
+  end
+
+  test "readonly steps restore tracked workspace changes when starting clean" do
+    root = git_repo!()
+    File.write!(Path.join(root, "tracked.txt"), "original\n")
+    git!(root, ["add", "tracked.txt"])
+    git!(root, ["commit", "-m", "base"])
+
+    pipeline = %{
+      name: "readonly",
+      steps: [
+        %{id: "inspect", agent: "test.readonly", readonly: true}
+      ]
+    }
+
+    runner = fn "test.readonly", context ->
+      assert context["config"]["readonly"] == true
+      File.write!(Path.join(root, "tracked.txt"), "mutated\n")
+      "PASS"
+    end
+
+    assert {:ok, result} = Run.run(root, pipeline, runner, context: %{"workspace" => root})
+    assert result.status == "completed"
+    assert File.read!(Path.join(root, "tracked.txt")) == "original\n"
+
+    node_events = root |> Jsonl.ledger_path("pipeline_node_runs") |> Jsonl.read!()
+    assert Enum.any?(node_events, &(&1["type"] == "pipeline.node.readonly_restored"))
+  end
+
   defp tmp_dir do
     path =
       Path.join(
@@ -167,5 +229,26 @@ defmodule Indexer.Pipeline.RunTest do
     File.rm_rf!(path)
     File.mkdir_p!(path)
     path
+  end
+
+  defp git_repo! do
+    path =
+      Path.join(
+        System.tmp_dir!(),
+        "indexer-pipeline-git-test-#{System.unique_integer([:positive])}"
+      )
+
+    File.rm_rf!(path)
+    File.mkdir_p!(path)
+    git!(path, ["init", "-b", "main"])
+    git!(path, ["config", "user.email", "indexer@example.test"])
+    git!(path, ["config", "user.name", "Indexer Test"])
+    path
+  end
+
+  defp git!(repo, args) do
+    {stdout, exit_code} = System.cmd("git", args, cd: repo, stderr_to_stdout: true)
+    assert exit_code == 0, stdout
+    String.trim(stdout)
   end
 end

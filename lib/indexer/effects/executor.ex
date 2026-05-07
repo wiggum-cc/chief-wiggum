@@ -14,7 +14,8 @@ defmodule Indexer.Effects.Executor do
   """
   @spec drain(Path.t(), keyword()) :: {:ok, map()}
   def drain(project_root, opts \\ []) when is_binary(project_root) do
-    effects = Outbox.pending(project_root)
+    max_attempts = Keyword.get(opts, :max_attempts, 1)
+    effects = Outbox.ready(project_root, max_attempts)
 
     results =
       Enum.map(effects, fn effect_map ->
@@ -26,6 +27,7 @@ defmodule Indexer.Effects.Executor do
      %{
        "attempted" => length(results),
        "completed" => Enum.count(results, &match?({:ok, _}, &1)),
+       "retries" => Enum.count(results, &match?({:retry, _}, &1)),
        "failed" => Enum.count(results, &match?({:error, _}, &1)),
        "results" => Enum.map(results, &normalize_result/1)
      }}
@@ -34,9 +36,11 @@ defmodule Indexer.Effects.Executor do
   @doc """
   Executes one effect and records completion/failure.
   """
-  @spec execute_one(Path.t(), Effect.t(), keyword()) :: {:ok, map()} | {:error, map()}
+  @spec execute_one(Path.t(), Effect.t(), keyword()) ::
+          {:ok, map()} | {:retry, map()} | {:error, map()}
   def execute_one(project_root, %Effect{} = effect, opts \\ []) do
     runner = Keyword.get(opts, :runner, &dispatch/2)
+    max_attempts = Keyword.get(opts, :max_attempts, 1)
 
     case runner.(project_root, effect) do
       {:ok, result} ->
@@ -45,8 +49,14 @@ defmodule Indexer.Effects.Executor do
 
       {:error, error} ->
         error = normalize_error(error)
-        Outbox.mark_failed!(project_root, effect, error)
-        {:error, error}
+
+        if effect.attempts + 1 < max_attempts do
+          Outbox.mark_retry!(project_root, effect, error)
+          {:retry, error}
+        else
+          Outbox.mark_failed!(project_root, effect, error)
+          {:error, error}
+        end
     end
   rescue
     exception ->
@@ -55,8 +65,13 @@ defmodule Indexer.Effects.Executor do
         "class" => inspect(exception.__struct__)
       }
 
-      Outbox.mark_failed!(project_root, effect, error)
-      {:error, error}
+      if effect.attempts + 1 < Keyword.get(opts, :max_attempts, 1) do
+        Outbox.mark_retry!(project_root, effect, error)
+        {:retry, error}
+      else
+        Outbox.mark_failed!(project_root, effect, error)
+        {:error, error}
+      end
   end
 
   defp dispatch(project_root, %Effect{effect_type: "work_item.create", payload: payload}) do
@@ -89,8 +104,52 @@ defmodule Indexer.Effects.Executor do
     end
   end
 
+  defp dispatch(project_root, %Effect{effect_type: "git.commit_workspace", payload: payload}) do
+    payload = Indexer.State.Json.normalize(payload)
+    workspace = Map.get(payload, "workspace_path", project_root)
+    message = Map.get(payload, "message", "Indexer checkpoint")
+
+    cond do
+      not Indexer.Git.Repository.repo?(workspace) ->
+        {:error, %{"reason" => "not_git_repository", "workspace_path" => workspace}}
+
+      true ->
+        commit_workspace(workspace, message)
+    end
+  end
+
   defp dispatch(project_root, %Effect{effect_type: "change_set.create", payload: payload}) do
     {:ok, %{"change_set" => Indexer.ChangeSets.create!(project_root, payload)}}
+  end
+
+  defp dispatch(project_root, %Effect{effect_type: "control_branch.publish", payload: payload}) do
+    opts =
+      payload
+      |> Indexer.State.Json.normalize()
+      |> Enum.map(fn
+        {"branch", branch} -> {:branch, branch}
+        {"message", message} -> {:message, message}
+        {"worktree_path", path} -> {:worktree_path, path}
+        {key, value} -> {String.to_atom(key), value}
+      end)
+
+    case Indexer.ControlBranch.Publisher.publish!(project_root, opts) do
+      {:ok, result} -> {:ok, result}
+      {:error, error} -> {:error, error}
+    end
+  end
+
+  defp dispatch(project_root, %Effect{effect_type: "control_branch.import", payload: payload}) do
+    opts =
+      payload
+      |> Indexer.State.Json.normalize()
+      |> Enum.map(fn
+        {"branch", branch} -> {:branch, branch}
+        {"input_dir", path} -> {:input_dir, path}
+        {key, value} -> {String.to_atom(key), value}
+      end)
+
+    {:ok, Indexer.ControlBranch.Importer.import!(project_root, opts)}
   end
 
   defp dispatch(project_root, %Effect{
@@ -165,10 +224,47 @@ defmodule Indexer.Effects.Executor do
   end
 
   defp normalize_result({:ok, result}), do: %{"status" => "completed", "result" => result}
+  defp normalize_result({:retry, error}), do: %{"status" => "retry_scheduled", "error" => error}
   defp normalize_result({:error, error}), do: %{"status" => "failed", "error" => error}
 
   defp normalize_error(error) when is_map(error), do: Indexer.State.Json.normalize(error)
   defp normalize_error(error), do: %{"reason" => inspect(error)}
+
+  defp commit_workspace(workspace, message) do
+    with {:ok, status} <-
+           Indexer.Git.Repository.git(workspace, [
+             "status",
+             "--porcelain",
+             "--",
+             ".",
+             ":!.indexer"
+           ]) do
+      if status == "" do
+        {:ok, %{"status" => "no_changes", "workspace_path" => workspace}}
+      else
+        with {:ok, _} <-
+               Indexer.Git.Repository.git(workspace, ["add", "-A", "--", ".", ":!.indexer"]),
+             {:ok, _} <-
+               Indexer.Git.Repository.git(workspace, [
+                 "-c",
+                 "user.name=Indexer",
+                 "-c",
+                 "user.email=indexer@example.invalid",
+                 "commit",
+                 "-m",
+                 message
+               ]),
+             {:ok, sha} <- Indexer.Git.Repository.rev_parse(workspace, "HEAD") do
+          {:ok,
+           %{
+             "status" => "committed",
+             "workspace_path" => workspace,
+             "commit_sha" => sha
+           }}
+        end
+      end
+    end
+  end
 
   defp maybe_transition_worker(_project_root, nil, _event_type, _payload), do: :ok
 

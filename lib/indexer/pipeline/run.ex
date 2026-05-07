@@ -7,6 +7,7 @@ defmodule Indexer.Pipeline.Run do
   separately.
   """
 
+  alias Indexer.Effects.{Effect, Outbox}
   alias Indexer.Pipeline.{ResultMappings, Schema}
   alias Indexer.State.{Event, Jsonl}
 
@@ -70,6 +71,7 @@ defmodule Indexer.Pipeline.Run do
       pipeline_run_id: Keyword.get_lazy(opts, :pipeline_run_id, &new_pipeline_run_id/0),
       agent_runner: agent_runner,
       hook_runner: Keyword.get(opts, :hook_runner, &Indexer.Hooks.Executor.run/2),
+      context: Indexer.State.Json.normalize(Keyword.get(opts, :context, %{})),
       env: stringify_map(Keyword.get(opts, :env, %{})),
       pc: start_index(steps, Keyword.get(opts, :start_from)),
       visits: %{},
@@ -159,12 +161,19 @@ defmodule Indexer.Pipeline.Run do
         visit: visit,
         inline: false
       })
+
+    readonly_snapshot = readonly_snapshot(state, step)
+
+    state =
+      state
       |> run_hooks(step, node_run_id, "pre", %{"visit" => visit, "inline" => false})
 
     case call_agent(state, step, node_run_id, false) do
       {:ok, output} ->
         state =
-          run_hooks(state, step, node_run_id, "post", %{
+          state
+          |> restore_readonly(step, node_run_id, readonly_snapshot)
+          |> run_hooks(step, node_run_id, "post", %{
             "visit" => visit,
             "inline" => false,
             "output" => output
@@ -174,7 +183,9 @@ defmodule Indexer.Pipeline.Run do
 
       {:error, reason} ->
         failed =
-          append_node_event(state, "pipeline.node.failed", node_run_id, step, %{
+          state
+          |> restore_readonly(step, node_run_id, readonly_snapshot)
+          |> append_node_event("pipeline.node.failed", node_run_id, step, %{
             reason: inspect(reason)
           })
 
@@ -203,6 +214,7 @@ defmodule Indexer.Pipeline.Run do
             default_jump: mapping["default_jump"],
             outputs: output
           })
+          |> maybe_request_commit_after(step, node_run_id, output, mapping)
 
         route_from_result(state, step, effective_result, mapping)
 
@@ -267,6 +279,11 @@ defmodule Indexer.Pipeline.Run do
             visit: visit,
             inline: true
           })
+
+        readonly_snapshot = readonly_snapshot(state, handler)
+
+        state =
+          state
           |> run_hooks(handler, node_run_id, "pre", %{
             "parent_step_id" => parent_step["id"],
             "parent_result" => parent_result,
@@ -277,7 +294,9 @@ defmodule Indexer.Pipeline.Run do
         case call_agent(state, handler, node_run_id, true) do
           {:ok, output} ->
             state =
-              run_hooks(state, handler, node_run_id, "post", %{
+              state
+              |> restore_readonly(handler, node_run_id, readonly_snapshot)
+              |> run_hooks(handler, node_run_id, "post", %{
                 "parent_step_id" => parent_step["id"],
                 "visit" => visit,
                 "inline" => true,
@@ -288,7 +307,9 @@ defmodule Indexer.Pipeline.Run do
 
           {:error, reason} ->
             failed =
-              append_node_event(state, "pipeline.inline.failed", node_run_id, handler, %{
+              state
+              |> restore_readonly(handler, node_run_id, readonly_snapshot)
+              |> append_node_event("pipeline.inline.failed", node_run_id, handler, %{
                 reason: inspect(reason)
               })
 
@@ -319,6 +340,7 @@ defmodule Indexer.Pipeline.Run do
             default_jump: mapping["default_jump"],
             outputs: output
           })
+          |> maybe_request_commit_after(handler, node_run_id, output, mapping)
 
         inline_handler = get_in(handler, ["on_result", effective_result])
 
@@ -356,15 +378,16 @@ defmodule Indexer.Pipeline.Run do
   end
 
   defp call_agent(state, step, node_run_id, inline?) do
-    context = %{
-      "pipeline_run_id" => state.pipeline_run_id,
-      "node_run_id" => node_run_id,
-      "step_id" => step["id"],
-      "agent" => step["agent"],
-      "inline" => inline?,
-      "project_root" => state.project_root,
-      "config" => Map.get(step, "config", %{})
-    }
+    context =
+      Indexer.Agents.Registry.deep_merge(state.context, %{
+        "pipeline_run_id" => state.pipeline_run_id,
+        "node_run_id" => node_run_id,
+        "step_id" => step["id"],
+        "agent" => step["agent"],
+        "inline" => inline?,
+        "project_root" => state.project_root,
+        "config" => step_config(step)
+      })
 
     case state.agent_runner.(step["agent"], context) do
       {:ok, result} -> {:ok, normalize_agent_output(result)}
@@ -433,6 +456,132 @@ defmodule Indexer.Pipeline.Run do
   defp normalize_agent_output(%{} = result), do: Indexer.State.Json.normalize(result)
 
   defp normalize_agent_output(other), do: %{"outputs" => %{"gate_result" => to_string(other)}}
+
+  defp step_config(step) do
+    step
+    |> Map.get("config", %{})
+    |> maybe_put_step_config(step, "timeout_seconds")
+    |> maybe_put_step_config(step, "max_iterations")
+    |> maybe_put_step_config(step, "max_turns")
+    |> maybe_put_step_config(step, "readonly")
+  end
+
+  defp maybe_put_step_config(config, step, key) do
+    case Map.fetch(step, key) do
+      {:ok, value} -> Map.put(config, key, value)
+      :error -> config
+    end
+  end
+
+  defp maybe_request_commit_after(state, step, node_run_id, output, mapping) do
+    if Map.get(step, "commit_after", false) and not Map.get(step, "readonly", false) and
+         mapping["status"] == "success" do
+      effect =
+        Effect.new(
+          "git.commit_workspace",
+          "node_run",
+          node_run_id,
+          commit_effect_payload(state, step, node_run_id, output),
+          idempotency_key: "git.commit_workspace:#{node_run_id}:#{output_fingerprint(output)}"
+        )
+
+      Outbox.record_pending!(state.project_root, effect,
+        actor: state.actor,
+        causation_id: node_run_id,
+        correlation_id: state.pipeline_run_id
+      )
+
+      append_node_event(state, "pipeline.node.effect_requested", node_run_id, step, %{
+        effect_id: effect.id,
+        effect_type: effect.effect_type,
+        idempotency_key: effect.idempotency_key
+      })
+    else
+      state
+    end
+  end
+
+  defp readonly_snapshot(state, %{"readonly" => true}) do
+    workspace = Map.get(state.context, "workspace") || state.project_root
+
+    cond do
+      not Indexer.Git.Repository.repo?(workspace) ->
+        %{
+          "enabled" => true,
+          "workspace" => workspace,
+          "restorable" => false,
+          "reason" => "not_git_repository"
+        }
+
+      not Indexer.Git.Repository.clean?(workspace) ->
+        %{
+          "enabled" => true,
+          "workspace" => workspace,
+          "restorable" => false,
+          "reason" => "dirty_before"
+        }
+
+      true ->
+        %{"enabled" => true, "workspace" => workspace, "restorable" => true}
+    end
+  end
+
+  defp readonly_snapshot(_state, _step), do: %{"enabled" => false}
+
+  defp restore_readonly(state, _step, _node_run_id, %{"enabled" => false}), do: state
+
+  defp restore_readonly(state, step, node_run_id, %{
+         "restorable" => true,
+         "workspace" => workspace
+       }) do
+    case Indexer.Git.Repository.git(workspace, ["restore", "--staged", "--worktree", "."]) do
+      {:ok, _} ->
+        append_node_event(state, "pipeline.node.readonly_restored", node_run_id, step, %{
+          workspace: workspace
+        })
+
+      {:error, error} ->
+        append_node_event(state, "pipeline.node.readonly_restore_failed", node_run_id, step, %{
+          workspace: workspace,
+          error: error
+        })
+    end
+  end
+
+  defp restore_readonly(state, step, node_run_id, snapshot) do
+    append_node_event(state, "pipeline.node.readonly_restore_skipped", node_run_id, step, %{
+      workspace: snapshot["workspace"],
+      reason: snapshot["reason"]
+    })
+  end
+
+  defp commit_effect_payload(state, step, node_run_id, output) do
+    %{
+      "workspace_path" => Map.get(state.context, "workspace") || state.project_root,
+      "pipeline_run_id" => state.pipeline_run_id,
+      "node_run_id" => node_run_id,
+      "step_id" => step["id"],
+      "agent" => step["agent"],
+      "message" => commit_message(state, step, output)
+    }
+  end
+
+  defp commit_message(state, step, output) do
+    summary =
+      get_in(output, ["outputs", "report"]) ||
+        get_in(output, ["outputs", "text"]) ||
+        "Pipeline step completed."
+
+    "Indexer: #{state.pipeline["name"]}/#{step["id"]} (#{step["agent"]})\n\n" <>
+      String.slice(summary, 0, 1_000)
+  end
+
+  defp output_fingerprint(output) do
+    :sha256
+    |> :crypto.hash(JSON.encode!(output))
+    |> Base.encode16(case: :lower)
+    |> String.slice(0, 16)
+  end
 
   defp extract_gate_result(%{"outputs" => %{"gate_result" => result}}) when is_binary(result),
     do: result

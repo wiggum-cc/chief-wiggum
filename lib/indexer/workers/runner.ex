@@ -24,7 +24,7 @@ defmodule Indexer.Workers.Runner do
   def run(project_root, worker_id, opts \\ [])
       when is_binary(project_root) and is_binary(worker_id) do
     with {:ok, worker} <- Indexer.Workers.get(project_root, worker_id),
-         {:ok, pipeline} <- load_pipeline(worker, opts) do
+         {:ok, pipeline} <- load_pipeline(project_root, worker, opts) do
       Indexer.Workers.update!(project_root, worker_id, %{
         "pipeline_status" => "running",
         "pipeline_started_at" => timestamp()
@@ -39,6 +39,9 @@ defmodule Indexer.Workers.Runner do
         opts
         |> Keyword.put(:correlation_id, worker["work_item_id"])
         |> Keyword.put(:actor, %{"type" => "worker", "id" => worker_id})
+        |> Keyword.update(:context, worker_context(worker), fn context ->
+          Indexer.Agents.Registry.deep_merge(context, worker_context(worker))
+        end)
 
       case Indexer.Pipeline.Run.run(project_root, pipeline, agent_runner, pipeline_opts) do
         {:ok, result} ->
@@ -62,14 +65,14 @@ defmodule Indexer.Workers.Runner do
     end
   end
 
-  defp load_pipeline(worker, opts) do
+  defp load_pipeline(project_root, worker, opts) do
     case Keyword.get(opts, :pipeline) do
       nil ->
         path =
           opts
           |> Keyword.get(
             :pipeline_path,
-            Path.expand("config/pipelines/#{worker["pipeline"]}.json", File.cwd!())
+            Path.expand("config/pipelines/#{worker["pipeline"]}.json", project_root)
           )
 
         {:ok, Indexer.Pipeline.Loader.load_file!(path)}
@@ -79,6 +82,18 @@ defmodule Indexer.Workers.Runner do
     end
   rescue
     exception -> {:error, {exception.__struct__, Exception.message(exception)}}
+  end
+
+  defp worker_context(worker) do
+    %{
+      "worker" => worker,
+      "worker_id" => worker["id"],
+      "work_item_id" => worker["work_item_id"],
+      "workspace" => worker["workspace_path"],
+      "worker_dir" => worker["worker_dir"],
+      "target_ref" => worker["target_ref"],
+      "work_branch" => worker["work_branch"]
+    }
   end
 
   defp timestamp do
