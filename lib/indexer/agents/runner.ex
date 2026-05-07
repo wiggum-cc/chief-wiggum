@@ -447,11 +447,20 @@ defmodule Indexer.Agents.Runner do
              runtime_result,
              context,
              hook_runner
+           ),
+         {:ok, planned_context, plan_artifacts} <-
+           run_agent_hooks(
+             project_root,
+             resolved,
+             agent_run_id,
+             "plan_effects",
+             output_context,
+             hook_runner
            ) do
       text = runtime_result.text
 
       gate_result =
-        Map.get(output_context, "gate_result") ||
+        Map.get(planned_context, "gate_result") ||
           Result.extract_gate_result(text, resolved.definition)
 
       report = Result.extract_report(text, resolved.definition)
@@ -464,8 +473,8 @@ defmodule Indexer.Agents.Runner do
            "report" => report,
            "text" => text
          },
-         "artifacts" => validation_artifacts,
-         "effects" => [],
+         "artifacts" => validation_artifacts ++ plan_artifacts,
+         "effects" => Map.get(planned_context, "effects", []),
          "errors" => result_errors(gate_result, resolved.definition.valid_results),
          "metadata" =>
            turn_metadata(invocation, runtime_result)
@@ -602,6 +611,7 @@ defmodule Indexer.Agents.Runner do
             result
             |> Map.take([
               "complete",
+              "effects",
               "gate_result",
               "supervisor_decision",
               "supervisor_feedback"

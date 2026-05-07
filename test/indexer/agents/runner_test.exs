@@ -98,6 +98,49 @@ defmodule Indexer.Agents.RunnerTest do
     assert Enum.any?(events, &(&1["type"] == "agent.failed"))
   end
 
+  test "runs plan_effects hooks and includes requested effects in output" do
+    root = tmp_dir()
+    registry = effects_registry()
+
+    runtime_runner = fn _root, _invocation, _opts ->
+      text = "<result>PASS</result><report>done</report>"
+      {:ok, %{session: session(text: text), text: text, events: []}}
+    end
+
+    hook_runner = fn "planner", envelope ->
+      assert envelope["hook"] == "plan_effects"
+
+      {:ok,
+       %{
+         "effects" => [
+           %{
+             "effect_type" => "work_item.create",
+             "scope_type" => "work_item",
+             "scope_id" => "TASK-001"
+           }
+         ]
+       }}
+    end
+
+    assert {:ok, output} =
+             Runner.run(root, "test.effects", %{},
+               registry: registry,
+               runtime_runner: runtime_runner,
+               hook_runner: hook_runner
+             )
+
+    assert [
+             %{
+               "effect_type" => "work_item.create",
+               "scope_type" => "work_item",
+               "scope_id" => "TASK-001"
+             }
+           ] = output["effects"]
+
+    events = root |> Jsonl.ledger_path("agent_runs") |> Jsonl.read!()
+    assert Enum.any?(events, &(&1["type"] == "agent.hook.completed"))
+  end
+
   test "ralph_loop repeats until a terminal gate result and carries prior summary" do
     root = tmp_dir()
     parent = self()
@@ -378,6 +421,23 @@ defmodule Indexer.Agents.RunnerTest do
       },
       agents: %{
         "test.pass": %{}
+      }
+    })
+  end
+
+  defp effects_registry do
+    Registry.from_map(%{
+      defaults: %{
+        description: "Effect planning agent",
+        required_paths: ["workspace"],
+        valid_results: ["PASS", "FAIL"],
+        mode: "once",
+        runtime: %{adapter: "codex", mode: "cli_text"}
+      },
+      agents: %{
+        "test.effects": %{
+          hooks: %{"plan_effects" => ["planner"]}
+        }
       }
     })
   end

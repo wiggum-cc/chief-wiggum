@@ -39,39 +39,12 @@ defmodule Indexer.Runtime do
     with {:ok, adapter} <- resolve_adapter(invocation.runtime, opts),
          :ok <- adapter.validate_config(invocation.runtime_config),
          :ok <- maybe_rate_limit_check(adapter, invocation.runtime_config) do
-      append_runtime_event(project_root, invocation, "runtime.invocation.started", %{
-        "runtime" => invocation.runtime,
-        "mode" => invocation.mode
-      })
+      max_attempts =
+        opts
+        |> Keyword.get(:max_attempts, Map.get(invocation.runtime_config, "max_attempts", 1))
+        |> positive_attempts()
 
-      case adapter.invoke(invocation) do
-        {:ok, %Session{} = session} ->
-          normalized_events =
-            append_adapter_events(project_root, invocation, adapter, session.events)
-
-          text = extract_text!(adapter, session)
-
-          append_runtime_event(project_root, invocation, "runtime.invocation.completed", %{
-            "runtime" => invocation.runtime,
-            "mode" => invocation.mode,
-            "runtime_session_id" => session.runtime_session_id,
-            "status" => session.status
-          })
-
-          {:ok, %{session: session, text: text, events: normalized_events}}
-
-        {:error, reason} ->
-          class = adapter.classify_error(reason, invocation.runtime_config)
-
-          append_runtime_event(project_root, invocation, "runtime.invocation.failed", %{
-            "runtime" => invocation.runtime,
-            "mode" => invocation.mode,
-            "error_class" => to_string(class),
-            "reason" => inspect(reason)
-          })
-
-          {:error, %{class: class, reason: reason}}
-      end
+      invoke_with_retry(project_root, adapter, invocation, max_attempts, 0)
     end
   end
 
@@ -108,6 +81,59 @@ defmodule Indexer.Runtime do
       adapter.rate_limit_check(config)
     else
       :ok
+    end
+  end
+
+  defp positive_attempts(value) when is_integer(value) and value > 0, do: value
+  defp positive_attempts(_value), do: 1
+
+  defp invoke_with_retry(project_root, adapter, invocation, max_attempts, attempt) do
+    append_runtime_event(project_root, invocation, "runtime.invocation.started", %{
+      "runtime" => invocation.runtime,
+      "mode" => invocation.mode,
+      "attempt" => attempt
+    })
+
+    case adapter.invoke(invocation) do
+      {:ok, %Session{} = session} ->
+        normalized_events =
+          append_adapter_events(project_root, invocation, adapter, session.events)
+
+        text = extract_text!(adapter, session)
+
+        append_runtime_event(project_root, invocation, "runtime.invocation.completed", %{
+          "runtime" => invocation.runtime,
+          "mode" => invocation.mode,
+          "attempt" => attempt,
+          "runtime_session_id" => session.runtime_session_id,
+          "status" => session.status
+        })
+
+        {:ok, %{session: session, text: text, events: normalized_events}}
+
+      {:error, reason} ->
+        class = adapter.classify_error(reason, invocation.runtime_config)
+
+        append_runtime_event(project_root, invocation, "runtime.invocation.failed", %{
+          "runtime" => invocation.runtime,
+          "mode" => invocation.mode,
+          "attempt" => attempt,
+          "error_class" => to_string(class),
+          "reason" => inspect(reason)
+        })
+
+        if class == :retryable and attempt + 1 < max_attempts do
+          append_runtime_event(project_root, invocation, "runtime.invocation.retry_scheduled", %{
+            "runtime" => invocation.runtime,
+            "mode" => invocation.mode,
+            "attempt" => attempt,
+            "next_attempt" => attempt + 1
+          })
+
+          invoke_with_retry(project_root, adapter, invocation, max_attempts, attempt + 1)
+        else
+          {:error, %{class: class, reason: reason}}
+        end
     end
   end
 
