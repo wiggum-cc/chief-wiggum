@@ -1,13 +1,17 @@
-# Ralph directory (project-specific, not part of source)
-.ralph/
+# Indexer runtime state
+.indexer/
 
-# Override global gitignore patterns that conflict with project structure
-!lib/
-!lib64/
+# Elixir build artifacts
+/_build/
+/deps/
+/.elixir_ls/
+*.ez
+*.beam
+erl_crash.dump
 
 # Common patterns
 *.log
-!tui/tests/fixtures/**/*.log
+!v1/tui/tests/fixtures/**/*.log
 *.pid
 *.swp
 *.swo
@@ -18,8 +22,8 @@
 .vscode/
 .idea/
 
-# Claude local settings
-.claude/settings.local.json
+# Local agent settings
+.claude/
 .codex
 
 # Test artifacts
@@ -29,12 +33,11 @@ test-*/
 formal/benchmark-results/
 formal/mocks/
 
-# UI dependencies and build artifacts
-ui/node_modules/
-ui/client/node_modules/
-ui/server/node_modules/
-ui/client/dist/
-ui/server/dist/
-.claude/
+# v1 UI dependencies and build artifacts
+v1/ui/node_modules/
+v1/ui/client/node_modules/
+v1/ui/server/node_modules/
+v1/ui/client/dist/
+v1/ui/server/dist/
 perf.data
 _apalache-out/

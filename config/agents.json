@@ -1,413 +1,61 @@
 {
-  "agents": {
-    "system.task-worker": {
-      "max_iterations": 20,
-      "max_turns": 50,
-      "timeout_seconds": 10800,
-      "plan_mode": false,
-      "result_mappings": {
-        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
-        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" }
-      }
+  "defaults": {
+    "max_iterations": 20,
+    "max_turns": 50,
+    "timeout_seconds": 10800,
+    "runtime": {
+      "adapter": "codex",
+      "mode": "app_server"
     },
-    "engineering.software-engineer": {
-      "max_iterations": 20,
-      "max_turns": 50,
-      "supervisor_interval": 2,
-      "timeout_seconds": 10800,
-      "result_mappings": {
-        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
-        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" }
-      }
-    },
-    "general.task-summarizer": {
-      "max_iterations": 1,
-      "max_turns": 10,
-      "timeout_seconds": 600,
-      "result_mappings": {
-        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
-        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" }
-      }
-    },
-    "general.documentation-writer": {
-      "max_iterations": 1,
-      "max_turns": 100,
-      "timeout_seconds": 600,
-      "result_mappings": {
-        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
-        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" }
-      }
-    },
-    "general.domain-expert": {
-      "max_iterations": 3,
-      "max_turns": 50,
-      "timeout_seconds": 300,
-      "result_mappings": {
-        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
-        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" }
-      }
-    },
-    "product.plan-mode": {
-      "max_iterations": 5,
-      "max_turns": 60,
-      "timeout_seconds": 1200,
-      "result_mappings": {
-        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
-        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" }
-      }
-    },
-    "product.system-architect": {
-      "max_iterations": 8,
-      "max_turns": 50,
-      "timeout_seconds": 1200,
-      "result_mappings": {
-        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
-        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" }
-      }
-    },
-    "engineering.pr-comment-fix": {
-      "max_iterations": 10,
-      "max_turns": 50,
-      "timeout_seconds": 3600,
-      "auto_commit": true,
-      "result_mappings": {
-        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
-        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" },
-        "FIX":  { "status": "partial", "exit_code": 0, "default_jump": "prev" }
-      }
-    },
-    "engineering.validation-review": {
-      "max_iterations": 5,
-      "max_turns": 50,
-      "timeout_seconds":3600,
-      "result_mappings": {
-        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
-        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" }
-      }
-    },
-    "engineering.git-conflict-resolver": {
-      "max_iterations": 10,
-      "max_turns": 40,
-      "timeout_seconds": 1800,
-      "result_mappings": {
-        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
-        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" }
-      }
-    },
-    "engineering.security-audit": {
-      "max_iterations": 8,
-      "max_turns": 60,
-      "timeout_seconds": 2400,
-      "result_mappings": {
-        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
-        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" },
-        "FIX":  { "status": "partial", "exit_code": 0, "default_jump": "prev" }
-      }
-    },
-    "engineering.security-fix": {
-      "max_iterations": 10,
-      "max_turns": 80,
-      "timeout_seconds": 7200,
-      "result_mappings": {
-        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
-        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" },
-        "FIX":  { "status": "partial", "exit_code": 0, "default_jump": "prev" }
-      }
-    },
-    "engineering.generic-fix": {
-      "max_iterations": 10,
-      "max_turns": 80,
-      "timeout_seconds": 7200,
-      "result_mappings": {
-        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
-        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" },
-        "FIX":  { "status": "partial", "exit_code": 0, "default_jump": "prev" }
-      }
-    },
-    "engineering.test-coverage": {
-      "max_iterations": 10,
-      "max_turns": 60,
-      "timeout_seconds": 7200,
-      "result_mappings": {
-        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
-        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" },
-        "FIX":  { "status": "partial", "exit_code": 0, "default_jump": "prev" },
-        "SKIP": { "status": "success", "exit_code": 0, "default_jump": "next" }
-      }
-    },
-    "engineering.test-runner": {
-      "max_iterations": 3,
-      "max_turns": 50,
-      "timeout_seconds": 7200,
-      "result_mappings": {
-        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
-        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" },
-        "FIX":  { "status": "partial", "exit_code": 0, "default_jump": "prev" },
-        "SKIP": { "status": "success", "exit_code": 0, "default_jump": "next" }
-      }
-    },
-    "engineering.master-followup": {
-      "max_iterations": 10,
-      "max_turns": 100,
-      "timeout_seconds": 10800,
-      "result_mappings": {
-        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
-        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" },
-        "FIX":  { "status": "partial", "exit_code": 0, "default_jump": "prev" },
-        "SKIP": { "status": "success", "exit_code": 0, "default_jump": "next" }
-      }
-    },
-    "engineering.code-review": {
-      "max_iterations": 6,
-      "max_turns": 50,
-      "timeout_seconds": 1800,
-      "result_mappings": {
-        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
-        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" },
-        "FIX":  { "status": "partial", "exit_code": 0, "default_jump": "prev" }
-      }
-    },
-    "system.memory-analyst": {
-      "max_iterations": 1,
-      "max_turns": 40,
-      "timeout_seconds": 600,
-      "auto_commit": false,
-      "result_mappings": {
-        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
-        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" }
-      }
-    },
-    "system.resume-decide": {
-      "max_iterations": 1,
-      "max_turns": 50,
-      "timeout_seconds": 600,
-      "result_mappings": {
-        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
-        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" }
-      }
-    },
-    "system.failure-summarizer": {
-      "max_iterations": 1,
-      "max_turns": 40,
-      "timeout_seconds": 600,
-      "result_mappings": {
-        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
-        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" }
-      }
-    },
-    "system.failure-resolver": {
-      "max_iterations": 3,
-      "max_turns": 50,
-      "timeout_seconds": 900,
-      "result_mappings": {
-        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
-        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" },
-        "FIX": { "status": "partial", "exit_code": 0, "default_jump": "self" }
-      }
-    },
-    "system.codebase-health": {
-      "max_iterations": 3,
-      "max_turns": 70,
-      "timeout_seconds": 1200,
-      "result_mappings": {
-        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
-        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" }
-      }
-    },
-    "system.todo-hunter": {
-      "max_iterations": 1,
-      "max_turns": 40,
-      "timeout_seconds": 1200,
-      "result_mappings": {
-        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
-        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" }
-      }
-    },
-    "system.self-improver": {
-      "max_iterations": 1,
-      "max_turns": 100,
-      "timeout_seconds": 1800,
-      "result_mappings": {
-        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
-        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" }
-      }
-    },
-    "workflow.git-sync-main": {
-      "max_iterations": 1,
-      "max_turns": 5,
-      "timeout_seconds": 600,
-      "result_mappings": {
-        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
-        "FAIL": { "status": "failure", "exit_code": 0, "default_jump": "next" }
-      }
-    },
-    "workflow.git-commit-push": {
-      "max_iterations": 1,
-      "max_turns": 5,
-      "timeout_seconds": 600,
-      "result_mappings": {
-        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
-        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" }
-      }
-    },
-    "workflow.pr-merge": {
-      "max_iterations": 1,
-      "max_turns": 5,
-      "timeout_seconds": 600,
-      "result_mappings": {
-        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
-        "FAIL": { "status": "failure", "exit_code": 0, "default_jump": "next" }
-      }
-    },
-    "workflow.git-conflict-resolver": {
-      "max_iterations": 10,
-      "max_turns": 40,
-      "timeout_seconds": 1800,
-      "result_mappings": {
-        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
-        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" },
-        "SKIP": { "status": "success", "exit_code": 0, "default_jump": "next" }
-      }
-    },
-    "workflow.multi-pr-planner": {
-      "max_iterations": 3,
-      "max_turns": 50,
-      "timeout_seconds": 900,
-      "result_mappings": {
-        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
-        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" }
-      }
-    },
-    "workflow.batch-wait-turn": {
-      "max_iterations": 1,
-      "max_turns": 1,
-      "timeout_seconds": 1800,
-      "result_mappings": {
-        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
-        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" },
-        "SKIP": { "status": "success", "exit_code": 0, "default_jump": "next" }
-      }
-    },
-    "workflow.batch-signal-done": {
-      "max_iterations": 1,
-      "max_turns": 1,
-      "timeout_seconds": 60,
-      "result_mappings": {
-        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
-        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" },
-        "SKIP": { "status": "success", "exit_code": 0, "default_jump": "next" }
-      }
-    },
-    "workflow.batch-signal-failed": {
-      "max_iterations": 1,
-      "max_turns": 1,
-      "timeout_seconds": 60,
-      "result_mappings": {
-        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
-        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" },
-        "SKIP": { "status": "success", "exit_code": 0, "default_jump": "next" }
-      }
-    },
-    "engineering.intent-distill": {
-      "max_iterations": 8,
-      "max_turns": 80,
-      "timeout_seconds": 7200,
-      "result_mappings": {
-        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
-        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" },
-        "FIX":  { "status": "partial", "exit_code": 0, "default_jump": "self" }
-      }
-    },
-    "redteam.recon": {
-      "max_iterations": 10,
-      "max_turns": 80,
-      "timeout_seconds": 3600,
-      "result_mappings": {
-        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
-        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" }
-      }
-    },
-    "redteam.vuln-analysis": {
-      "max_iterations": 15,
-      "max_turns": 100,
-      "timeout_seconds": 7200,
-      "result_mappings": {
-        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
-        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" },
-        "FIX":  { "status": "partial", "exit_code": 0, "default_jump": "next" }
-      }
-    },
-    "redteam.exploit-validation": {
-      "max_iterations": 10,
-      "max_turns": 80,
-      "timeout_seconds": 5400,
-      "result_mappings": {
-        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
-        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" },
-        "FIX":  { "status": "partial", "exit_code": 0, "default_jump": "next" }
-      }
-    },
-    "redteam.report": {
-      "max_iterations": 1,
-      "max_turns": 80,
-      "timeout_seconds": 1800,
-      "result_mappings": {
-        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
-        "FIX":  { "status": "partial", "exit_code": 0, "default_jump": "next" }
-      }
-    },
-    "autofix.random-audit": {
-      "max_iterations": 1,
-      "max_turns": 120,
-      "timeout_seconds": 1800,
-      "result_mappings": {
-        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
-        "FAIL": { "status": "failure", "exit_code": 0, "default_jump": "next" }
-      }
-    },
-    "autofix.verify-fix": {
-      "max_iterations": 8,
-      "max_turns": 60,
-      "timeout_seconds": 3600,
-      "result_mappings": {
-        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
-        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" },
-        "SKIP": { "status": "success", "exit_code": 0, "default_jump": "next" }
-      }
-    },
-    "autofix.quality-gate": {
-      "max_iterations": 1,
-      "max_turns": 120,
-      "timeout_seconds": 3600,
-      "result_mappings": {
-        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
-        "FAIL": { "status": "failure", "exit_code": 0, "default_jump": "next" }
-      }
-    },
-    "redteam.remediate": {
-      "max_iterations": 10,
-      "max_turns": 100,
-      "timeout_seconds": 7200,
-      "result_mappings": {
-        "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
-        "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" },
-        "FIX":  { "status": "partial", "exit_code": 0, "default_jump": "prev" }
-      }
+    "result_mappings": {
+      "PASS": { "status": "success", "exit_code": 0, "default_jump": "next" },
+      "FAIL": { "status": "failure", "exit_code": 10, "default_jump": "abort" },
+      "FIX": { "status": "partial", "exit_code": 0, "default_jump": "prev" },
+      "SKIP": { "status": "success", "exit_code": 0, "default_jump": "next" },
+      "UNKNOWN": { "status": "unknown", "exit_code": 1, "default_jump": "self" }
     }
   },
-  "defaults": {
-    "max_iterations": 5,
-    "max_turns": 50,
-    "timeout_seconds": 3600,
-    "auto_commit": false,
-    "supervisor_interval": 2,
-    "max_restarts": 2,
-    "result_mappings": {
-      "PASS":    { "status": "success", "exit_code": 0, "default_jump": "next" },
-      "FAIL":    { "status": "failure", "exit_code": 10, "default_jump": "abort" },
-      "FIX":     { "status": "partial", "exit_code": 0, "default_jump": "prev" },
-      "SKIP":    { "status": "success", "exit_code": 0, "default_jump": "next" },
-      "UNKNOWN": { "status": "failure", "exit_code": 1, "default_jump": "abort" }
+  "agents": {
+    "product.plan-mode": {
+      "mode": "ralph_loop",
+      "readonly": true,
+      "valid_results": ["PASS", "FAIL"]
+    },
+    "engineering.software-engineer": {
+      "mode": "ralph_loop",
+      "valid_results": ["PASS", "FAIL"],
+      "supervisor_interval": 2
+    },
+    "general.task-summarizer": {
+      "mode": "resume",
+      "readonly": true,
+      "valid_results": ["PASS", "SKIP"]
+    },
+    "engineering.security-audit": {
+      "mode": "ralph_loop",
+      "readonly": true,
+      "valid_results": ["PASS", "FIX", "FAIL"]
+    },
+    "engineering.security-fix": {
+      "mode": "ralph_loop",
+      "valid_results": ["PASS", "FIX", "FAIL"]
+    },
+    "engineering.test-coverage": {
+      "mode": "ralph_loop",
+      "valid_results": ["PASS", "FIX", "FAIL", "SKIP"]
+    },
+    "engineering.generic-fix": {
+      "mode": "ralph_loop",
+      "valid_results": ["PASS", "FIX", "FAIL"]
+    },
+    "general.documentation-writer": {
+      "mode": "once",
+      "valid_results": ["PASS", "SKIP"]
+    },
+    "engineering.validation-review": {
+      "mode": "ralph_loop",
+      "readonly": true,
+      "valid_results": ["PASS", "FAIL"]
     }
   }
 }

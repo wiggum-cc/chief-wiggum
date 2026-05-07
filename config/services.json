@@ -4,776 +4,86 @@
     "timeout": 300,
     "restart_policy": {
       "on_failure": "skip",
-      "max_retries": 2
+      "max_retries": 2,
+      "backoff": {
+        "initial": 5,
+        "multiplier": 2,
+        "max": 300
+      }
+    },
+    "circuit_breaker": {
+      "enabled": false,
+      "threshold": 5,
+      "cooldown": 300,
+      "half_open_requests": 1
     }
+  },
+  "groups": {
+    "control": { "description": "Control branch synchronization", "enabled": true },
+    "workers": { "description": "Worker scheduling and recovery", "enabled": true },
+    "effects": { "description": "Effect outbox processing", "enabled": true }
   },
   "services": [
     {
-      "id": "validate-kanban",
-      "description": "Validate kanban.md format",
+      "id": "validate-control",
       "phase": "startup",
       "order": 10,
       "required": true,
       "schedule": { "type": "tick" },
       "execution": {
         "type": "function",
-        "function": "svc_orch_validate_kanban"
+        "module": "Indexer.Services.Handlers.Control",
+        "function": "validate"
       }
     },
     {
-      "id": "init-scheduler",
-      "description": "Initialize scheduler and detect dependency cycles",
-      "phase": "startup",
-      "order": 20,
-      "required": true,
-      "schedule": { "type": "tick" },
-      "execution": {
-        "type": "function",
-        "function": "svc_orch_init_scheduler"
-      }
-    },
-    {
-      "id": "preflight-git",
-      "description": "Check clean git status and pull main",
-      "phase": "startup",
-      "order": 30,
-      "required": true,
-      "schedule": { "type": "tick" },
-      "execution": {
-        "type": "function",
-        "function": "svc_orch_preflight_git"
-      }
-    },
-    {
-      "id": "preflight-ssh",
-      "description": "Test SSH connection to git remote",
-      "phase": "startup",
-      "order": 40,
-      "required": true,
-      "schedule": { "type": "tick" },
-      "execution": {
-        "type": "function",
-        "function": "svc_orch_preflight_ssh"
-      }
-    },
-    {
-      "id": "preflight-gh",
-      "description": "Test GitHub CLI authentication",
-      "phase": "startup",
-      "order": 50,
-      "required": true,
-      "schedule": { "type": "tick" },
-      "execution": {
-        "type": "function",
-        "function": "svc_orch_preflight_gh"
-      }
-    },
-    {
-      "id": "restore-workers",
-      "description": "Restore active workers from existing worker directories",
-      "phase": "startup",
-      "order": 60,
-      "schedule": { "type": "tick" },
-      "execution": {
-        "type": "function",
-        "function": "svc_orch_restore_workers"
-      }
-    },
-    {
-      "id": "memory-load",
-      "description": "Initialize memory directory structure on startup",
-      "phase": "startup",
-      "order": 70,
-      "schedule": { "type": "tick" },
-      "execution": {
-        "type": "function",
-        "function": "svc_memory_load"
-      }
-    },
-    {
-      "id": "meta-init",
-      "description": "Initialize meta-agent state directory",
-      "phase": "startup",
-      "order": 75,
-      "schedule": { "type": "tick" },
-      "execution": {
-        "type": "function",
-        "function": "svc_meta_init"
-      }
-    },
-    {
-      "id": "init-startup-display",
-      "description": "Display startup info and run initial status",
-      "phase": "startup",
-      "order": 80,
-      "schedule": { "type": "tick" },
-      "execution": {
-        "type": "function",
-        "function": "svc_orch_init_terminal"
-      }
-    },
-
-    {
-      "id": "pool-ingest",
-      "description": "Consume persisted pool entries from subshells",
-      "phase": "pre",
-      "order": 10,
-      "schedule": { "type": "tick" },
-      "execution": {
-        "type": "function",
-        "function": "svc_orch_pool_ingest"
-      }
-    },
-    {
-      "id": "resume-poll",
-      "description": "Poll background resume processes for completion",
-      "phase": "pre",
-      "order": 20,
-      "schedule": { "type": "tick" },
-      "execution": {
-        "type": "function",
-        "function": "svc_orch_resume_poll"
-      }
-    },
-    {
-      "id": "worker-cleanup",
-      "description": "Reap finished workers and run completion callbacks",
-      "phase": "pre",
-      "order": 30,
-      "schedule": { "type": "tick" },
-      "execution": {
-        "type": "function",
-        "function": "svc_orch_worker_cleanup"
-      }
-    },
-
-    {
-      "id": "github-issue-sync",
-      "description": "Sync GitHub issues to local kanban and push status updates",
+      "id": "control-branch-sync",
       "phase": "periodic",
-      "order": 5,
-      "schedule": {
-        "type": "interval",
-        "interval": 300,
-        "jitter": 30,
-        "run_on_startup": true
-      },
+      "groups": ["control"],
+      "schedule": { "type": "interval", "interval": 60, "run_on_startup": true },
       "execution": {
         "type": "function",
-        "function": "svc_orch_github_issue_sync"
+        "module": "Indexer.Services.Handlers.ControlBranch",
+        "function": "sync"
       },
-      "concurrency": {
-        "max_instances": 1,
-        "if_running": "skip"
-      },
-      "circuit_breaker": {
-        "enabled": true,
-        "threshold": 3,
-        "cooldown": 300
-      }
+      "concurrency": { "max_instances": 1, "if_running": "skip" }
     },
     {
-      "id": "github-plan-sync",
-      "description": "Sync plan files with GitHub issue comments",
+      "id": "effect-outbox",
       "phase": "periodic",
-      "order": 6,
-      "schedule": {
-        "type": "interval",
-        "interval": 300,
-        "jitter": 30,
-        "run_on_startup": true
-      },
+      "groups": ["effects"],
+      "schedule": { "type": "interval", "interval": 10, "run_on_startup": true },
       "execution": {
         "type": "function",
-        "function": "svc_orch_github_plan_sync"
+        "module": "Indexer.Services.Handlers.Effects",
+        "function": "drain"
       },
-      "concurrency": {
-        "max_instances": 1,
-        "if_running": "skip"
-      },
-      "circuit_breaker": {
-        "enabled": true,
-        "threshold": 3,
-        "cooldown": 300
-      }
-    },
-    {
-      "id": "pr-sync",
-      "description": "Sync PR statuses and detect new comments",
-      "phase": "periodic",
-      "order": 10,
-      "schedule": {
-        "type": "interval",
-        "interval": 300,
-        "jitter": 30,
-        "run_on_startup": true
-      },
-      "execution": {
-        "type": "command",
-        "command": "wiggum-pr sync"
-      },
-      "concurrency": {
-        "max_instances": 1,
-        "if_running": "skip"
-      },
-      "circuit_breaker": {
-        "enabled": true,
-        "threshold": 3,
-        "cooldown": 300
-      }
-    },
-    {
-      "id": "usage-tracker",
-      "description": "Update shared usage data for rate limiting",
-      "phase": "periodic",
-      "order": 20,
-      "schedule": {
-        "type": "interval",
-        "interval": 180,
-        "run_on_startup": true
-      },
-      "execution": {
-        "type": "function",
-        "function": "svc_orch_usage_tracker_write_shared"
-      }
-    },
-    {
-      "id": "log-rotation",
-      "description": "Rotate oversized global log files",
-      "phase": "periodic",
-      "order": 25,
-      "schedule": {
-        "type": "interval",
-        "interval": 300,
-        "run_on_startup": true
-      },
-      "execution": {
-        "type": "function",
-        "function": "svc_orch_log_rotation"
-      },
-      "concurrency": {
-        "max_instances": 1,
-        "if_running": "skip"
-      }
-    },
-    {
-      "id": "orphan-workspace",
-      "description": "Create workspaces for orphaned PRs",
-      "phase": "periodic",
-      "order": 30,
-      "schedule": {
-        "type": "interval",
-        "interval": 180,
-        "run_on_startup": true
-      },
-      "execution": {
-        "type": "function",
-        "function": "svc_orch_create_orphan_pr_workspaces"
-      }
-    },
-    {
-      "id": "pr-optimizer",
-      "description": "Optimize and execute PR merges",
-      "phase": "periodic",
-      "order": 40,
-      "schedule": {
-        "type": "interval",
-        "interval": 300,
-        "run_on_startup": true
-      },
-      "execution": {
-        "type": "function",
-        "function": "svc_orch_spawn_pr_optimizer"
-      },
-      "concurrency": {
-        "max_instances": 1,
-        "if_running": "skip"
-      }
-    },
-    {
-      "id": "multi-pr-planner",
-      "description": "Check for conflict batches and spawn multi-PR planner",
-      "phase": "periodic",
-      "order": 50,
-      "schedule": {
-        "type": "interval",
-        "interval": 300,
-        "run_on_startup": true
-      },
-      "execution": {
-        "type": "function",
-        "function": "svc_orch_spawn_multi_pr_planner"
-      },
-      "condition": {
-        "env_not_equals": { "WIGGUM_RUN_MODE": "merge-only" }
-      }
-    },
-    {
-      "id": "resume-decide",
-      "description": "Run resume-decide analysis for stopped workers",
-      "phase": "periodic",
-      "order": 55,
-      "schedule": {
-        "type": "interval",
-        "interval": 30,
-        "run_on_startup": true
-      },
-      "execution": {
-        "type": "function",
-        "function": "svc_orch_resume_decide"
-      },
-      "concurrency": {
-        "max_instances": 1,
-        "if_running": "skip"
-      }
-    },
-    {
-      "id": "fix-workers",
-      "description": "Spawn fix workers for PR comment issues",
-      "phase": "periodic",
-      "order": 60,
-      "schedule": {
-        "type": "interval",
-        "interval": 60,
-        "run_on_startup": true
-      },
-      "execution": {
-        "type": "function",
-        "function": "svc_orch_spawn_fix_workers"
-      },
-      "condition": {
-        "env_not_equals": { "WIGGUM_RUN_MODE": "merge-only" }
-      }
-    },
-    {
-      "id": "resolve-workers",
-      "description": "Spawn resolve workers for merge conflicts",
-      "phase": "periodic",
-      "order": 70,
-      "schedule": {
-        "type": "interval",
-        "interval": 60,
-        "run_on_startup": true
-      },
-      "execution": {
-        "type": "function",
-        "function": "svc_orch_spawn_resolve_workers"
-      }
-    },
-    {
-      "id": "failure-recovery",
-      "description": "Launch recovery agents for failed workers (background, up to RECOVERY_WORKER_LIMIT)",
-      "phase": "periodic",
-      "order": 75,
-      "timeout": 60,
-      "schedule": {
-        "type": "interval",
-        "interval": 30,
-        "jitter": 5,
-        "run_on_startup": true
-      },
-      "execution": {
-        "type": "function",
-        "function": "svc_orch_failure_recovery"
-      },
-      "concurrency": {
-        "max_instances": 1,
-        "if_running": "skip"
-      },
-      "condition": {
-        "env_not_equals": { "WIGGUM_RUN_MODE": "merge-only" }
-      }
-    },
-    {
-      "id": "github-resume-trigger",
-      "description": "Process wiggum:resume-request labels on failed tasks to trigger resume",
-      "phase": "periodic",
-      "order": 76,
-      "timeout": 60,
-      "schedule": {
-        "type": "interval",
-        "interval": 60,
-        "jitter": 5,
-        "run_on_startup": true
-      },
-      "execution": {
-        "type": "function",
-        "function": "svc_orch_github_resume_trigger"
-      },
-      "concurrency": {
-        "max_instances": 1,
-        "if_running": "skip"
-      },
-      "condition": {
-        "env_not_equals": { "WIGGUM_TASK_SOURCE_MODE": "local" }
-      }
-    },
-    {
-      "id": "metrics-export",
-      "description": "Export aggregated worker metrics to metrics.json",
-      "phase": "periodic",
-      "order": 90,
-      "schedule": {
-        "type": "interval",
-        "interval": 900
-      },
-      "execution": {
-        "type": "function",
-        "function": "svc_orch_metrics_export"
-      },
-      "concurrency": {
-        "max_instances": 1,
-        "if_running": "skip"
-      }
-    },
-    {
-      "id": "memory-extract",
-      "description": "Dispatch pending workers for memory analysis (writes context file)",
-      "phase": "periodic",
-      "order": 90,
-      "schedule": {
-        "type": "interval",
-        "interval": 300,
-        "run_on_startup": false
-      },
-      "execution": {
-        "type": "function",
-        "function": "svc_memory_extract"
-      },
-      "concurrency": {
-        "max_instances": 1,
-        "if_running": "skip"
-      }
-    },
-    {
-      "id": "memory-analyze",
-      "description": "Run memory-analyst pipeline on dispatched worker context",
-      "phase": "periodic",
-      "triggers": {
-        "on_complete": ["memory-extract"]
-      },
-      "condition": {
-        "file_exists": ".ralph/memory/.current-analysis.json"
-      },
-      "execution": {
-        "type": "pipeline",
-        "pipeline": "memory-extract",
-        "workspace": false
-      },
-      "timeout": 600,
-      "concurrency": {
-        "max_instances": 1,
-        "if_running": "skip"
-      }
-    },
-    {
-      "id": "memory-analyze-complete",
-      "description": "Post-analysis cleanup: rebuild indexes or re-queue on failure",
-      "phase": "periodic",
-      "triggers": {
-        "on_finish": ["memory-analyze"]
-      },
-      "execution": {
-        "type": "function",
-        "function": "svc_memory_analyze_complete"
-      }
-    },
-
-    {
-      "id": "meta-dispatch",
-      "description": "Track worker completions and dispatch meta-agent analysis",
-      "phase": "periodic",
-      "schedule": {
-        "type": "event",
-        "trigger": "worker.completed"
-      },
-      "execution": {
-        "type": "function",
-        "function": "svc_meta_count_completion"
-      },
-      "concurrency": {
-        "max_instances": 1,
-        "if_running": "skip"
-      }
-    },
-    {
-      "id": "meta-pipeline",
-      "description": "Run meta-agent analysis pipeline (rotates: health, todo, improve)",
-      "phase": "periodic",
-      "triggers": {
-        "on_complete": ["meta-dispatch"]
-      },
-      "condition": {
-        "file_exists": ".ralph/meta/.current-meta-context.json"
-      },
-      "execution": {
-        "type": "pipeline",
-        "pipeline": "meta-active",
-        "workspace": true
-      },
-      "timeout": 1800,
-      "concurrency": {
-        "max_instances": 1,
-        "if_running": "skip"
-      },
-      "circuit_breaker": {
-        "enabled": true,
-        "threshold": 3,
-        "cooldown": 1800
-      }
-    },
-    {
-      "id": "meta-complete",
-      "description": "Post-process meta-agent results: create tasks and PRs",
-      "phase": "periodic",
-      "triggers": {
-        "on_finish": ["meta-pipeline"]
-      },
-      "execution": {
-        "type": "function",
-        "function": "svc_meta_complete"
-      }
-    },
-    {
-      "id": "pr-optimizer-check",
-      "description": "Check for completed PR optimizer and process results",
-      "phase": "periodic",
-      "order": 80,
-      "schedule": {
-        "type": "interval",
-        "interval": 60,
-        "run_on_startup": true
-      },
-      "execution": {
-        "type": "function",
-        "function": "svc_orch_check_pr_optimizer"
-      }
-    },
-    {
-      "id": "distributed-heartbeat",
-      "description": "Update heartbeats for claimed tasks in distributed mode",
-      "phase": "periodic",
-      "order": 85,
-      "schedule": {
-        "type": "interval",
-        "interval": 180,
-        "run_on_startup": true
-      },
-      "execution": {
-        "type": "function",
-        "function": "svc_orch_distributed_heartbeat"
-      },
-      "condition": {
-        "env_not_equals": { "WIGGUM_TASK_SOURCE_MODE": "local" }
-      },
-      "concurrency": {
-        "max_instances": 1,
-        "if_running": "skip"
-      }
-    },
-    {
-      "id": "distributed-orphan-recovery",
-      "description": "Recover orphan tasks with stale heartbeats in distributed mode",
-      "phase": "periodic",
-      "order": 86,
-      "schedule": {
-        "type": "interval",
-        "interval": 300,
-        "run_on_startup": true
-      },
-      "execution": {
-        "type": "function",
-        "function": "svc_orch_distributed_orphan_recovery"
-      },
-      "condition": {
-        "env_not_equals": { "WIGGUM_TASK_SOURCE_MODE": "local" }
-      },
-      "concurrency": {
-        "max_instances": 1,
-        "if_running": "skip"
-      }
-    },
-
-    {
-      "id": "cleanup-event-ingest",
-      "description": "Ingest cleanup events from pre-phase (Python mode)",
-      "phase": "post",
-      "order": 1,
-      "schedule": { "type": "tick" },
-      "execution": {
-        "type": "function",
-        "function": "svc_orch_ingest_cleanup_event"
-      }
-    },
-    {
-      "id": "completion-check",
-      "description": "Check if all tasks are complete and signal exit",
-      "phase": "post",
-      "order": 10,
-      "schedule": { "type": "tick" },
-      "execution": {
-        "type": "function",
-        "function": "svc_orch_check_completion"
-      }
-    },
-    {
-      "id": "rate-limit-guard",
-      "description": "Check rate limits and pause if needed",
-      "phase": "post",
-      "order": 20,
-      "schedule": { "type": "tick" },
-      "execution": {
-        "type": "function",
-        "function": "svc_orch_rate_limit_guard"
-      }
+      "concurrency": { "max_instances": 1, "if_running": "skip" }
     },
     {
       "id": "scheduler-tick",
-      "description": "Parse kanban and update scheduler state",
       "phase": "post",
       "order": 30,
+      "groups": ["workers"],
       "schedule": { "type": "tick" },
       "execution": {
         "type": "function",
-        "function": "svc_orch_scheduler_tick"
-      }
-    },
-    {
-      "id": "fast-merge",
-      "description": "Attempt merge for workers in needs_merge state",
-      "phase": "post",
-      "order": 42,
-      "schedule": { "type": "tick" },
-      "execution": {
-        "type": "function",
-        "function": "svc_orch_process_pending_merges"
+        "module": "Indexer.Services.Handlers.Scheduler",
+        "function": "tick"
       }
     },
     {
       "id": "task-spawner",
-      "description": "Spawn workers for ready tasks and resume candidates",
       "phase": "post",
-      "order": 45,
+      "order": 40,
+      "groups": ["workers"],
+      "depends_on": ["scheduler-tick"],
+      "condition": { "env_not_equals": { "INDEXER_RUN_MODE": "resume-only" } },
       "schedule": { "type": "tick" },
       "execution": {
         "type": "function",
-        "function": "svc_orch_task_spawner"
-      }
-    },
-    {
-      "id": "orphan-detection",
-      "description": "Detect orphan workers without pool entries",
-      "phase": "periodic",
-      "order": 60,
-      "schedule": {
-        "type": "interval",
-        "interval": 60,
-        "run_on_startup": false
-      },
-      "execution": {
-        "type": "function",
-        "function": "svc_orch_orphan_detection"
-      }
-    },
-    {
-      "id": "aging-update",
-      "description": "Update aging tracking after scheduling events",
-      "phase": "post",
-      "order": 70,
-      "schedule": { "type": "tick" },
-      "execution": {
-        "type": "function",
-        "function": "svc_orch_aging_update"
-      }
-    },
-    {
-      "id": "status-display",
-      "description": "Log current orchestrator status",
-      "phase": "post",
-      "order": 35,
-      "schedule": { "type": "tick" },
-      "execution": {
-        "type": "function",
-        "function": "svc_orch_status_display"
-      }
-    },
-    {
-      "id": "state-save",
-      "description": "Persist service state to disk",
-      "phase": "post",
-      "order": 90,
-      "schedule": { "type": "tick" },
-      "execution": {
-        "type": "function",
-        "function": "svc_orch_state_save"
-      }
-    },
-
-    {
-      "id": "distributed-shutdown",
-      "description": "Release claimed tasks and stop heartbeats in distributed mode",
-      "phase": "shutdown",
-      "order": 5,
-      "schedule": { "type": "tick" },
-      "execution": {
-        "type": "function",
-        "function": "svc_orch_distributed_shutdown"
-      },
-      "condition": {
-        "env_not_equals": { "WIGGUM_TASK_SOURCE_MODE": "local" }
-      }
-    },
-    {
-      "id": "final-state-save",
-      "description": "Final service state persistence on shutdown",
-      "phase": "shutdown",
-      "order": 10,
-      "schedule": { "type": "tick" },
-      "execution": {
-        "type": "function",
-        "function": "svc_orch_state_save"
-      }
-    },
-    {
-      "id": "lock-cleanup",
-      "description": "Remove orchestrator lock file on shutdown",
-      "phase": "shutdown",
-      "order": 30,
-      "schedule": { "type": "tick" },
-      "execution": {
-        "type": "function",
-        "function": "svc_orch_lock_cleanup"
-      }
-    },
-
-    {
-      "id": "autofix",
-      "description": "Autonomous code improvement: randomly audit, verify, fix, and quality-gate",
-      "enabled": false,
-      "phase": "periodic",
-      "groups": ["autofix"],
-      "schedule": {
-        "type": "continuous",
-        "restart_delay": 300
-      },
-      "execution": {
-        "type": "pipeline",
-        "pipeline": "autofix",
-        "workspace": true,
-        "git_worktree": true,
-        "pull_before": true,
-        "max_workers": 4,
-        "tolerate_worker_failures": true
-      },
-      "timeout": 0,
-      "concurrency": {
-        "max_instances": 1,
-        "if_running": "skip"
-      },
-      "circuit_breaker": {
-        "enabled": true,
-        "threshold": 3,
-        "cooldown": 1800
+        "module": "Indexer.Services.Handlers.Workers",
+        "function": "spawn"
       }
     }
   ]
